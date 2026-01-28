@@ -334,7 +334,8 @@ router.post('/login', authController.login);
  * @swagger
  * /api/auth/google:
  *   post:
- *     summary: Authenticate with Google OAuth
+ *     summary: Authenticate with Google using Firebase ID Token
+ *     description: Verify Firebase ID token from Google sign-in and create/login user. Backend automatically extracts user info (email, uid, name, avatar) from the verified token.
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -343,54 +344,84 @@ router.post('/login', authController.login);
  *           schema:
  *             type: object
  *             required:
- *               - email
- *               - googleId
+ *               - idToken
  *             properties:
- *               email:
+ *               idToken:
  *                 type: string
- *                 format: email
- *                 example: user@gmail.com
- *               googleId:
- *                 type: string
- *                 example: google-unique-id-123456
- *               name:
- *                 type: string
- *                 example: John Doe
- *               avatar:
- *                 type: string
- *                 format: uri
- *                 example: https://lh3.googleusercontent.com/a/default-user
+ *                 description: Firebase ID token obtained from Google authentication (JWT format). This token is verified with Firebase Admin SDK on the backend.
+ *                 example: eyJhbGciOiJSUzI1NiIsImtpZCI6IjFlOWdkazcifQ.eyJpc3MiOiJodHRwczovL3NlY3VyZXRva2VuLmdvb2dsZS5jb20vbXktcHJvamVjdCIsImF1ZCI6Im15LXByb2plY3QiLCJhdXRoX3RpbWUiOjE2NDYwNjg4MDAsInVzZXJfaWQiOiJnb29nbGUtdW5pcXVlLWlkLTEyMzQ1NiIsInN1YiI6Imdvb2dsZS11bmlxdWUtaWQtMTIzNDU2IiwiaWF0IjoxNjQ2MDY4ODAwLCJleHAiOjE2NDYwNzI0MDAsImVtYWlsIjoidXNlckBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6dHJ1ZSwiZmlyZWJhc2UiOnsiaWRlbnRpdGllcyI6eyJnb29nbGUuY29tIjpbImdvb2dsZS11bmlxdWUtaWQtMTIzNDU2Il0sImVtYWlsIjpbInVzZXJAZ21haWwuY29tIl19LCJzaWduX2luX3Byb3ZpZGVyIjoiZ29vZ2xlLmNvbSJ9fQ.signature
  *     responses:
  *       200:
  *         description: Google authentication successful (existing user)
  *         content:
  *           application/json:
  *             schema:
- *               allOf:
- *                 - $ref: '#/components/schemas/AuthResponse'
- *                 - type: object
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Google authentication successful
+ *                 isNewUser:
+ *                   type: boolean
+ *                   example: false
+ *                 data:
+ *                   type: object
  *                   properties:
- *                     isNewUser:
- *                       type: boolean
- *                       example: false
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     token:
+ *                       type: string
+ *                       description: JWT token (expires in 7 days)
  *       201:
  *         description: Google authentication successful (new user created)
  *         content:
  *           application/json:
  *             schema:
- *               allOf:
- *                 - $ref: '#/components/schemas/AuthResponse'
- *                 - type: object
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Google authentication successful
+ *                 isNewUser:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
  *                   properties:
- *                     isNewUser:
- *                       type: boolean
- *                       example: true
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *                     token:
+ *                       type: string
  *       400:
- *         description: Bad request - Missing fields
+ *         description: Bad request - Missing or invalid ID token
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
+ *             examples:
+ *               missingToken:
+ *                 value:
+ *                   success: false
+ *                   message: Firebase ID token is required
+ *               noEmail:
+ *                 value:
+ *                   success: false
+ *                   message: Email not found in Firebase token
+ *       401:
+ *         description: Invalid Firebase token
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               success: false
+ *               message: Invalid Firebase token
  *       403:
  *         description: Email registered with local auth or Google ID mismatch
  *         content:
@@ -407,6 +438,10 @@ router.post('/login', authController.login);
  *                 value:
  *                   success: false
  *                   message: Google account mismatch. This email is linked to a different Google account.
+ *               accountDeactivated:
+ *                 value:
+ *                   success: false
+ *                   message: Your account has been deactivated
  */
 router.post('/google', authController.googleAuth);
 
