@@ -54,6 +54,27 @@ const userSchema = new mongoose.Schema({
     isActive: {
         type: Boolean,
         default: true
+    },
+    // OTP fields for email verification
+    isVerified: {
+        type: Boolean,
+        default: false
+    },
+    otp: {
+        type: String,
+        default: null
+    },
+    otpExpires: {
+        type: Date,
+        default: null
+    },
+    otpRequestCount: {
+        type: Number,
+        default: 0
+    },
+    otpLastRequestAt: {
+        type: Date,
+        default: null
     }
 }, {
     timestamps: true
@@ -64,19 +85,14 @@ userSchema.index({ email: 1 });
 userSchema.index({ googleId: 1 });
 
 // Hash password trước khi lưu (chỉ với local auth)
-userSchema.pre('save', async function (next) {
+userSchema.pre('save', async function () {
     // Chỉ hash nếu password được modified và là local auth
     if (!this.isModified('password') || this.authProvider !== 'local') {
-        return next();
+        return;
     }
 
-    try {
-        const salt = await bcrypt.genSalt(10);
-        this.password = await bcrypt.hash(this.password, salt);
-        next();
-    } catch (error) {
-        next(error);
-    }
+    const salt = await bcrypt.genSalt(10);
+    this.password = await bcrypt.hash(this.password, salt);
 });
 
 // Method để so sánh password

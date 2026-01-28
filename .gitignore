@@ -44,5 +44,11 @@ Thumbs.db
 # Optional eslint cache
 .eslintcache
 
-# Markdown files
+
+# Firebase 
+.firebase-service-account.json
+firebase-service-account.json
+
+
+# Markdown docs (local only)
 *.md

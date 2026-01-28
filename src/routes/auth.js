@@ -69,6 +69,210 @@ router.post('/register', authController.register);
 
 /**
  * @swagger
+ * /api/auth/verify-otp:
+ *   post:
+ *     summary: Verify OTP to activate account
+ *     description: Validates the OTP sent to user's email and activates the account. Returns JWT token upon successful verification.
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *               - otp
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 description: Email address used during registration
+ *                 example: user@example.com
+ *               otp:
+ *                 type: string
+ *                 description: 6-digit OTP code received via email
+ *                 minLength: 6
+ *                 maxLength: 6
+ *                 pattern: '^[0-9]{6}$'
+ *                 example: "123456"
+ *     responses:
+ *       200:
+ *         description: OTP verified successfully. Account activated and JWT token issued.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Email verified successfully. You can now login.
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: string
+ *                           example: 65a1b2c3d4e5f6789012345
+ *                         email:
+ *                           type: string
+ *                           example: user@example.com
+ *                         name:
+ *                           type: string
+ *                           example: John Doe
+ *                         role:
+ *                           type: string
+ *                           example: user
+ *                         authProvider:
+ *                           type: string
+ *                           example: local
+ *                         isVerified:
+ *                           type: boolean
+ *                           example: true
+ *                     token:
+ *                       type: string
+ *                       description: JWT token for authentication (expires in 7 days)
+ *                       example: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+ *       400:
+ *         description: Bad request - Validation errors or invalid OTP
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *             examples:
+ *               missingFields:
+ *                 summary: Missing required fields
+ *                 value:
+ *                   success: false
+ *                   message: Email and OTP are required
+ *               alreadyVerified:
+ *                 summary: Email already verified
+ *                 value:
+ *                   success: false
+ *                   message: Email already verified. Please login.
+ *               noOTP:
+ *                 summary: No OTP found
+ *                 value:
+ *                   success: false
+ *                   message: No OTP found. Please request a new one.
+ *               otpExpired:
+ *                 summary: OTP has expired
+ *                 value:
+ *                   success: false
+ *                   message: OTP has expired. Please request a new one.
+ *               invalidOTP:
+ *                 summary: Wrong OTP code
+ *                 value:
+ *                   success: false
+ *                   message: Invalid OTP
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: User not found
+ *       500:
+ *         description: Server error during OTP verification
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: false
+ *                 message:
+ *                   type: string
+ *                   example: Server error during OTP verification
+ */
+router.post('/verify-otp', authController.verifyOtp);
+
+/**
+ * @swagger
+ * /api/auth/resend-otp:
+ *   post:
+ *     summary: Resend OTP verification code
+ *     tags: [Authentication]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - email
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 format: email
+ *                 example: user@example.com
+ *     responses:
+ *       200:
+ *         description: OTP resent successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: OTP resent successfully. Please check your email.
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     email:
+ *                       type: string
+ *                     message:
+ *                       type: string
+ *                     remainingAttempts:
+ *                       type: number
+ *       400:
+ *         description: Email already verified
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: User not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       429:
+ *         description: Too many OTP requests
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *             example:
+ *               success: false
+ *               message: Too many OTP requests. Please try again in 5 minute(s).
+ */
+router.post('/resend-otp', authController.resendOtp);
+
+/**
+ * @swagger
  * /api/auth/login:
  *   post:
  *     summary: Login with email and password
