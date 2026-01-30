@@ -1,7 +1,7 @@
-const express = require('express');
+const express = require("express");
 const router = express.Router();
-const authController = require('../controllers/authController');
-const { protect } = require('../middlewares/authMiddleware');
+const authController = require("../controllers/authController");
+const { protect } = require("../middlewares/authMiddleware");
 
 /**
  * @swagger
@@ -65,7 +65,7 @@ const { protect } = require('../middlewares/authMiddleware');
  *               message: Email already registered. Please login with your original method.
  *               authProvider: local
  */
-router.post('/register', authController.register);
+router.post("/register", authController.register);
 
 /**
  * @swagger
@@ -203,7 +203,7 @@ router.post('/register', authController.register);
  *                   type: string
  *                   example: Server error during OTP verification
  */
-router.post('/verify-otp', authController.verifyOtp);
+router.post("/verify-otp", authController.verifyOtp);
 
 /**
  * @swagger
@@ -269,7 +269,7 @@ router.post('/verify-otp', authController.verifyOtp);
  *               success: false
  *               message: Too many OTP requests. Please try again in 5 minute(s).
  */
-router.post('/resend-otp', authController.resendOtp);
+router.post("/resend-otp", authController.resendOtp);
 
 /**
  * @swagger
@@ -328,7 +328,7 @@ router.post('/resend-otp', authController.resendOtp);
  *               message: This email is registered with google. Please login using that method.
  *               authProvider: google
  */
-router.post('/login', authController.login);
+router.post("/login", authController.login);
 
 /**
  * @swagger
@@ -443,7 +443,7 @@ router.post('/login', authController.login);
  *                   success: false
  *                   message: Your account has been deactivated
  */
-router.post('/google', authController.googleAuth);
+router.post("/google", authController.googleAuth);
 
 /**
  * @swagger
@@ -498,6 +498,69 @@ router.post('/google', authController.googleAuth);
  *               success: false
  *               message: User not found
  */
-router.get('/me', protect, authController.getMe);
+router.get("/me", protect, authController.getMe);
 
+/**
+ * @swagger
+ * /api/auth/update-profile:
+ * put:
+ * summary: Cập nhật thông tin hồ sơ người dùng
+ * description: Cho phép người dùng đã đăng nhập cập nhật tên hiển thị và ảnh đại diện.
+ * tags: [Authentication]
+ * security:
+ * - bearerAuth: []
+ * requestBody:
+ * required: true
+ * content:
+ * application/json:
+ * schema:
+ * type: object
+ * properties:
+ * name:
+ * type: string
+ * description: Tên mới của người dùng
+ * example: "Nguyễn Văn A"
+ * avatar:
+ * type: string
+ * description: URL ảnh đại diện mới hoặc chuỗi base64
+ * example: "https://example.com/new-avatar.jpg"
+ * responses:
+ * 200:
+ * description: Cập nhật hồ sơ thành công
+ * content:
+ * application/json:
+ * schema:
+ * type: object
+ * properties:
+ * success:
+ * type: boolean
+ * example: true
+ * message:
+ * type: string
+ * example: Profile updated successfully
+ * data:
+ * type: object
+ * properties:
+ * user:
+ * $ref: '#/components/schemas/User'
+ * 401:
+ * description: Không có quyền truy cập
+ * content:
+ * application/json:
+ * schema:
+ * $ref: '#/components/schemas/Error'
+ * 404:
+ * description: Không tìm thấy người dùng
+ * content:
+ * application/json:
+ * schema:
+ * $ref: '#/components/schemas/Error'
+ * 500:
+ * description: Lỗi hệ thống
+ * content:
+ * application/json:
+ * schema:
+ * $ref: '#/components/schemas/Error'
+ */
+router.put("/update-profile", protect, authController.updateProfile);
 module.exports = router;
