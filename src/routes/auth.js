@@ -503,64 +503,64 @@ router.get("/me", protect, authController.getMe);
 /**
  * @swagger
  * /api/auth/update-profile:
- * put:
- * summary: Cập nhật thông tin hồ sơ người dùng
- * description: Cho phép người dùng đã đăng nhập cập nhật tên hiển thị và ảnh đại diện.
- * tags: [Authentication]
- * security:
- * - bearerAuth: []
- * requestBody:
- * required: true
- * content:
- * application/json:
- * schema:
- * type: object
- * properties:
- * name:
- * type: string
- * description: Tên mới của người dùng
- * example: "Nguyễn Văn A"
- * avatar:
- * type: string
- * description: URL ảnh đại diện mới hoặc chuỗi base64
- * example: "https://example.com/new-avatar.jpg"
- * responses:
- * 200:
- * description: Cập nhật hồ sơ thành công
- * content:
- * application/json:
- * schema:
- * type: object
- * properties:
- * success:
- * type: boolean
- * example: true
- * message:
- * type: string
- * example: Profile updated successfully
- * data:
- * type: object
- * properties:
- * user:
- * $ref: '#/components/schemas/User'
- * 401:
- * description: Không có quyền truy cập
- * content:
- * application/json:
- * schema:
- * $ref: '#/components/schemas/Error'
- * 404:
- * description: Không tìm thấy người dùng
- * content:
- * application/json:
- * schema:
- * $ref: '#/components/schemas/Error'
- * 500:
- * description: Lỗi hệ thống
- * content:
- * application/json:
- * schema:
- * $ref: '#/components/schemas/Error'
+ *   put:
+ *     summary: Cập nhật thông tin hồ sơ người dùng
+ *     description: Cho phép người dùng đã đăng nhập cập nhật tên hiển thị và ảnh đại diện.
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               name:
+ *                 type: string
+ *                 description: Tên mới của người dùng
+ *                 example: Nguyễn Văn A
+ *               avatar:
+ *                 type: string
+ *                 description: URL ảnh đại diện mới hoặc chuỗi base64
+ *                 example: https://example.com/new-avatar.jpg
+ *     responses:
+ *       200:
+ *         description: Cập nhật hồ sơ thành công
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Profile updated successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     user:
+ *                       $ref: '#/components/schemas/User'
+ *       401:
+ *         description: Không có quyền truy cập
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       404:
+ *         description: Không tìm thấy người dùng
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
+ *       500:
+ *         description: Lỗi hệ thống
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/Error'
  */
 router.put("/update-profile", protect, authController.updateProfile);
 module.exports = router;
