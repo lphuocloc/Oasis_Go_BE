@@ -620,3 +620,112 @@ exports.updateProfile = async (req, res) => {
     });
   }
 };
+
+// @desc    Quên mật khẩu - Gửi OTP
+// @route   POST /api/auth/forgot-password
+exports.forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    const user = await User.findOne({ email });
+    if (!user) {
+      return res
+        .status(404)
+        .json({ success: false, message: "Email không tồn tại" });
+    }
+
+    //gửi otp
+
+    const OPT = generateOTP();
+    const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
+    user.resetPasswordOtp = OPT;
+    user.resetPasswordOtpExpires = otpExpires;
+    await user.save();
+
+    await sendOTPEmail(email, OPT);
+
+    res.status(200).json({
+      success: true,
+      message: "OTP reset pass đã được gửi",
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      message: "Failed to send verification email. Please try again.",
+    });
+  }
+};
+// @desc    Xác thực OTP Reset để lấy Reset Token
+// @route   POST /api/auth/verify-reset-otp
+exports.verifyResetOtp = async (req, res) => {
+  try {
+    const { email, otp } = req.body;
+    const user = await User.findOne({ email });
+
+    if (
+      !user ||
+      user.resetPasswordOtp !== otp ||
+      new Date() > user.resetPasswordOtpExpires
+    ) {
+      return res
+        .status(400)
+        .json({ success: false, message: "OTP không đúng hoặc hết hạn" });
+    }
+
+    // Tạo Reset Token
+    const resetPasswordToken = jwt.sign(
+      { id: user._id, purpose: "password_reset" },
+      process.env.JWT_SECRET,
+      { expiresIn: "10m" },
+    );
+
+    // Xóa OTP
+    user.resetPasswordOtp = null;
+    user.resetPasswordOtpExpires = null;
+    await user.save();
+
+    res.status(200).json({
+      success: true,
+      resetPasswordToken, //lưu trong 10p
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: "Server error" });
+  }
+};
+// @desc    Đặt mật khẩu mới
+// @route   POST /api/auth/reset-password
+exports.resetPassword = async (req, res) => {
+  try {
+    const { resetPasswordToken, newPassword } = req.body;
+
+    // Verify token
+    const decoded = jwt.verify(resetPasswordToken, process.env.JWT_SECRET);
+
+    if (decoded.purpose !== "password_reset") {
+      return res
+        .status(401)
+        .json({ success: false, message: "Token sai mục đích" });
+    }
+
+    const user = await User.findById(decoded.id);
+    if (!user)
+      return res
+        .status(404)
+        .json({ success: false, message: "User không tồn tại" });
+
+    // Cập nhật pass mới
+    user.password = newPassword;
+    await user.save();
+
+    res
+      .status(200)
+      .json({ success: true, message: "Mật khẩu đã được cập nhật" });
+  } catch (error) {
+    // Nếu token hết hạn /-z> jwt.verify sẽ văng lỗi vào đây
+    res.status(401).json({
+      success: false,
+      message: "Phiên làm việc hết hạn, làm lại từ đầu đi gà🐤",
+    });
+  }
+};
