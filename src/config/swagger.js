@@ -15,11 +15,25 @@ const options = {
         servers: [
             {
                 url: 'http://localhost:3000',
-                description: 'Development server'
+                description: 'Development server (Local)'
+            },
+            {
+                url: 'https://incongruous-unexpectedly-nia.ngrok-free.dev',
+                description: 'Development server (ngrok - Public)'
             },
             {
                 url: 'https://api.oasisgo.com',
                 description: 'Production server'
+            }
+        ],
+        tags: [
+            {
+                name: 'Authentication',
+                description: 'User authentication endpoints (Register, Login, OTP, Google OAuth)'
+            },
+            {
+                name: 'VNPay Payment',
+                description: 'VNPay payment integration endpoints (Create payment, IPN callback, Query payment)'
             }
         ],
         components: {
@@ -90,6 +104,73 @@ const options = {
                                     description: 'JWT access token'
                                 }
                             }
+                        }
+                    }
+                },
+                Payment: {
+                    type: 'object',
+                    properties: {
+                        paymentId: {
+                            type: 'string',
+                            description: 'UUID payment identifier'
+                        },
+                        bookingId: {
+                            type: 'string',
+                            description: 'Booking ID reference'
+                        },
+                        orderId: {
+                            type: 'string',
+                            description: 'VNPay order ID (unique)'
+                        },
+                        amount: {
+                            type: 'number',
+                            description: 'Payment amount in VND'
+                        },
+                        method: {
+                            type: 'string',
+                            enum: ['VNPAY', 'CASH', 'BANK_TRANSFER', 'MOMO', 'ZALOPAY'],
+                            description: 'Payment method'
+                        },
+                        status: {
+                            type: 'string',
+                            enum: ['INITIATED', 'AUTHORIZED', 'FAILED', 'REFUNDED', 'CANCELLED'],
+                            description: 'Payment status'
+                        },
+                        orderInfo: {
+                            type: 'string',
+                            description: 'Order information/description'
+                        },
+                        vnpayData: {
+                            type: 'object',
+                            properties: {
+                                transactionNo: {
+                                    type: 'string',
+                                    description: 'VNPay transaction number'
+                                },
+                                bankCode: {
+                                    type: 'string',
+                                    description: 'Bank code used for payment'
+                                },
+                                responseCode: {
+                                    type: 'string',
+                                    description: 'VNPay response code'
+                                },
+                                payDate: {
+                                    type: 'string',
+                                    description: 'Payment date (yyyyMMddHHmmss)'
+                                }
+                            }
+                        },
+                        createdAt: {
+                            type: 'string',
+                            format: 'date-time',
+                            description: 'Payment creation date'
+                        },
+                        authorizedAt: {
+                            type: 'string',
+                            format: 'date-time',
+                            nullable: true,
+                            description: 'Payment authorization date'
                         }
                     }
                 },
