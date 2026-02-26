@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
-
+require("../cccd/IndentityCard");
 const userSchema = new mongoose.Schema(
   {
     email: {
@@ -109,7 +109,7 @@ const userSchema = new mongoose.Schema(
 );
 
 // Index cho tối ưu query
-userSchema.index({ email: 1 });
+// Note: email already has unique index from schema definition
 userSchema.index({ googleId: 1 });
 
 // Hash password trước khi lưu (chỉ với local auth)

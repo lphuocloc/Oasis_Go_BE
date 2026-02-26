@@ -1,4 +1,5 @@
 const swaggerJsdoc = require('swagger-jsdoc');
+const path = require('path');
 
 const options = {
     definition: {
@@ -34,6 +35,18 @@ const options = {
             {
                 name: 'VNPay Payment',
                 description: 'VNPay payment integration endpoints (Create payment, IPN callback, Query payment)'
+            },
+            {
+                name: 'Locations',
+                description: 'Location management and hierarchy endpoints'
+            },
+            {
+                name: 'Pod Clusters',
+                description: 'Pod cluster management endpoints'
+            },
+            {
+                name: 'Pods',
+                description: 'Pod management endpoints with Grid and Single creation modes'
             }
         ],
         components: {
@@ -64,7 +77,7 @@ const options = {
                         },
                         role: {
                             type: 'string',
-                            enum: ['user', 'admin', 'driver'],
+                            enum: ['user', 'admin', 'manager', 'cleaner'],
                             description: 'User role'
                         },
                         authProvider: {
@@ -199,7 +212,11 @@ const options = {
             }
         ]
     },
-    apis: ['./src/routes/*.js'] // Path to API routes
+    // Scan all routes and controllers including subfolders
+    apis: [
+        path.join(__dirname, "../routes/**/*.js"),
+        path.join(__dirname, "../controllers/**/*.js"),
+    ],
 };
 
 const swaggerSpec = swaggerJsdoc(options);

@@ -1,6 +1,6 @@
-const vnpayService = require('../utils/vnpayService');
-const Payment = require('../models/Payment');
-const { generateOrderId } = require('../utils/orderIdGenerator');
+const vnpayService = require('../../utils/vnpayService');
+const Payment = require('../../models/payment/Payment');
+const { generateOrderId } = require('../../utils/orderIdGenerator');
 
 /**
  * Tạo URL thanh toán VNPay
