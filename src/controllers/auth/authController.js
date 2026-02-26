@@ -539,7 +539,10 @@ exports.googleAuth = async (req, res) => {
 // @access  Private
 exports.getMe = async (req, res) => {
   try {
-    const user = await User.findById(req.user.id);
+    const user = await User.findById(req.user.id).populate({
+      path: "identityCard",
+      select: "status",
+    });
 
     if (!user) {
       return res.status(404).json({
@@ -555,10 +558,13 @@ exports.getMe = async (req, res) => {
           id: user._id,
           email: user.email,
           name: user.name,
+          phone: user.phone,
           role: user.role,
           authProvider: user.authProvider,
           avatar: user.avatar,
           createdAt: user.createdAt,
+          // identityCard: user.identityCard,
+          identityCardStatus: user.identityCard?.status || "unverified",
         },
       },
     });
@@ -575,7 +581,7 @@ exports.getMe = async (req, res) => {
 // @access  Private
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, avatar } = req.body;
+    const { name, avatar, phone } = req.body;
     const userId = req.user.id;
 
     const user = await User.findById(userId);
@@ -595,6 +601,10 @@ exports.updateProfile = async (req, res) => {
       user.avatar = avatar;
     }
 
+    if (phone) {
+      user.phone = phone;
+    }
+
     await user.save();
 
     res.status(200).json({
@@ -605,10 +615,12 @@ exports.updateProfile = async (req, res) => {
           id: user._id,
           email: user.email,
           name: user.name,
+          phone: user.phone,
           role: user.role,
           avatar: user.avatar,
           authProvider: user.authProvider,
           token: user.token,
+          // identityStatus: user.identityCard?.status || "unverified",
         },
       },
     });
