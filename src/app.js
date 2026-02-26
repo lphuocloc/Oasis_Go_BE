@@ -16,6 +16,7 @@ const indexRouter = require("./routes/index");
 const usersRouter = require("./routes/users");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");
+const identityCardRouter = require("./routes/IdentityCard");
 
 const app = express();
 
@@ -32,6 +33,7 @@ app.use("/api/auth", authRouter);
 app.use("/api/vnpay", vnpayRouter);
 app.use("/", indexRouter);
 app.use("/users", usersRouter);
+app.use("/api/identity", identityCardRouter);
 
 // Swagger Documentation
 app.use(

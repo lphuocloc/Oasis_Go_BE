@@ -19,6 +19,27 @@ const userSchema = new mongoose.Schema(
         return this.authProvider === "local";
       },
     },
+    phone: {
+      type: String,
+      trim: true,
+      validate: {
+        validator: function (v) {
+          return (
+            v == null || v === "" || /^(0|\+84)[3|5|7|8|9][0-9]{8}$/.test(v)
+          );
+        },
+        message: (props) =>
+          `${props.value} không phải là số điện thoại hợp lệ!`,
+      },
+      default: null,
+    },
+
+    identityCard: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: "IndentityCard",
+      default: null,
+    },
+
     authProvider: {
       type: String,
       enum: ["local", "google"],
