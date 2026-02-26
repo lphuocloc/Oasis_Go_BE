@@ -1,4 +1,4 @@
-const Payment = require('../models/payment/Payment');
+const Payment = require('../models/Payment');
 
 /**
  * Generate orderId theo format: ORDER-YYYYMMDD-XXX

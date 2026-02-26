@@ -21,7 +21,7 @@ const paymentSchema = new mongoose.Schema({
         type: String,
         required: true,
         unique: true,
-        // Note: unique: true automatically creates index, no need for index: true
+        index: true
     },
 
     // Số tiền thanh toán
@@ -86,9 +86,9 @@ const paymentSchema = new mongoose.Schema({
 });
 
 // Index để tìm kiếm nhanh
-// Note: orderId already has unique index from schema definition
 paymentSchema.index({ bookingId: 1, status: 1 });
 paymentSchema.index({ createdAt: -1 });
+paymentSchema.index({ orderId: 1 });
 
 // Method để cập nhật trạng thái
 paymentSchema.methods.updateStatus = function (status, vnpayData = {}) {

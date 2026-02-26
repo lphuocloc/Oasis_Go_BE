@@ -13,12 +13,10 @@ const connectDB = require("./config/db");
 connectDB();
 
 const indexRouter = require("./routes/index");
-const authRouter = require("./routes/auth/auth");
-const vnpayRouter = require("./routes/payment/vnpay");
-const locationRouter = require("./routes/admin/location");
-const podClusterRouter = require("./routes/admin/podCluster");
-const podRouter = require("./routes/admin/pod");
-const identityCardRouter = require("./routes/IdentityCard");
+const usersRouter = require("./routes/users");
+const authRouter = require("./routes/auth");
+const vnpayRouter = require("./routes/vnpay");
+
 const app = express();
 
 // Middlewares
@@ -32,11 +30,9 @@ app.use(express.static(path.join(__dirname, "../public")));
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/vnpay", vnpayRouter);
-app.use("/api/locations", locationRouter);
-app.use("/api/pod-clusters", podClusterRouter);
-app.use("/api/pods", podRouter);
 app.use("/", indexRouter);
-app.use("/api/identity", identityCardRouter);
+app.use("/users", usersRouter);
+
 // Swagger Documentation
 app.use(
   "/api-docs",
