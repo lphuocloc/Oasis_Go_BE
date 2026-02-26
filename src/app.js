@@ -13,9 +13,10 @@ const connectDB = require("./config/db");
 connectDB();
 
 const indexRouter = require("./routes/index");
-const usersRouter = require("./routes/users");
-const authRouter = require("./routes/auth");
-const vnpayRouter = require("./routes/vnpay");
+const authRouter = require("./routes/auth/auth");
+const vnpayRouter = require("./routes/payment/vnpay");
+const locationRouter = require("./routes/admin/location");
+const podClusterRouter = require("./routes/admin/podCluster");
 
 const app = express();
 
@@ -30,8 +31,9 @@ app.use(express.static(path.join(__dirname, "../public")));
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/vnpay", vnpayRouter);
+app.use("/api/locations", locationRouter);
+app.use("/api/pod-clusters", podClusterRouter);
 app.use("/", indexRouter);
-app.use("/users", usersRouter);
 
 // Swagger Documentation
 app.use(

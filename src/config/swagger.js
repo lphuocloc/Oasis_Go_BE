@@ -35,6 +35,14 @@ const options = {
             {
                 name: 'VNPay Payment',
                 description: 'VNPay payment integration endpoints (Create payment, IPN callback, Query payment)'
+            },
+            {
+                name: 'Locations',
+                description: 'Location management and hierarchy endpoints'
+            },
+            {
+                name: 'Pod Clusters',
+                description: 'Pod cluster management endpoints'
             }
         ],
         components: {
@@ -65,7 +73,7 @@ const options = {
                         },
                         role: {
                             type: 'string',
-                            enum: ['user', 'admin', 'driver'],
+                            enum: ['user', 'admin', 'manager', 'cleaner'],
                             description: 'User role'
                         },
                         authProvider: {
@@ -200,10 +208,10 @@ const options = {
             }
         ]
     },
-    // apis: ['./src/routes/*.js'] // Path to API routes
+    // Scan all routes and controllers including subfolders
     apis: [
-        path.join(__dirname, "../routes/*.js"),
-        path.join(__dirname, "../controllers/*.js"),
+        path.join(__dirname, "../routes/**/*.js"),
+        path.join(__dirname, "../controllers/**/*.js"),
     ],
 };
 
