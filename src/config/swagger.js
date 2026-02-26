@@ -43,6 +43,10 @@ const options = {
             {
                 name: 'Pod Clusters',
                 description: 'Pod cluster management endpoints'
+            },
+            {
+                name: 'Pods',
+                description: 'Pod management endpoints with Grid and Single creation modes'
             }
         ],
         components: {

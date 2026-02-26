@@ -67,7 +67,7 @@ const locationSchema = new mongoose.Schema(
 );
 
 // Index for faster queries
-locationSchema.index({ id: 1 });
+// Note: id already has unique index from schema definition
 locationSchema.index({ parent_id: 1 });
 locationSchema.index({ type: 1 });
 locationSchema.index({ lat: 1, lng: 1 });

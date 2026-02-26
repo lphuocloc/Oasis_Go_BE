@@ -43,7 +43,7 @@ const podClusterSchema = new mongoose.Schema(
 );
 
 // Index for faster queries
-podClusterSchema.index({ id: 1 });
+// Note: id already has unique index from schema definition
 podClusterSchema.index({ location_id: 1 });
 
 // Virtual for location details
