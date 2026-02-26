@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
-const User = require("../models/User");
-const { generateOTP, sendOTPEmail } = require("../utils/emailService");
-const { verifyFirebaseToken } = require("../config/firebase");
+const User = require("../../models/user/User");
+const { generateOTP, sendOTPEmail } = require("../../utils/emailService");
+const { verifyFirebaseToken } = require("../../config/firebase");
 
 // Tạo JWT token
 const generateToken = (userId) => {
@@ -24,8 +24,8 @@ const checkOTPRateLimit = (user) => {
   if (user.otpRequestCount >= 3) {
     const timeLeft = Math.ceil(
       (user.otpLastRequestAt.getTime() + 15 * 60 * 1000 - now.getTime()) /
-        1000 /
-        60,
+      1000 /
+      60,
     );
     return {
       allowed: false,
