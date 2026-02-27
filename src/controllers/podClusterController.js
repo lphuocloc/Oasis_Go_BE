@@ -1,5 +1,5 @@
-const PodCluster = require("../../models/admin/PodCluster");
-const Location = require("../../models/admin/Location");
+const PodCluster = require("../models/PodCluster");
+const Location = require("../models/Location");
 
 // @desc    Get all pod clusters
 // @route   GET /api/pod-clusters

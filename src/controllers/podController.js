@@ -1,5 +1,5 @@
-const Pod = require("../../models/admin/Pod");
-const PodCluster = require("../../models/admin/PodCluster");
+const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
 
 /**
  * Helper function to generate row letter from index

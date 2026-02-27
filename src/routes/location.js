@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const locationController = require("../../controllers/admin/locationController");
-const { protect, authorize } = require("../../middlewares/authMiddleware");
+const locationController = require("../controllers/locationController");
+const { protect, authorize } = require("../middlewares/authMiddleware");
 
 /**
  * @swagger

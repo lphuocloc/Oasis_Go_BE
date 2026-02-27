@@ -13,11 +13,11 @@ const connectDB = require("./config/db");
 connectDB();
 
 const indexRouter = require("./routes/index");
-const authRouter = require("./routes/auth/auth");
-const vnpayRouter = require("./routes/payment/vnpay");
-const locationRouter = require("./routes/admin/location");
-const podClusterRouter = require("./routes/admin/podCluster");
-const podRouter = require("./routes/admin/pod");
+const authRouter = require("./routes/auth");
+const vnpayRouter = require("./routes/vnpay");
+const locationRouter = require("./routes/location");
+const podClusterRouter = require("./routes/podCluster");
+const podRouter = require("./routes/pod");
 
 const app = express();
 

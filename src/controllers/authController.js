@@ -1,7 +1,7 @@
 const jwt = require("jsonwebtoken");
-const User = require("../../models/user/User");
-const { generateOTP, sendOTPEmail } = require("../../utils/emailService");
-const { verifyFirebaseToken } = require("../../config/firebase");
+const User = require("../models/User");
+const { generateOTP, sendOTPEmail } = require("../utils/emailService");
+const { verifyFirebaseToken } = require("../config/firebase");
 
 // Tạo JWT token
 const generateToken = (userId) => {

@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
-const podController = require("../../controllers/admin/podController");
-const { protect, authorize } = require("../../middlewares/authMiddleware");
+const podController = require("../controllers/podController");
+const { protect, authorize } = require("../middlewares/authMiddleware");
 
 /**
  * @swagger
