@@ -146,15 +146,19 @@ exports.getMe = async (req, res) => {
     });
   }
 };
-// @desc    Cập nhật thông tin hồ sơ (Tên và Ảnh)
+// @desc    Cập nhật thông tin hồ sơ (Tên, Ảnh và Phone)
 // @route   PUT /api/auth/update-profile
 // @access  Private
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, avatar } = req.body;
+    const { name, avatar, phone } = req.body;
     const userId = req.user.id;
 
-    const result = await authService.updateProfile(userId, { name, profilePicture: avatar });
+    const result = await authService.updateProfile(userId, {
+      name,
+      profilePicture: avatar,
+      phone
+    });
 
     res.status(200).json({
       success: true,

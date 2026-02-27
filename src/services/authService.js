@@ -337,7 +337,10 @@ class AuthService {
      * Lấy thông tin user hiện tại
      */
     async getCurrentUser(userId) {
-        const user = await User.findById(userId);
+        const user = await User.findById(userId).populate({
+            path: "identityCard",
+            select: "status",
+        });
 
         if (!user) {
             const error = new Error("User not found");
@@ -349,17 +352,21 @@ class AuthService {
             id: user._id,
             email: user.email,
             name: user.name,
+            phone: user.phone,
             role: user.role,
             authProvider: user.authProvider,
+            avatar: user.avatar,
             profilePicture: user.profilePicture,
             isVerified: user.isVerified,
+            createdAt: user.createdAt,
+            identityCardStatus: user.identityCard?.status || "unverified",
         };
     }
 
     /**
      * Cập nhật profile user
      */
-    async updateProfile(userId, { name, profilePicture }) {
+    async updateProfile(userId, { name, profilePicture, phone }) {
         const user = await User.findById(userId);
 
         if (!user) {
@@ -370,6 +377,7 @@ class AuthService {
 
         if (name) user.name = name;
         if (profilePicture) user.profilePicture = profilePicture;
+        if (phone) user.phone = phone;
 
         await user.save();
 
@@ -377,8 +385,10 @@ class AuthService {
             id: user._id,
             email: user.email,
             name: user.name,
+            phone: user.phone,
             role: user.role,
             authProvider: user.authProvider,
+            avatar: user.avatar,
             profilePicture: user.profilePicture,
         };
     }
