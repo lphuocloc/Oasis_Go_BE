@@ -1,5 +1,4 @@
-const Location = require("../models/Location");
-const PodCluster = require("../models/PodCluster");
+const locationService = require("../services/locationService");
 
 // @desc    Get all locations
 // @route   GET /api/locations
@@ -7,13 +6,8 @@ const PodCluster = require("../models/PodCluster");
 exports.getAllLocations = async (req, res) => {
     try {
         const { type, parent_id, isActive } = req.query;
-        const filter = {};
 
-        if (type) filter.type = type;
-        if (parent_id !== undefined) filter.parent_id = parent_id === "null" ? null : parent_id;
-        if (isActive !== undefined) filter.isActive = isActive === "true";
-
-        const locations = await Location.find(filter).sort({ createdAt: -1 });
+        const locations = await locationService.getAllLocations({ type, parent_id, isActive });
 
         res.status(200).json({
             success: true,
@@ -34,24 +28,17 @@ exports.getAllLocations = async (req, res) => {
 // @access  Public
 exports.getLocationById = async (req, res) => {
     try {
-        const location = await Location.findOne({ id: req.params.id });
-
-        if (!location) {
-            return res.status(404).json({
-                success: false,
-                message: "Location not found",
-            });
-        }
+        const location = await locationService.getLocationById(req.params.id);
 
         res.status(200).json({
             success: true,
             data: location,
         });
     } catch (error) {
-        res.status(500).json({
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
             success: false,
-            message: "Error fetching location",
-            error: error.message,
+            message: error.message || "Error fetching location",
         });
     }
 };
@@ -62,7 +49,8 @@ exports.getLocationById = async (req, res) => {
 exports.getLocationTree = async (req, res) => {
     try {
         const { rootId } = req.query;
-        const tree = await Location.getTree(rootId || null);
+
+        const tree = await locationService.getLocationTree(rootId || null);
 
         res.status(200).json({
             success: true,
@@ -82,26 +70,17 @@ exports.getLocationTree = async (req, res) => {
 // @access  Public
 exports.getLocationPath = async (req, res) => {
     try {
-        const location = await Location.findOne({ id: req.params.id });
-
-        if (!location) {
-            return res.status(404).json({
-                success: false,
-                message: "Location not found",
-            });
-        }
-
-        const path = await location.getHierarchyPath();
+        const path = await locationService.getLocationPath(req.params.id);
 
         res.status(200).json({
             success: true,
             data: path,
         });
     } catch (error) {
-        res.status(500).json({
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
             success: false,
-            message: "Error fetching location path",
-            error: error.message,
+            message: error.message || "Error fetching location path",
         });
     }
 };
@@ -141,37 +120,16 @@ exports.getLocationDescendants = async (req, res) => {
 // @access  Private (Admin)
 exports.createLocation = async (req, res) => {
     try {
-        const { name, type, lat, lng, parent_id, description } = req.body;
+        const { name, type, parent_id, description, address, isActive } = req.body;
 
-        // Validate required fields
-        if (!name || !type) {
-            return res.status(400).json({
-                success: false,
-                message: "Name and type are required",
-            });
-        }
-
-        // Validate parent exists if parent_id provided
-        if (parent_id) {
-            const parent = await Location.findOne({ id: parent_id });
-            if (!parent) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Parent location not found",
-                });
-            }
-        }
-
-        const locationData = {
-            name,
+        const location = await locationService.createLocation({
             type,
-            lat: lat || null,
-            lng: lng || null,
-            parent_id: parent_id || null,
-            description: description || null,
-        };
-
-        const location = await Location.create(locationData);
+            name,
+            description,
+            parent_id,
+            address,
+            isActive,
+        });
 
         res.status(201).json({
             success: true,
@@ -179,10 +137,10 @@ exports.createLocation = async (req, res) => {
             data: location,
         });
     } catch (error) {
-        res.status(500).json({
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
             success: false,
-            message: "Error creating location",
-            error: error.message,
+            message: error.message || "Error creating location",
         });
     }
 };
@@ -192,56 +150,16 @@ exports.createLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.updateLocation = async (req, res) => {
     try {
-        const { name, type, lat, lng, parent_id, description, isActive } = req.body;
+        const { name, type, parent_id, description, address, isActive } = req.body;
 
-        const location = await Location.findOne({ id: req.params.id });
-
-        if (!location) {
-            return res.status(404).json({
-                success: false,
-                message: "Location not found",
-            });
-        }
-
-        // Validate parent exists if parent_id provided
-        if (parent_id !== undefined && parent_id !== null) {
-            // Check if trying to set itself as parent
-            if (parent_id === location.id) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Location cannot be its own parent",
-                });
-            }
-
-            const parent = await Location.findOne({ id: parent_id });
-            if (!parent) {
-                return res.status(404).json({
-                    success: false,
-                    message: "Parent location not found",
-                });
-            }
-
-            // Check if parent is a descendant (prevent circular reference)
-            const descendants = await Location.getDescendants(location.id);
-            const descendantIds = descendants.map((d) => d.id);
-            if (descendantIds.includes(parent_id)) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Cannot set a descendant as parent (circular reference)",
-                });
-            }
-        }
-
-        // Update fields
-        if (name !== undefined) location.name = name;
-        if (type !== undefined) location.type = type;
-        if (lat !== undefined) location.lat = lat;
-        if (lng !== undefined) location.lng = lng;
-        if (parent_id !== undefined) location.parent_id = parent_id;
-        if (description !== undefined) location.description = description;
-        if (isActive !== undefined) location.isActive = isActive;
-
-        await location.save();
+        const location = await locationService.updateLocation(req.params.id, {
+            type,
+            name,
+            description,
+            parent_id,
+            address,
+            isActive,
+        });
 
         res.status(200).json({
             success: true,
@@ -249,10 +167,10 @@ exports.updateLocation = async (req, res) => {
             data: location,
         });
     } catch (error) {
-        res.status(500).json({
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
             success: false,
-            message: "Error updating location",
-            error: error.message,
+            message: error.message || "Error updating location",
         });
     }
 };
@@ -262,46 +180,17 @@ exports.updateLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.deleteLocation = async (req, res) => {
     try {
-        const location = await Location.findOne({ id: req.params.id });
-
-        if (!location) {
-            return res.status(404).json({
-                success: false,
-                message: "Location not found",
-            });
-        }
-
-        // Check if location has children
-        const children = await Location.find({ parent_id: req.params.id });
-        if (children.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Cannot delete location with children. Delete or reassign children first.",
-                childrenCount: children.length,
-            });
-        }
-
-        // Check if location has pod clusters
-        const podClusters = await PodCluster.find({ location_id: req.params.id });
-        if (podClusters.length > 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Cannot delete location with pod clusters. Delete or reassign pod clusters first.",
-                podClusterCount: podClusters.length,
-            });
-        }
-
-        await Location.deleteOne({ id: req.params.id });
+        const result = await locationService.deleteLocation(req.params.id);
 
         res.status(200).json({
             success: true,
-            message: "Location deleted successfully",
+            message: result.message,
         });
     } catch (error) {
-        res.status(500).json({
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
             success: false,
-            message: "Error deleting location",
-            error: error.message,
+            message: error.message || "Error deleting location",
         });
     }
 };
