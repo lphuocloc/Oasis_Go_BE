@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
 const bcrypt = require("bcryptjs");
-require("../cccd/IndentityCard");
+require("./cccd/IndentityCard");
 const userSchema = new mongoose.Schema(
   {
     email: {

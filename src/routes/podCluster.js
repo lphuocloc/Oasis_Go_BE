@@ -1,7 +1,8 @@
 const express = require("express");
 const router = express.Router();
-const podClusterController = require("../../controllers/admin/podClusterController");
-const { protect, authorize } = require("../../middlewares/authMiddleware");
+const podClusterController = require("../controllers/podClusterController");
+const { protect, authorize } = require("../middlewares/authMiddleware");
+const { uploadPodClusterImage } = require("../config/cloudinary");
 
 /**
  * @swagger
@@ -150,6 +151,84 @@ router.get("/:id", podClusterController.getPodClusterById);
 
 /**
  * @swagger
+ * /api/pod-clusters/{id}/images:
+ *   get:
+ *     summary: Get all images of a pod cluster
+ *     tags: [Pod Clusters]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pod cluster ID
+ *     responses:
+ *       200:
+ *         description: List of pod cluster images
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: number
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       cluster_id:
+ *                         type: string
+ *                       image_url:
+ *                         type: string
+ *                       createdAt:
+ *                         type: string
+ *       404:
+ *         description: Pod cluster not found
+ *       500:
+ *         description: Server error
+ */
+router.get("/:id/images", podClusterController.getPodClusterImages);
+
+/**
+ * @swagger
+ * /api/pod-clusters/{id}/images/{imageId}:
+ *   delete:
+ *     summary: Delete a specific image of a pod cluster
+ *     tags: [Pod Clusters]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pod cluster ID
+ *       - in: path
+ *         name: imageId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Image ID to delete
+ *     responses:
+ *       200:
+ *         description: Image deleted successfully
+ *       401:
+ *         description: Unauthorized
+ *       404:
+ *         description: Pod cluster or image not found
+ *       500:
+ *         description: Server error
+ */
+router.delete("/:id/images/:imageId", protect, authorize("admin", "manager"), podClusterController.deletePodClusterImage);
+
+/**
+ * @swagger
  * /api/pod-clusters:
  *   post:
  *     summary: Create a new pod cluster
@@ -159,7 +238,7 @@ router.get("/:id", podClusterController.getPodClusterById);
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             required:
@@ -178,6 +257,12 @@ router.get("/:id", podClusterController.getPodClusterById);
  *               base_price_modifier:
  *                 type: number
  *                 example: 1.5
+ *               images:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Pod cluster images (max 10 files, 5MB each)
  *     responses:
  *       201:
  *         description: Pod cluster created successfully
@@ -201,7 +286,7 @@ router.get("/:id", podClusterController.getPodClusterById);
  *       500:
  *         description: Server error
  */
-router.post("/", protect, authorize("admin", "manager"), podClusterController.createPodCluster);
+router.post("/", protect, authorize("admin", "manager"), uploadPodClusterImage.array("images", 10), podClusterController.createPodCluster);
 
 /**
  * @swagger
@@ -221,7 +306,7 @@ router.post("/", protect, authorize("admin", "manager"), podClusterController.cr
  *     requestBody:
  *       required: true
  *       content:
- *         application/json:
+ *         multipart/form-data:
  *           schema:
  *             type: object
  *             properties:
@@ -233,6 +318,12 @@ router.post("/", protect, authorize("admin", "manager"), podClusterController.cr
  *                 type: string
  *               base_price_modifier:
  *                 type: number
+ *               images:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
+ *                 description: Additional images to add (max 10 files, 5MB each)
  *     responses:
  *       200:
  *         description: Pod cluster updated successfully
@@ -245,7 +336,7 @@ router.post("/", protect, authorize("admin", "manager"), podClusterController.cr
  *       500:
  *         description: Server error
  */
-router.put("/:id", protect, authorize("admin", "manager"), podClusterController.updatePodCluster);
+router.put("/:id", protect, authorize("admin", "manager"), uploadPodClusterImage.array("images", 10), podClusterController.updatePodCluster);
 
 /**
  * @swagger
