@@ -1,6 +1,26 @@
 const Location = require("../models/Location");
 const PodCluster = require("../models/PodCluster");
 
+// Location Type Hierarchy Configuration
+// Định nghĩa quan hệ cha → con được phép
+const LOCATION_HIERARCHY = {
+    airport: ["terminal"],           // Sân bay → Terminal
+    terminal: [],                    // Terminal không có con (leaf, chứa pod clusters)
+    mall: ["floor"],                 // Mall → Tầng
+    floor: [],                       // Floor không có con (leaf, chứa pod clusters)
+    bus_station: ["waiting_lounge"], // Bến xe → Phòng chờ
+    waiting_lounge: [],              // Phòng chờ không có con (leaf, chứa pod clusters)
+};
+
+// Root types: có thể tồn tại mà không cần parent
+const ROOT_TYPES = ["airport", "mall", "bus_station"];
+
+// Leaf types: không có con, chỉ chứa pod clusters
+const LEAF_TYPES = ["terminal", "floor", "waiting_lounge"];
+
+// Tất cả types hợp lệ (phải sync với Model enum)
+const VALID_TYPES = Object.keys(LOCATION_HIERARCHY);
+
 class LocationService {
     /**
      * Lấy tất cả locations với filters
@@ -66,10 +86,9 @@ class LocationService {
             throw new Error("Type and name are required");
         }
 
-        // Validate type
-        const validTypes = ["COUNTRY", "PROVINCE", "DISTRICT", "BUILDING"];
-        if (!validTypes.includes(type)) {
-            throw new Error(`Invalid type. Must be one of: ${validTypes.join(", ")}`);
+        // Validate type có trong danh sách hợp lệ (từ Model enum)
+        if (!VALID_TYPES.includes(type)) {
+            throw new Error(`Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`);
         }
 
         // Validate parent hierarchy
@@ -81,23 +100,17 @@ class LocationService {
                 throw error;
             }
 
-            // Check valid hierarchy
-            const validHierarchy = {
-                COUNTRY: ["PROVINCE"],
-                PROVINCE: ["DISTRICT"],
-                DISTRICT: ["BUILDING"],
-                BUILDING: [],
-            };
-
-            if (!validHierarchy[parent.type].includes(type)) {
+            // Kiểm tra type của con có hợp lệ với cha không (dựa vào LOCATION_HIERARCHY)
+            const allowedChildTypes = LOCATION_HIERARCHY[parent.type];
+            if (!allowedChildTypes.includes(type)) {
                 throw new Error(
-                    `Invalid hierarchy: ${parent.type} can only have children of type: ${validHierarchy[parent.type].join(", ")}`
+                    `Invalid hierarchy: ${parent.type} can only have children of type: ${allowedChildTypes.join(", ") || "none"}`
                 );
             }
         } else {
-            // Nếu không có parent, phải là COUNTRY
-            if (type !== "COUNTRY") {
-                throw new Error("Only COUNTRY type can have no parent");
+            // Nếu không có parent, chỉ các root types mới được phép
+            if (!ROOT_TYPES.includes(type)) {
+                throw new Error(`Only ${ROOT_TYPES.join(", ")} types can have no parent`);
             }
         }
 
@@ -129,9 +142,8 @@ class LocationService {
 
         // Validate type if changing
         if (type && type !== location.type) {
-            const validTypes = ["COUNTRY", "PROVINCE", "DISTRICT", "BUILDING"];
-            if (!validTypes.includes(type)) {
-                throw new Error(`Invalid type. Must be one of: ${validTypes.join(", ")}`);
+            if (!VALID_TYPES.includes(type)) {
+                throw new Error(`Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`);
             }
         }
 
@@ -198,4 +210,9 @@ class LocationService {
     }
 }
 
+// Export service và constants
 module.exports = new LocationService();
+module.exports.LOCATION_HIERARCHY = LOCATION_HIERARCHY;
+module.exports.ROOT_TYPES = ROOT_TYPES;
+module.exports.LEAF_TYPES = LEAF_TYPES;
+module.exports.VALID_TYPES = VALID_TYPES;

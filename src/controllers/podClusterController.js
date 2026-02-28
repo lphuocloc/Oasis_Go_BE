@@ -6,9 +6,9 @@ const podClusterService = require("../services/podClusterService");
 exports.getAllPodClusters = async (req, res) => {
   try {
     const { location_id } = req.query;
-    
+
     const podClusters = await podClusterService.getAllPodClusters({ location_id });
-    
+
     res.status(200).json({
       success: true,
       count: podClusters.length,
@@ -29,7 +29,7 @@ exports.getAllPodClusters = async (req, res) => {
 exports.getPodClusterById = async (req, res) => {
   try {
     const podCluster = await podClusterService.getPodClusterById(req.params.id);
-    
+
     res.status(200).json({
       success: true,
       data: podCluster,
@@ -49,7 +49,7 @@ exports.getPodClusterById = async (req, res) => {
 exports.getPodClustersByLocation = async (req, res) => {
   try {
     const podClusters = await podClusterService.getPodClustersByLocation(req.params.locationId);
-    
+
     res.status(200).json({
       success: true,
       count: podClusters.length,
@@ -70,14 +70,19 @@ exports.getPodClustersByLocation = async (req, res) => {
 exports.createPodCluster = async (req, res) => {
   try {
     const { location_id, name, description, base_price_modifier } = req.body;
-    
+
+    // Lấy các file đã upload từ multer
+    const imageFiles = req.files || [];
+    const imageUrls = imageFiles.map(file => file.path); // Cloudinary trả về URL trong file.path
+
     const podCluster = await podClusterService.createPodCluster({
       location_id,
       name,
       description,
       base_price_modifier,
+      image_urls: imageUrls,
     });
-    
+
     res.status(201).json({
       success: true,
       message: "Pod cluster created successfully",
@@ -98,14 +103,19 @@ exports.createPodCluster = async (req, res) => {
 exports.updatePodCluster = async (req, res) => {
   try {
     const { location_id, name, description, base_price_modifier } = req.body;
-    
+
+    // Lấy các file đã upload từ multer (nếu có)
+    const imageFiles = req.files || [];
+    const imageUrls = imageFiles.map(file => file.path);
+
     const podCluster = await podClusterService.updatePodCluster(req.params.id, {
       location_id,
       name,
       description,
       base_price_modifier,
+      image_urls: imageUrls,
     });
-    
+
     res.status(200).json({
       success: true,
       message: "Pod cluster updated successfully",
@@ -126,7 +136,7 @@ exports.updatePodCluster = async (req, res) => {
 exports.deletePodCluster = async (req, res) => {
   try {
     const result = await podClusterService.deletePodCluster(req.params.id);
-    
+
     res.status(200).json({
       success: true,
       message: result.message,
@@ -136,6 +146,50 @@ exports.deletePodCluster = async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: error.message || "Error deleting pod cluster",
+    });
+  }
+};
+
+// @desc    Get pod cluster images
+// @route   GET /api/pod-clusters/:id/images
+// @access  Public
+exports.getPodClusterImages = async (req, res) => {
+  try {
+    const images = await podClusterService.getPodClusterImages(req.params.id);
+
+    res.status(200).json({
+      success: true,
+      count: images.length,
+      data: images,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching pod cluster images",
+    });
+  }
+};
+
+// @desc    Delete pod cluster image
+// @route   DELETE /api/pod-clusters/:id/images/:imageId
+// @access  Private (Admin/Manager)
+exports.deletePodClusterImage = async (req, res) => {
+  try {
+    const result = await podClusterService.deletePodClusterImage(
+      req.params.id,
+      req.params.imageId
+    );
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error deleting pod cluster image",
     });
   }
 };

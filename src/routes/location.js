@@ -26,7 +26,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *           example: Sân bay Tân Sơn Nhất
  *         type:
  *           type: string
- *           enum: [airport, terminal, floor]
+ *           enum: [airport, terminal, floor, mall, bus_station, waiting_lounge]
  *           description: Type of location
  *           example: airport
  *         lat:
@@ -71,7 +71,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *         name: type
  *         schema:
  *           type: string
- *           enum: [airport, terminal, floor]
+ *           enum: [airport, terminal, floor, mall, bus_station, waiting_lounge]
  *         description: Filter by location type
  *       - in: query
  *         name: parent_id
@@ -309,7 +309,7 @@ router.post("/", protect, authorize("admin"), locationController.createLocation)
  *                 type: string
  *               type:
  *                 type: string
- *                 enum: [airport, terminal, floor]
+ *                 enum: [airport, terminal, floor, mall, bus_station, waiting_lounge]
  *               lat:
  *                 type: number
  *               lng:
