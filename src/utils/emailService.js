@@ -1,31 +1,31 @@
-const nodemailer = require('nodemailer');
+const nodemailer = require("nodemailer");
 
 // Tạo transporter để gửi email
 const createTransporter = () => {
-    return nodemailer.createTransport({
-        service: process.env.EMAIL_SERVICE || 'gmail',
-        auth: {
-            user: process.env.EMAIL_USER,
-            pass: process.env.EMAIL_PASSWORD
-        }
-    });
+  return nodemailer.createTransport({
+    service: process.env.EMAIL_SERVICE || "gmail",
+    auth: {
+      user: process.env.EMAIL_USER,
+      pass: process.env.EMAIL_PASSWORD,
+    },
+  });
 };
 
 // Generate OTP 6 chữ số
 const generateOTP = () => {
-    return Math.floor(100000 + Math.random() * 900000).toString();
+  return Math.floor(100000 + Math.random() * 900000).toString();
 };
 
 // Gửi OTP qua email
 const sendOTPEmail = async (email, otp) => {
-    try {
-        const transporter = createTransporter();
+  try {
+    const transporter = createTransporter();
 
-        const mailOptions = {
-            from: `"${process.env.APP_NAME || 'Your App'}" <${process.env.EMAIL_USER}>`,
-            to: email,
-            subject: 'Verify Your Email - OTP Code',
-            html: `
+    const mailOptions = {
+      from: `"${process.env.APP_NAME || "Your App"}" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: "Verify Your Email - OTP Code",
+      html: `
                 <!DOCTYPE html>
                 <html>
                 <head>
@@ -102,24 +102,24 @@ const sendOTPEmail = async (email, otp) => {
                         </div>
                         <div class="footer">
                             <p>This is an automated email. Please do not reply.</p>
-                            <p>&copy; ${new Date().getFullYear()} ${process.env.APP_NAME || 'Your App'}. All rights reserved.</p>
+                            <p>&copy; ${new Date().getFullYear()} ${process.env.APP_NAME || "Your App"}. All rights reserved.</p>
                         </div>
                     </div>
                 </body>
                 </html>
-            `
-        };
+            `,
+    };
 
-        const info = await transporter.sendMail(mailOptions);
-        console.log('OTP Email sent:', info.messageId);
-        return true;
-    } catch (error) {
-        console.error('Error sending OTP email:', error);
-        throw new Error('Failed to send OTP email');
-    }
+    const info = await transporter.sendMail(mailOptions);
+    console.log("OTP Email sent:", info.messageId);
+    return true;
+  } catch (error) {
+    console.error("Error sending OTP email:", error);
+    throw new Error("Failed to send OTP email");
+  }
 };
 
 module.exports = {
-    generateOTP,
-    sendOTPEmail
+  generateOTP,
+  sendOTPEmail,
 };
