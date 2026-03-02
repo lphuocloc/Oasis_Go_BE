@@ -113,12 +113,37 @@ podSchema.pre("save", async function () {
     }
 });
 
-// Middleware to track previous status
+// Middleware to track previous status and if document is new
 podSchema.pre("save", function (next) {
     if (this.isModified("status")) {
         this._previousStatus = this.status;
     }
+    // Track if this is a new document
+    this._wasNew = this.isNew;
     next();
+});
+
+// Post-save hook to auto-generate time slots for new pods
+podSchema.post("save", async function (doc) {
+    // Only generate time slots for newly created pods
+    if (doc._wasNew) {
+        try {
+            // Import the function to generate time slots (lazy import to avoid circular dependency)
+            const { generateTimeSlotsForPod } = require("../services/timeSlotService");
+
+            // Generate time slots for 7 days (non-blocking)
+            setImmediate(async () => {
+                try {
+                    await generateTimeSlotsForPod(doc.id, 7);
+                    console.log(`✅ Auto-generated time slots for new pod: ${doc.name} (${doc.code})`);
+                } catch (error) {
+                    console.error(`❌ Failed to auto-generate time slots for pod ${doc.id}:`, error.message);
+                }
+            });
+        } catch (error) {
+            console.error(`❌ Error setting up time slot generation for pod ${doc.id}:`, error.message);
+        }
+    }
 });
 
 // Static method to get pods by cluster
