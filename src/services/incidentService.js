@@ -1,6 +1,6 @@
 const mongoose = require("mongoose");
-const Incident = require("../models/incident.model");
-const Pod = require("../models/pod.model");
+const Incident = require("../models/Incidents");
+const Pod = require("../models/Pod");
 
 const isValidObjectId = (id) =>
   mongoose.Types.ObjectId.isValid(id);

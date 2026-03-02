@@ -1,11 +1,10 @@
 const jwt = require("jsonwebtoken");
-const podService = require("../../utils/podService");
-const bookingService = require("../../utils/bookingService");
-const incidentService = require("../../utils/incidentService");
+const podService = require("../services/podService");
+const bookingService = require("../services/bookingService");
+const incidentService = require("../services/incidentService");
 
 exports.getDashboard = async (req, res) => {
   try {
-    // Lấy khoảng thời gian từ query ?from=&to=, mặc định là hôm nay
     const { from, to } = req.query;
 
     const now = new Date();
@@ -38,7 +37,7 @@ exports.getDashboard = async (req, res) => {
     const incidentFilters = {};
 
     const [pods, bookings, incidents] = await Promise.all([
-      podService.getPods(podFilters),
+      podService.getAllPods(podFilters),
       bookingService.getBookings(bookingFilters),
       incidentService.getIncidents(incidentFilters),
     ]);
