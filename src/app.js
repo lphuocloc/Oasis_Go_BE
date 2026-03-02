@@ -19,7 +19,7 @@ const locationRouter = require("./routes/location");
 const podClusterRouter = require("./routes/podCluster");
 const podRouter = require("./routes/pod");
 const identityCardRouter = require("./routes/IdentityCard");
-
+const dashboardRouter = require("./routes/DashboardRoutes");
 const app = express();
 
 // Middlewares
@@ -38,6 +38,7 @@ app.use("/api/pod-clusters", podClusterRouter);
 app.use("/api/pods", podRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
+app.use("/api/dashboard", dashboardRouter);
 // Swagger Documentation
 app.use(
   "/api-docs",
