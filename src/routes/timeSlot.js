@@ -263,6 +263,96 @@ router.post("/release", protect, timeSlotController.releaseSlots);
 
 /**
  * @swagger
+ * /api/timeslots/cluster/{clusterId}/available:
+ *   get:
+ *     summary: Find available slots by cluster using gap-based logic
+ *     description: Returns all time slots for a specific date with availability status. Shows AVAILABLE if at least one pod is free, UNAVAILABLE if all pods are booked. Includes 30-minute buffer time after each booking for cleaning.
+ *     tags: [TimeSlots]
+ *     parameters:
+ *       - in: path
+ *         name: clusterId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cluster ID
+ *       - in: query
+ *         name: date
+ *         required: true
+ *         schema:
+ *           type: string
+ *           format: date
+ *           example: "2026-03-15"
+ *         description: Date in YYYY-MM-DD format
+ *     responses:
+ *       200:
+ *         description: Available slots retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Available slots retrieved successfully"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     date:
+ *                       type: string
+ *                       example: "2026-03-15"
+ *                     cluster_id:
+ *                       type: string
+ *                     total_pods:
+ *                       type: integer
+ *                       description: Total number of pods in cluster
+ *                     total_slots:
+ *                       type: integer
+ *                       description: Total number of slots in the day
+ *                     available_slots_count:
+ *                       type: integer
+ *                       description: Number of slots with at least one pod available
+ *                     unavailable_slots_count:
+ *                       type: integer
+ *                       description: Number of slots with no pods available
+ *                     slots:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           start_time:
+ *                             type: string
+ *                             format: date-time
+ *                           end_time:
+ *                             type: string
+ *                             format: date-time
+ *                           status:
+ *                             type: string
+ *                             enum: [AVAILABLE, UNAVAILABLE]
+ *                           available_pods_count:
+ *                             type: integer
+ *                           available_pods:
+ *                             type: array
+ *                             items:
+ *                               type: object
+ *                               properties:
+ *                                 pod_id:
+ *                                   type: string
+ *                                 pod_code:
+ *                                   type: string
+ *                                 pod_name:
+ *                                   type: string
+ *       400:
+ *         description: Invalid date format or missing parameters
+ *       404:
+ *         description: Cluster not found
+ */
+router.get("/cluster/:clusterId/available", timeSlotController.findAvailableSlotsByCluster);
+
+/**
+ * @swagger
  * /api/timeslots/{id}:
  *   get:
  *     summary: Get a time slot by ID
