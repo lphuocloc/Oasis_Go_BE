@@ -290,8 +290,11 @@ class AuthService {
       throw error;
     }
 
-    const { email, name, picture, uid } = decodedToken;
-
+    // const { email, name, picture, uid } = decodedToken;
+    const uid = decodedToken.uid;
+    const email = decodedToken.email || (decodedToken.firebase?.identities?.['google.com']?.[0]);
+    const name = decodedToken.name || decodedToken.display_name;
+    const picture = decodedToken.picture;
     if (!email) {
       throw new Error("Email not found in Firebase token");
     }
