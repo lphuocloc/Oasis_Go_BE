@@ -234,3 +234,44 @@ exports.releaseSlots = async (req, res) => {
         });
     }
 };
+
+// @desc    Find available slots by cluster using gap-based logic
+// @route   GET /api/timeslots/cluster/:clusterId/available
+// @access  Public
+exports.findAvailableSlotsByCluster = async (req, res) => {
+    try {
+        const { clusterId } = req.params;
+        const { date } = req.query;
+
+        if (!date) {
+            return res.status(400).json({
+                success: false,
+                message: "date query parameter is required (format: YYYY-MM-DD)",
+            });
+        }
+
+        // Validate date format
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+        if (!dateRegex.test(date)) {
+            return res.status(400).json({
+                success: false,
+                message: "Invalid date format. Use YYYY-MM-DD",
+            });
+        }
+
+        const result = await timeSlotService.findAvailableSlotsByCluster(clusterId, date);
+
+        res.status(200).json({
+            success: true,
+            message: "Available slots retrieved successfully",
+            data: result
+        });
+    } catch (error) {
+        console.error("Find available slots by cluster error:", error);
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
+            success: false,
+            message: error.message || "Error finding available slots",
+        });
+    }
+};

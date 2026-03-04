@@ -25,7 +25,6 @@ const bookingSchema = new mongoose.Schema(
       type: String,
       required: [true, "Pod ID is required"],
       ref: "Pod",
-      index: true,
     },
     start_time: {
       type: Date,
@@ -97,11 +96,10 @@ bookingSchema.virtual("pod", {
 });
 
 // Pre-save validation: end_time must be after start_time
-bookingSchema.pre("save", function (next) {
+bookingSchema.pre("save", async function () {
   if (this.end_time <= this.start_time) {
-    return next(new Error("End time must be after start time"));
+    throw new Error("End time must be after start time");
   }
-  next();
 });
 
 // Instance method to start using pod
