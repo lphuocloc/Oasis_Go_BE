@@ -13,7 +13,6 @@ const timeSlotSchema = new mongoose.Schema(
             type: String,
             required: [true, "Pod ID is required"],
             ref: "Pod",
-            index: true,
         },
         start_time: {
             type: Date,

@@ -61,12 +61,11 @@ bookingOrderSchema.virtual("user", {
 });
 
 // Pre-save validation: final_total_price should be base - discount
-bookingOrderSchema.pre("save", function (next) {
+bookingOrderSchema.pre("save", async function () {
     // Auto-calculate final_total_price if not set
     if (!this.isModified("final_total_price") && this.isModified("total_base_price")) {
         this.final_total_price = Math.max(0, this.total_base_price - (this.total_discount || 0));
     }
-    next();
 });
 
 // Instance method to calculate total

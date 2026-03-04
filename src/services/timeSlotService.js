@@ -520,6 +520,7 @@ class TimeSlotService {
             return {
                 date: date,
                 cluster_id: clusterId,
+                base_price_modifier: cluster.base_price_modifier || 0,
                 total_pods: pods.length,
                 total_slots: allSlots.length,
                 available_slots_count: availableCount,
