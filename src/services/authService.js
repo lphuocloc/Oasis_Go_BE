@@ -29,8 +29,8 @@ class AuthService {
     if (user.otpRequestCount >= 3) {
       const timeLeft = Math.ceil(
         (user.otpLastRequestAt.getTime() + 15 * 60 * 1000 - now.getTime()) /
-        1000 /
-        60,
+          1000 /
+          60,
       );
       return {
         allowed: false,
@@ -290,11 +290,8 @@ class AuthService {
       throw error;
     }
 
-    // const { email, name, picture, uid } = decodedToken;
-    const uid = decodedToken.uid;
-    const email = decodedToken.email || (decodedToken.firebase?.identities?.['google.com']?.[0]);
-    const name = decodedToken.name || decodedToken.display_name;
-    const picture = decodedToken.picture;
+    const { email, name, picture, uid } = decodedToken.data;
+
     if (!email) {
       throw new Error("Email not found in Firebase token");
     }
