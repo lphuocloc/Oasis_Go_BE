@@ -114,13 +114,12 @@ podSchema.pre("save", async function () {
 });
 
 // Middleware to track previous status and if document is new
-podSchema.pre("save", function (next) {
+podSchema.pre("save", async function () {
     if (this.isModified("status")) {
         this._previousStatus = this.status;
     }
     // Track if this is a new document
     this._wasNew = this.isNew;
-    next();
 });
 
 // Post-save hook to auto-generate time slots for new pods

@@ -46,7 +46,6 @@ const doorSchema = new mongoose.Schema(
 );
 
 // Index for faster queries
-doorSchema.index({ pod_id: 1 });
 doorSchema.index({ lock_status: 1 });
 doorSchema.index({ door_sensor: 1 });
 
