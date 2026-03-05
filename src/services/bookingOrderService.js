@@ -492,6 +492,24 @@ class BookingOrderService {
                     throw error;
                 }
 
+                // Get all bookings for this order
+                const bookings = await Booking.find({ order_id: orderId }).session(session);
+
+                // Release time slots for each booking
+                for (const booking of bookings) {
+                    // Get all booking slots
+                    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).session(session);
+                    const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+                    // Delete time slots (release them)
+                    if (timeSlotIds.length > 0) {
+                        await TimeSlot.deleteMany({ id: { $in: timeSlotIds } }).session(session);
+                    }
+
+                    // Delete booking slots
+                    await BookingSlot.deleteMany({ booking_id: booking.id }).session(session);
+                }
+
                 // Cancel all bookings in this order within transaction
                 await Booking.updateMany(
                     { order_id: orderId, status: 'BOOKED' },
