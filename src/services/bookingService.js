@@ -3,6 +3,7 @@ const BookingOrder = require("../models/BookingOrder");
 const Pod = require("../models/Pod");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
+const BookingSlot = require("../models/BookingSlot");
 
 class BookingService {
   /**
@@ -253,17 +254,19 @@ class BookingService {
       throw new Error("Booking not found");
     }
 
-    // Release time slots if they were reserved
+    // Release time slots using BookingSlot relationship
     try {
-      await TimeSlot.updateMany(
-        {
-          pod_id: booking.pod_id,
-          start_time: { $gte: booking.start_time },
-          end_time: { $lte: booking.end_time },
-          status: "RESERVED",
-        },
-        { status: "AVAILABLE" }
-      );
+      // Get all booking slots for this booking
+      const bookingSlots = await BookingSlot.find({ booking_id: bookingId });
+      const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+      // Delete time slots (release them)
+      if (timeSlotIds.length > 0) {
+        await TimeSlot.deleteMany({ id: { $in: timeSlotIds } });
+      }
+
+      // Delete booking slots
+      await BookingSlot.deleteMany({ booking_id: bookingId });
     } catch (error) {
       console.error("Error releasing time slots:", error);
     }

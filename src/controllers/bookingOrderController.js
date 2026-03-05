@@ -9,9 +9,6 @@ class BookingOrderController {
         try {
             // Get user_id from authenticated user (middleware)
             const user_id = req.user._id;
-            console.log("req", req.user)
-
-            console.log("userId", user_id)
             const { cluster_id, start_time, end_time, pod_count, total_discount } = req.body;
 
             // Validate required fields
