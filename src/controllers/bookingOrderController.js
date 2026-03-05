@@ -8,7 +8,7 @@ class BookingOrderController {
     async createBookingOrder(req, res) {
         try {
             // Get user_id from authenticated user (middleware)
-            const user_id = req.user.id;
+            const user_id = req.user._id;
             const { cluster_id, start_time, end_time, pod_count, total_discount } = req.body;
 
             // Validate required fields

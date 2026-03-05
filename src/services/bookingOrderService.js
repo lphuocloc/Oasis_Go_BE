@@ -3,8 +3,14 @@ const Booking = require("../models/Bookings");
 const PodCluster = require("../models/PodCluster");
 const Pod = require("../models/Pod");
 const User = require("../models/User");
+const TimeSlot = require("../models/TimeSlot");
+const BookingSlot = require("../models/BookingSlot");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
+
+// Slot configuration
+const SLOT_DURATION_MINUTES = 30;
+const HOLD_EXPIRATION_MINUTES = 3;
 
 
 class BookingOrderService {
@@ -38,7 +44,7 @@ class BookingOrderService {
                 }
 
                 // Validate user exists
-                const user = await User.findOne({ id: user_id });
+                const user = await User.findOne({ _id: user_id });
                 if (!user) {
                     const error = new Error("User not found");
                     error.statusCode = 404;
@@ -151,6 +157,34 @@ class BookingOrderService {
                 const createdBookings = await Booking.create(bookingDocs, { session, ordered: true });
                 bookings.push(...createdBookings);
 
+                // Generate time slots and booking slots for each booking
+                const allTimeSlotIds = [];
+                for (const booking of createdBookings) {
+                    // Generate 30-minute time slots for this booking's time range
+                    const timeSlotDocs = this._generateTimeSlots(
+                        booking.pod_id,
+                        new Date(booking.start_time),
+                        new Date(booking.end_time)
+                    );
+
+                    // Create time slots within transaction
+                    const createdTimeSlots = await TimeSlot.create(timeSlotDocs, { session, ordered: true });
+
+                    // Create booking slots linking booking to time slots
+                    const bookingSlotDocs = createdTimeSlots.map(ts => ({
+                        booking_id: booking.id,
+                        time_slot_id: ts.id
+                    }));
+
+                    await BookingSlot.create(bookingSlotDocs, { session, ordered: true });
+
+                    // Collect time slot IDs for response
+                    allTimeSlotIds.push(...createdTimeSlots.map(ts => ts.id));
+                }
+
+                // Schedule expiration check for PENDING order (3 minutes)
+                this._scheduleOrderExpiration(bookingOrder.id, HOLD_EXPIRATION_MINUTES);
+
                 // Return order with bookings
                 return {
                     order: {
@@ -219,12 +253,111 @@ class BookingOrderService {
                 ]
             });
 
-            if (!conflictingBooking) {
+            if (conflictingBooking) {
+                continue; // Skip this pod
+            }
+
+            // Check if pod has any reserved time slots in the requested range
+            const conflictingTimeSlot = await TimeSlot.findOne({
+                pod_id: pod.id,
+                status: 'RESERVED',
+                $or: [
+                    {
+                        start_time: { $lt: endTime },
+                        end_time: { $gt: startTime }
+                    }
+                ]
+            });
+
+            if (!conflictingTimeSlot) {
                 availablePods.push(pod);
             }
         }
 
         return availablePods;
+    }
+
+    /**
+     * Generate time slot documents for a booking time range
+     * @private
+     * @param {String} podId - Pod ID
+     * @param {Date} startTime - Start time
+     * @param {Date} endTime - End time
+     * @returns {Array} Array of time slot documents
+     */
+    _generateTimeSlots(podId, startTime, endTime) {
+        const slots = [];
+        let currentStart = new Date(startTime);
+
+        while (currentStart < endTime) {
+            const currentEnd = new Date(currentStart);
+            currentEnd.setMinutes(currentEnd.getMinutes() + SLOT_DURATION_MINUTES);
+
+            // Don't exceed the booking end time
+            const slotEnd = currentEnd > endTime ? endTime : currentEnd;
+
+            slots.push({
+                pod_id: podId,
+                start_time: new Date(currentStart),
+                end_time: slotEnd,
+                status: 'RESERVED'
+            });
+
+            currentStart = new Date(currentEnd);
+        }
+
+        return slots;
+    }
+
+    /**
+     * Schedule order expiration check
+     * If order is not paid within the specified minutes, release the slots
+     * @private
+     * @param {String} orderId - Order ID
+     * @param {Number} minutes - Minutes until expiration
+     */
+    _scheduleOrderExpiration(orderId, minutes) {
+        setTimeout(async () => {
+            try {
+                const order = await BookingOrder.findOne({ id: orderId });
+
+                // Only cancel if still PENDING
+                if (order && order.status === 'PENDING') {
+                    console.log(`Order ${orderId} expired. Releasing held slots...`);
+
+                    // Get all bookings for this order
+                    const bookings = await Booking.find({ order_id: orderId });
+
+                    for (const booking of bookings) {
+                        // Get all booking slots
+                        const bookingSlots = await BookingSlot.find({ booking_id: booking.id });
+                        const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+                        // Delete time slots (release them)
+                        if (timeSlotIds.length > 0) {
+                            await TimeSlot.deleteMany({ id: { $in: timeSlotIds } });
+                        }
+
+                        // Delete booking slots
+                        await BookingSlot.deleteMany({ booking_id: booking.id });
+                    }
+
+                    // Update booking statuses to CANCELLED
+                    await Booking.updateMany(
+                        { order_id: orderId },
+                        { $set: { status: 'CANCELLED' } }
+                    );
+
+                    // Update order status to CANCELLED
+                    order.status = 'CANCELLED';
+                    await order.save();
+
+                    console.log(`Order ${orderId} cancelled and slots released.`);
+                }
+            } catch (error) {
+                console.error(`Error expiring order ${orderId}:`, error);
+            }
+        }, minutes * 60 * 1000);
     }
 
     /**
@@ -357,6 +490,24 @@ class BookingOrderService {
                     const error = new Error("Cannot cancel paid order");
                     error.statusCode = 400;
                     throw error;
+                }
+
+                // Get all bookings for this order
+                const bookings = await Booking.find({ order_id: orderId }).session(session);
+
+                // Release time slots for each booking
+                for (const booking of bookings) {
+                    // Get all booking slots
+                    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).session(session);
+                    const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+                    // Delete time slots (release them)
+                    if (timeSlotIds.length > 0) {
+                        await TimeSlot.deleteMany({ id: { $in: timeSlotIds } }).session(session);
+                    }
+
+                    // Delete booking slots
+                    await BookingSlot.deleteMany({ booking_id: booking.id }).session(session);
                 }
 
                 // Cancel all bookings in this order within transaction
