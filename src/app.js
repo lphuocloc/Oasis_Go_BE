@@ -20,6 +20,10 @@ const podClusterRouter = require("./routes/podCluster");
 const podRouter = require("./routes/pod");
 const identityCardRouter = require("./routes/IdentityCard");
 const dashboardRouter = require("./routes/DashboardRoutes");
+const timeSlotRouter = require("./routes/timeSlot");
+const bookingRouter = require("./routes/booking");
+const bookingSlotRouter = require("./routes/bookingSlot");
+const bookingOrderRouter = require("./routes/bookingOrder");
 const app = express();
 
 // Middlewares
@@ -36,6 +40,10 @@ app.use("/api/vnpay", vnpayRouter);
 app.use("/api/locations", locationRouter);
 app.use("/api/pod-clusters", podClusterRouter);
 app.use("/api/pods", podRouter);
+app.use("/api/timeslots", timeSlotRouter);
+app.use("/api/bookings", bookingRouter);
+app.use("/api/booking-slots", bookingSlotRouter);
+app.use("/api/booking-orders", bookingOrderRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

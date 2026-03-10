@@ -3,41 +3,45 @@ const User = require("../models/User");
 const { generateOTP, sendOTPEmail } = require("../utils/emailService");
 const { verifyFirebaseToken } = require("../config/firebase");
 
-// Tạo JWT token
-const generateToken = (userId) => {
-  return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
-    expiresIn: "7d",
-  });
-};
-
-// Kiểm tra rate limit OTP (max 3 lần / 15 phút)
-const checkOTPRateLimit = (user) => {
-  const now = new Date();
-  const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
-
-  // Reset counter nếu đã quá 15 phút
-  if (!user.otpLastRequestAt || user.otpLastRequestAt < fifteenMinutesAgo) {
-    return { allowed: true, resetCount: true };
-  }
-
-  // Kiểm tra số lần request
-  if (user.otpRequestCount >= 3) {
-    const timeLeft = Math.ceil(
-      (user.otpLastRequestAt.getTime() + 15 * 60 * 1000 - now.getTime()) /
-        1000 /
-        60,
-    );
-    return {
-      allowed: false,
-      resetCount: false,
-      message: `Too many OTP requests. Please try again in ${timeLeft} minute(s).`,
-    };
-  }
-
-  return { allowed: true, resetCount: false };
-};
-
 class AuthService {
+  /**
+   * Generate JWT token
+   */
+  generateToken(userId) {
+    return jwt.sign({ id: userId }, process.env.JWT_SECRET, {
+      expiresIn: "7d",
+    });
+  }
+
+  /**
+   * Check OTP rate limit (max 3 times / 15 minutes)
+   */
+  checkOTPRateLimit(user) {
+    const now = new Date();
+    const fifteenMinutesAgo = new Date(now.getTime() - 15 * 60 * 1000);
+
+    // Reset counter if more than 15 minutes have passed
+    if (!user.otpLastRequestAt || user.otpLastRequestAt < fifteenMinutesAgo) {
+      return { allowed: true, resetCount: true };
+    }
+
+    // Check request count
+    if (user.otpRequestCount >= 3) {
+      const timeLeft = Math.ceil(
+        (user.otpLastRequestAt.getTime() + 15 * 60 * 1000 - now.getTime()) /
+          1000 /
+          60,
+      );
+      return {
+        allowed: false,
+        resetCount: false,
+        message: `Too many OTP requests. Please try again in ${timeLeft} minute(s).`,
+      };
+    }
+
+    return { allowed: true, resetCount: false };
+  }
+
   /**
    * Đăng ký user mới với email/password
    */
@@ -142,7 +146,7 @@ class AuthService {
     await user.save();
 
     // Tạo token
-    const token = generateToken(user._id);
+    const token = this.generateToken(user._id);
 
     return {
       token,
@@ -199,7 +203,7 @@ class AuthService {
     }
 
     // Tạo token
-    const token = generateToken(user._id);
+    const token = this.generateToken(user._id);
 
     return {
       token,
@@ -236,7 +240,7 @@ class AuthService {
     }
 
     // Kiểm tra rate limit
-    const rateLimitCheck = checkOTPRateLimit(user);
+    const rateLimitCheck = this.checkOTPRateLimit(user);
 
     if (!rateLimitCheck.allowed) {
       const error = new Error(rateLimitCheck.message);
@@ -286,7 +290,7 @@ class AuthService {
       throw error;
     }
 
-    const { email, name, picture, uid } = decodedToken;
+    const { email, name, picture, uid } = decodedToken.data;
 
     if (!email) {
       throw new Error("Email not found in Firebase token");
@@ -322,7 +326,7 @@ class AuthService {
     }
 
     // Tạo JWT token
-    const token = generateToken(user._id);
+    const token = this.generateToken(user._id);
 
     return {
       token,
@@ -541,7 +545,7 @@ class AuthService {
     } catch (error) {
       // Xử lý riêng lỗi JWT hết hạn
       if (error.name === "TokenExpiredError") {
-        const err = new Error("Phiên làm việc hết hạn, làm lại từ đầu đi gà🐤");
+        const err = new Error("Phiên làm việc hết hạn");
         err.statusCode = 401;
         throw err;
       }
