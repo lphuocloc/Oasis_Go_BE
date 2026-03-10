@@ -718,4 +718,26 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
  */
 
 router.post("/reset-password", authController.resetPassword);
+const notificationService = require("../services/notificationService");
+router.patch("/update-fcm-token", protect, authController.handleUpdateToken);
+
+// Đăng xuất (Để xóa token trong DB)
+router.post("/reset-fcmToken", protect, authController.handleLogout);
+
+// Route: POST /api/auth/test-push
+router.post("/test-push", protect, async (req, res) => {
+  const { title, body } = req.body;
+
+  const result = await notificationService.sendToUser(req.user.id, {
+    title: title || "Thông báo từ Backend",
+    body: body || "Hệ thống đã kết nối thành công!",
+    data: { url: "/home" },
+  });
+
+  if (result.success) {
+    res.json({ message: "Đã gửi yêu cầu thông báo!", result });
+  } else {
+    res.status(500).json({ message: "Gửi thất bại", error: result.error });
+  }
+});
 module.exports = router;

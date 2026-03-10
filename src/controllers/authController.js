@@ -79,9 +79,9 @@ exports.resendOtp = async (req, res) => {
 // @access  Public
 exports.login = async (req, res) => {
   try {
-    const { email, password } = req.body;
+    const { email, password, fcmToken } = req.body;
 
-    const result = await authService.login({ email, password });
+    const result = await authService.login({ email, password, fcmToken });
 
     res.status(200).json({
       success: true,
@@ -106,11 +106,12 @@ exports.login = async (req, res) => {
 // @access  Public
 exports.googleAuth = async (req, res) => {
   try {
-    const { idToken } = req.body;
+    const { idToken, fcmToken } = req.body;
 
     const result = await authService.loginWithFirebase({
       idToken,
       authProvider: "google",
+      fcmToken,
     });
 
     const statusCode = result.user.createdAt ? 201 : 200;
@@ -238,6 +239,46 @@ exports.resetPassword = async (req, res) => {
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message,
+    });
+  }
+};
+
+exports.handleUpdateToken = async (req, res) => {
+  try {
+    const { token } = req.body;
+    const userId = req.user.id;
+
+    if (!token) {
+      return res.status(400).json({ message: "Token không được để trống" });
+    }
+
+    await authService.updatePushToken(userId, token);
+
+    res.status(200).json({
+      success: true,
+      message: "Cập nhật địa chỉ thiết bị thành công",
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+exports.handleLogout = async (req, res) => {
+  try {
+    const userId = req.user.id;
+
+    await authService.clearPushToken(userId);
+
+    res.status(200).json({
+      success: true,
+      message: "Đăng xuất và xóa địa chỉ thiết bị thành công",
+    });
+  } catch (error) {
+    console.error("Logout error:", error);
+    res.status(500).json({
+      success: false,
+      message: "Lỗi hệ thống khi đăng xuất",
+      error: error.message,
     });
   }
 };

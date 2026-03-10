@@ -98,6 +98,10 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    fcmToken: {
+      type: String,
+      default: null,
+    },
     // OTP fields for password reset
     resetPasswordOtp: { type: String },
     resetPasswordOtpExpires: { type: Date },
