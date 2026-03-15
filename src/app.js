@@ -12,6 +12,10 @@ const connectDB = require("./config/db");
 // Connect to MongoDB
 connectDB();
 
+// Start booking order cleanup job
+const bookingOrderService = require("./services/bookingOrderService");
+bookingOrderService.startCleanupJob(1); // Run every 1 minute
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");

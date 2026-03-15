@@ -16,7 +16,32 @@ class PodClusterService {
             .populate("location")
             .sort({ createdAt: -1 });
 
-        return podClusters;
+        if (podClusters.length === 0) {
+            return podClusters;
+        }
+
+        // Fetch all images in one query, then group by cluster_id
+        const clusterIds = podClusters.map(cluster => cluster.id);
+        const images = await PodClusterImage.find({ cluster_id: { $in: clusterIds } })
+            .select("id cluster_id image_url createdAt")
+            .sort({ createdAt: -1 })
+            .lean();
+
+        const imageMap = images.reduce((map, image) => {
+            if (!map[image.cluster_id]) {
+                map[image.cluster_id] = [];
+            }
+            map[image.cluster_id].push(image);
+            return map;
+        }, {});
+
+        const podClustersWithImages = podClusters.map(cluster => {
+            const clusterObj = cluster.toObject();
+            clusterObj.images = imageMap[cluster.id] || [];
+            return clusterObj;
+        });
+
+        return podClustersWithImages;
     }
 
     /**
