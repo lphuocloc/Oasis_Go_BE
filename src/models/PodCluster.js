@@ -1,6 +1,8 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const ALLOWED_SLOT_DURATIONS = [30, 60, 90, 120];
+
 const podClusterSchema = new mongoose.Schema(
     {
         id: {
@@ -32,6 +34,14 @@ const podClusterSchema = new mongoose.Schema(
                     return !isNaN(value);
                 },
                 message: "Base price modifier must be a valid number",
+            },
+        },
+        slot_duration_minutes: {
+            type: Number,
+            default: 30,
+            enum: {
+                values: ALLOWED_SLOT_DURATIONS,
+                message: `Slot duration must be one of: ${ALLOWED_SLOT_DURATIONS.join(", ")}`,
             },
         },
     },

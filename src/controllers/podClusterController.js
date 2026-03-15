@@ -69,7 +69,7 @@ exports.getPodClustersByLocation = async (req, res) => {
 // @access  Private (Admin/Manager)
 exports.createPodCluster = async (req, res) => {
   try {
-    const { location_id, name, description, base_price_modifier } = req.body;
+    const { location_id, name, description, base_price_modifier, slot_duration_minutes } = req.body;
 
     // Lấy các file đã upload từ multer
     const imageFiles = req.files || [];
@@ -80,6 +80,7 @@ exports.createPodCluster = async (req, res) => {
       name,
       description,
       base_price_modifier,
+      slot_duration_minutes,
       image_urls: imageUrls,
     });
 
@@ -102,7 +103,7 @@ exports.createPodCluster = async (req, res) => {
 // @access  Private (Admin/Manager)
 exports.updatePodCluster = async (req, res) => {
   try {
-    const { location_id, name, description, base_price_modifier } = req.body;
+    const { location_id, name, description, base_price_modifier, slot_duration_minutes } = req.body;
 
     // Lấy các file đã upload từ multer (nếu có)
     const imageFiles = req.files || [];
@@ -113,6 +114,7 @@ exports.updatePodCluster = async (req, res) => {
       name,
       description,
       base_price_modifier,
+      slot_duration_minutes,
       image_urls: imageUrls,
     });
 

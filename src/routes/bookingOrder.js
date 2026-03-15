@@ -50,6 +50,22 @@ const { protect } = require("../middlewares/authMiddleware");
  *                 description: Total discount amount (optional)
  *                 default: 0
  *                 minimum: 0
+ *               require_adjacent:
+ *                 type: boolean
+ *                 description: Require adjacent pods if booking multiple
+ *                 default: false
+ *               floor_preference:
+ *                 type: string
+ *                 enum: [U, L]
+ *                 description: Preference for upper (U) or lower (L) floor
+ *               accept_fragmented:
+ *                 type: boolean
+ *                 description: Accept booking even if pods are fragmented across the cluster
+ *                 default: false
+ *               accept_mixed_floor:
+ *                 type: boolean
+ *                 description: Accept booking even if pods have to be allocated on different floors
+ *                 default: false
  *     responses:
  *       201:
  *         description: Booking order created successfully
@@ -58,7 +74,7 @@ const { protect } = require("../middlewares/authMiddleware");
  *       404:
  *         description: User or cluster not found
  *       409:
- *         description: Not enough available pods
+ *         description: Not enough available pods or confirmation required (CONFIRMATION_REQUIRED_MIXED_FLOOR, CONFIRMATION_REQUIRED_FRAGMENTED, OUT_OF_STOCK)
  *     security:
  *       - bearerAuth: []
  */
