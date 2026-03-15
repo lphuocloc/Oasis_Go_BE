@@ -14,13 +14,13 @@ exports.getDashboard = async (req, res) => {
     const rangeTo = to ? new Date(to) : endOfToday;
 
     // 1. Lấy dữ liệu thô
-    const [pods, bookings, incidents] = await Promise.all([
+    const [pods, bookingsResult, incidents] = await Promise.all([
       podService.getAllPods({}),                               // tất cả pod
-      bookingService.getBookings({ from: rangeFrom, to: rangeTo }), // booking trong khoảng thời gian
+      bookingService.getAllBookings({ start_date: rangeFrom, end_date: rangeTo }), // booking trong khoảng thời gian
       incidentService.getIncidents({ /* nếu muốn có from/to thì thêm filter trong service */ }),
     ]);
 
-    // 2. Hàm tiện ích nhỏ để đếm theo status
+    const bookings = bookingsResult.bookings;
     const countBy = (items, field, allKeys = []) => {
       const map = {};
       for (const key of allKeys) map[key] = 0; // đảm bảo luôn có đủ key
