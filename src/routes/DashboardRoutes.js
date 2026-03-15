@@ -47,7 +47,7 @@ const { protect } = require("../middlewares/authMiddleware");
  */
 router.get("/", 
     protect, 
-    authMiddleware.authorize("manager"), 
+    authMiddleware.authorize("admin", "manager"), 
     dashboardController.getDashboard 
 );
 
