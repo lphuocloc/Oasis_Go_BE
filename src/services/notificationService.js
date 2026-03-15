@@ -41,7 +41,6 @@ class NotificationService {
       if (!user || !user.fcmToken) {
         return { success: false, error: "User hoặc Token không tồn tại" };
       }
-
       // GỌI HÀM sendPush Ở TRÊN
       const result = await this.sendPush(user.fcmToken, title, body, data);
       return { success: true, result };

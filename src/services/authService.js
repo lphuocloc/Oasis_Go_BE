@@ -276,16 +276,11 @@ class AuthService {
     };
   }
 
-  /**
-   * Đăng nhập với Firebase (Google/Facebook)
-   */
   async loginWithFirebase({ idToken, authProvider, fcmToken }) {
     if (!idToken || !authProvider) {
       throw new Error("idToken and authProvider are required");
     }
-    if (fcmToken && result.user) {
-      await User.findByIdAndUpdate(result.user._id, { fcmToken: fcmToken });
-    }
+
     // Verify Firebase token
     const decodedToken = await verifyFirebaseToken(idToken);
 
@@ -301,41 +296,39 @@ class AuthService {
       throw new Error("Email not found in Firebase token");
     }
 
-    // Tìm hoặc tạo user
+    // Tìm user
     let user = await User.findOne({ email });
 
     if (user) {
-      // User đã tồn tại - kiểm tra auth provider
+      // Kiểm tra provider
       if (user.authProvider !== authProvider) {
         const error = new Error(
           `Email already registered with ${user.authProvider}. Please use that method to login.`,
         );
-        user.firebaseUid = uid;
-        if (picture) user.profilePicture = picture;
-        if (fcmToken) user.fcmToken = fcmToken; // Cập nhật token mới nhất
-        await user.save();
         error.statusCode = 409;
         throw error;
       }
 
-      // Cập nhật thông tin nếu cần
+      // Update user
       user.firebaseUid = uid;
       if (picture) user.profilePicture = picture;
+      if (fcmToken) user.fcmToken = fcmToken;
+
       await user.save();
     } else {
-      // Tạo user mới
+      // Create user
       user = await User.create({
         email,
         name: name || email.split("@")[0],
         authProvider,
         firebaseUid: uid,
         profilePicture: picture,
-        isVerified: true, // Firebase users đã verified
-        fcmToken: fcmToken, // Lưu token cho user mới
+        isVerified: true,
+        fcmToken,
       });
     }
 
-    // Tạo JWT token
+    // Generate JWT
     const token = this.generateToken(user._id);
 
     return {
@@ -350,7 +343,6 @@ class AuthService {
       },
     };
   }
-
   /**
    * Lấy thông tin user hiện tại
    */
