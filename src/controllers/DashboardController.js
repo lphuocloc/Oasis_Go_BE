@@ -88,14 +88,16 @@ exports.getDashboard = async (req, res) => {
     const incidentService = require("../services/incidentService");
 
     const podFilters = {};
-    const bookingFilters = { from: rangeFrom, to: rangeTo };
+    const bookingFilters = { start_date: rangeFrom, end_date: rangeTo };
     const incidentFilters = {};
 
-    const [pods, bookings, incidents] = await Promise.all([
+    const [pods, bookingsResult, incidents] = await Promise.all([
       podService.getAllPods(podFilters),
-      bookingService.getBookings(bookingFilters),
+      bookingService.getAllBookings(bookingFilters),
       incidentService.getIncidents(incidentFilters),
     ]);
+
+    const bookings = bookingsResult.bookings;
 
     const summary = {
       podsTotal: pods.length,
