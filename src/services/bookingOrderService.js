@@ -5,12 +5,14 @@ const Pod = require("../models/Pod");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
+const Location = require("../models/Location");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
 
 // Slot configuration
 const SLOT_DURATION_MINUTES = 30;
 const HOLD_EXPIRATION_MINUTES = 3;
+const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 
 
 class BookingOrderService {
@@ -55,6 +57,14 @@ class BookingOrderService {
                 const cluster = await PodCluster.findOne({ id: cluster_id });
                 if (!cluster) {
                     const error = new Error("Pod cluster not found");
+                    error.statusCode = 404;
+                    throw error;
+                }
+
+                // Get location details
+                const location = await Location.findOne({ id: cluster.location_id });
+                if (!location) {
+                    const error = new Error("Location not found for this cluster");
                     error.statusCode = 404;
                     throw error;
                 }
@@ -111,6 +121,13 @@ class BookingOrderService {
                 const durationMs = endDate - startDate;
                 const durationMinutes = Math.ceil(durationMs / (1000 * 60));
                 const durationHours = durationMinutes / 60;
+
+                // Validate minimum booking duration (1 hour)
+                if (durationMinutes < MINIMUM_DURATION_MINUTES) {
+                    const error = new Error(`Minimum booking duration is ${MINIMUM_DURATION_MINUTES} minutes (1 hour)`);
+                    error.statusCode = 400;
+                    throw error;
+                }
 
                 // Calculate pricing
                 // base_price_modifier is the price per 30-minute slot
@@ -207,6 +224,9 @@ class BookingOrderService {
                     })),
                     summary: {
                         cluster_id,
+                        cluster_name: cluster.name,
+                        location_id: location.id,
+                        location_name: location.name,
                         start_time: startDate,
                         end_time: endDate,
                         duration_minutes: durationMinutes,
@@ -376,13 +396,39 @@ class BookingOrderService {
             }
 
             // Get all bookings for this order
-            const bookings = await Booking.find({ order_id: orderId })
-                .populate('pod_id')
-                .lean();
+            const bookings = await Booking.find({ order_id: orderId }).lean();
+
+            // Manually fetch pod details for each booking (since pod uses custom 'id' field)
+            const podIds = [...new Set(bookings.map(b => b.pod_id))];
+            const pods = await Pod.find({ id: { $in: podIds } }).lean();
+            const podMap = pods.reduce((map, pod) => {
+                map[pod.id] = pod;
+                return map;
+            }, {});
+
+            // Attach pod details to bookings
+            const bookingsWithPods = bookings.map(booking => ({
+                ...booking,
+                pod: podMap[booking.pod_id] || null
+            }));
+
+            // Get pod cluster info from booked pods (all pods should belong to the same cluster)
+            const clusterIds = [
+                ...new Set(
+                    pods
+                        .map(pod => pod.cluster_id)
+                        .filter(Boolean)
+                )
+            ];
+
+            const podcluster = clusterIds.length > 0
+                ? await PodCluster.findOne({ id: clusterIds[0] }).lean()
+                : null;
 
             return {
                 order,
-                bookings
+                bookings: bookingsWithPods,
+                podcluster
             };
         } catch (error) {
             throw error;
@@ -557,6 +603,96 @@ class BookingOrderService {
         } catch (error) {
             throw error;
         }
+    }
+
+    /**
+     * Cleanup expired PENDING orders
+     * Orders that have been PENDING for more than HOLD_EXPIRATION_MINUTES are cancelled
+     * @returns {Promise<Object>} Cleanup result
+     */
+    async cleanupExpiredOrders() {
+        try {
+            const expirationTime = new Date();
+            expirationTime.setMinutes(expirationTime.getMinutes() - HOLD_EXPIRATION_MINUTES);
+
+            // Find all expired PENDING orders
+            const expiredOrders = await BookingOrder.find({
+                status: 'PENDING',
+                createdAt: { $lt: expirationTime }
+            });
+
+            console.log(`Found ${expiredOrders.length} expired order(s) to cleanup`);
+
+            let cancelledCount = 0;
+            for (const order of expiredOrders) {
+                try {
+                    console.log(`Cleaning up expired order ${order.id}...`);
+
+                    // Get all bookings for this order
+                    const bookings = await Booking.find({ order_id: order.id });
+
+                    for (const booking of bookings) {
+                        // Get all booking slots
+                        const bookingSlots = await BookingSlot.find({ booking_id: booking.id });
+                        const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+                        // Delete time slots (release them)
+                        if (timeSlotIds.length > 0) {
+                            await TimeSlot.deleteMany({ id: { $in: timeSlotIds } });
+                        }
+
+                        // Delete booking slots
+                        await BookingSlot.deleteMany({ booking_id: booking.id });
+                    }
+
+                    // Update booking statuses to CANCELLED
+                    await Booking.updateMany(
+                        { order_id: order.id },
+                        { $set: { status: 'CANCELLED' } }
+                    );
+
+                    // Update order status to CANCELLED
+                    order.status = 'CANCELLED';
+                    await order.save();
+
+                    cancelledCount++;
+                    console.log(`Order ${order.id} cancelled and slots released.`);
+                } catch (err) {
+                    console.error(`Error cleaning up order ${order.id}:`, err);
+                }
+            }
+
+            return {
+                found: expiredOrders.length,
+                cancelled: cancelledCount
+            };
+        } catch (error) {
+            console.error('Error in cleanupExpiredOrders:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Start periodic cleanup job
+     * Runs every minute to clean up expired PENDING orders
+     * @param {Number} intervalMinutes - Interval in minutes (default: 1)
+     */
+    startCleanupJob(intervalMinutes = 1) {
+        console.log(`Starting order cleanup job (interval: ${intervalMinutes} minute(s))`);
+
+        // Run immediately on startup
+        this.cleanupExpiredOrders().catch(err =>
+            console.error('Initial cleanup failed:', err)
+        );
+
+        // Then run periodically
+        setInterval(async () => {
+            try {
+                await this.cleanupExpiredOrders();
+            } catch (error) {
+                console.error('Cleanup job error:', error);
+            }
+        }, intervalMinutes * 60 * 1000);
     }
 }
 
