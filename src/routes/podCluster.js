@@ -42,6 +42,11 @@ const { uploadPodClusterImage } = require("../config/cloudinary");
  *           format: float
  *           description: Base price modifier/multiplier
  *           example: 1.5
+ *         slot_duration_minutes:
+ *           type: number
+ *           description: Slot duration in minutes for this cluster (30, 60, 90, 120)
+ *           enum: [30, 60, 90, 120]
+ *           example: 60
  *         createdAt:
  *           type: string
  *           format: date-time
@@ -257,6 +262,10 @@ router.delete("/:id/images/:imageId", protect, authorize("admin", "manager"), po
  *               base_price_modifier:
  *                 type: number
  *                 example: 1.5
+ *               slot_duration_minutes:
+ *                 type: number
+ *                 enum: [30, 60, 90, 120]
+ *                 example: 60
  *               images:
  *                 type: array
  *                 items:
@@ -318,6 +327,9 @@ router.post("/", protect, authorize("admin", "manager"), uploadPodClusterImage.a
  *                 type: string
  *               base_price_modifier:
  *                 type: number
+ *               slot_duration_minutes:
+ *                 type: number
+ *                 enum: [30, 60, 90, 120]
  *               images:
  *                 type: array
  *                 items:

@@ -11,7 +11,7 @@ const FULL_TIME_HOURS = {
     end: 24    // 24/7 - full day
 };
 
-const SLOT_DURATION_MINUTES = 30;
+const DEFAULT_SLOT_DURATION_MINUTES = 30;
 const BUFFER_MINUTES = 30; // Buffer time for cleaning between bookings
 
 class TimeSlotService {
@@ -49,80 +49,7 @@ class TimeSlotService {
      * @param {Number} days - Number of days to generate (default: 7)
      * @returns {Array} Array of created time slots
      */
-    // async generateTimeSlotsForPod(podId, days = 7) {
-    //     try {
-    //         // Get pod and populate cluster and location
-    //         const pod = await Pod.findOne({ id: podId });
-    //         if (!pod) {
-    //             throw new Error("Pod not found");
-    //         }
 
-    //         const cluster = await PodCluster.findOne({ id: pod.cluster_id });
-    //         if (!cluster) {
-    //             throw new Error("Pod cluster not found");
-    //         }
-
-    //         const location = await Location.findOne({ id: cluster.location_id });
-    //         if (!location) {
-    //             throw new Error("Location not found");
-    //         }
-
-    //         const operatingHours = await this.getOperatingHours(location);
-    //         const slots = [];
-
-    //         // Start from tomorrow at 00:00:00
-    //         const startDate = new Date();
-    //         startDate.setDate(startDate.getDate() + 1);
-    //         startDate.setHours(0, 0, 0, 0);
-
-    //         for (let day = 0; day < days; day++) {
-    //             const currentDate = new Date(startDate);
-    //             currentDate.setDate(currentDate.getDate() + day);
-
-    //             // Set to start of operating hours
-    //             currentDate.setHours(operatingHours.start, 0, 0, 0);
-
-    //             // Generate slots for the day
-    //             while (currentDate.getHours() < operatingHours.end) {
-    //                 const startTime = new Date(currentDate);
-    //                 const endTime = new Date(currentDate);
-    //                 endTime.setMinutes(endTime.getMinutes() + SLOT_DURATION_MINUTES);
-
-    //                 // Only create slot if it's within operating hours
-    //                 if (endTime.getHours() <= operatingHours.end || operatingHours.end === 24) {
-    //                     slots.push({
-    //                         pod_id: pod.id,
-    //                         start_time: startTime,
-    //                         end_time: endTime,
-    //                         status: 'AVAILABLE'
-    //                     });
-    //                 }
-
-    //                 // Move to next slot
-    //                 currentDate.setMinutes(currentDate.getMinutes() + SLOT_DURATION_MINUTES);
-    //             }
-    //         }
-
-    //         // Insert slots in batches
-    //         if (slots.length > 0) {
-    //             const batchSize = 100;
-    //             const createdSlots = [];
-
-    //             for (let i = 0; i < slots.length; i += batchSize) {
-    //                 const batch = slots.slice(i, i + batchSize);
-    //                 const inserted = await TimeSlot.insertMany(batch);
-    //                 createdSlots.push(...inserted);
-    //             }
-
-    //             return createdSlots;
-    //         }
-
-    //         return [];
-    //     } catch (error) {
-    //         console.error("Error generating time slots:", error);
-    //         throw error;
-    //     }
-    // }
 
     /**
      * Create a new time slot
@@ -415,8 +342,22 @@ class TimeSlotService {
                 status: { $nin: ['MAINTENANCE'] } // Exclude pods under maintenance
             }).lean();
 
-            // Parse the date and set boundaries for the day
+            const now = new Date();
             const targetDate = new Date(date);
+
+            // Check if requested date is strictly in the past (before today)
+            const today = new Date(now);
+            today.setHours(0, 0, 0, 0);
+
+            const targetDateMidnight = new Date(targetDate);
+            targetDateMidnight.setHours(0, 0, 0, 0);
+
+            if (targetDateMidnight < today) {
+                const error = new Error("Cannot view slots for past dates");
+                error.statusCode = 400;
+                throw error;
+            }
+
             targetDate.setHours(0, 0, 0, 0);
 
             const startOfDay = new Date(targetDate);
@@ -429,8 +370,9 @@ class TimeSlotService {
                 endOfDay.setHours(operatingHours.end, 0, 0, 0);
             }
 
-            // Generate all possible 30-minute slots for the day
-            const allSlots = this._generateAllSlots(startOfDay, endOfDay);
+            // Generate all possible slots based on cluster slot duration
+            const slotDurationMinutes = cluster.slot_duration_minutes || DEFAULT_SLOT_DURATION_MINUTES;
+            const allSlots = this._generateAllSlots(startOfDay, endOfDay, slotDurationMinutes);
 
             // If no pods, return all slots as unavailable
             if (pods.length === 0) {
@@ -490,11 +432,16 @@ class TimeSlotService {
             });
 
             // Build final result with all slots
+            const isToday = targetDateMidnight.getTime() === today.getTime();
+
             const resultSlots = allSlots.map(slot => {
                 const slotKey = `${slot.start_time.getTime()}-${slot.end_time.getTime()}`;
                 const availability = podAvailabilityMap.get(slotKey);
 
-                if (availability && availability.available_pods.length > 0) {
+                // If the slot is in the past compared to current time, mark it unavailable
+                const isPastSlot = isToday && slot.start_time <= now;
+
+                if (!isPastSlot && availability && availability.available_pods.length > 0) {
                     return {
                         start_time: slot.start_time,
                         end_time: slot.end_time,
@@ -521,6 +468,7 @@ class TimeSlotService {
                 date: date,
                 cluster_id: clusterId,
                 base_price_modifier: cluster.base_price_modifier || 0,
+                slot_duration_minutes: slotDurationMinutes,
                 total_pods: pods.length,
                 total_slots: allSlots.length,
                 available_slots_count: availableCount,
@@ -537,16 +485,17 @@ class TimeSlotService {
      * @private
      * @param {Date} startTime - Start time
      * @param {Date} endTime - End time
+     * @param {Number} slotDurationMinutes - Slot duration in minutes
      * @returns {Array} Array of slot objects {start_time, end_time}
      */
-    _generateAllSlots(startTime, endTime) {
+    _generateAllSlots(startTime, endTime, slotDurationMinutes = DEFAULT_SLOT_DURATION_MINUTES) {
         const slots = [];
         const current = new Date(startTime);
 
         while (current < endTime) {
             const slotStart = new Date(current);
             const slotEnd = new Date(current);
-            slotEnd.setMinutes(slotEnd.getMinutes() + SLOT_DURATION_MINUTES);
+            slotEnd.setMinutes(slotEnd.getMinutes() + slotDurationMinutes);
 
             // Only add slot if it ends within operating hours
             if (slotEnd <= endTime) {
@@ -556,7 +505,7 @@ class TimeSlotService {
                 });
             }
 
-            current.setMinutes(current.getMinutes() + SLOT_DURATION_MINUTES);
+            current.setMinutes(current.getMinutes() + slotDurationMinutes);
         }
 
         return slots;

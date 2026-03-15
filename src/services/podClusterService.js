@@ -3,6 +3,8 @@ const PodClusterImage = require("../models/PodClusterImage");
 const Location = require("../models/Location");
 const { LEAF_TYPES } = require("./locationService");
 
+const ALLOWED_SLOT_DURATIONS = [30, 60, 90, 120];
+
 class PodClusterService {
     /**
      * Lấy tất cả pod clusters với filters
@@ -80,7 +82,7 @@ class PodClusterService {
     /**
      * Tạo pod cluster mới
      */
-    async createPodCluster({ location_id, name, description, base_price_modifier, image_urls }) {
+    async createPodCluster({ location_id, name, description, base_price_modifier, slot_duration_minutes, image_urls }) {
         // Validate required fields
         if (!location_id || !name) {
             throw new Error("Location ID and name are required");
@@ -99,12 +101,23 @@ class PodClusterService {
             throw new Error(`Pod clusters can only be created in ${LEAF_TYPES.join(", ")} type locations`);
         }
 
+        const parsedSlotDuration = slot_duration_minutes !== undefined
+            ? Number(slot_duration_minutes)
+            : 30;
+
+        if (!ALLOWED_SLOT_DURATIONS.includes(parsedSlotDuration)) {
+            const error = new Error(`slot_duration_minutes must be one of: ${ALLOWED_SLOT_DURATIONS.join(", ")}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
         // Create pod cluster
         const podCluster = await PodCluster.create({
             location_id,
             name,
             description,
             base_price_modifier: base_price_modifier || 1.0,
+            slot_duration_minutes: parsedSlotDuration,
         });
 
         // Lưu images nếu có
@@ -131,7 +144,7 @@ class PodClusterService {
      * Cập nhật pod cluster
      */
     async updatePodCluster(clusterId, updates) {
-        const { location_id, name, description, base_price_modifier, image_urls } = updates;
+        const { location_id, name, description, base_price_modifier, slot_duration_minutes, image_urls } = updates;
 
         const podCluster = await PodCluster.findOne({ id: clusterId });
         if (!podCluster) {
@@ -161,6 +174,18 @@ class PodClusterService {
         if (description !== undefined) podCluster.description = description;
         if (base_price_modifier !== undefined) {
             podCluster.base_price_modifier = base_price_modifier;
+        }
+
+        if (slot_duration_minutes !== undefined) {
+            const parsedSlotDuration = Number(slot_duration_minutes);
+
+            if (!ALLOWED_SLOT_DURATIONS.includes(parsedSlotDuration)) {
+                const error = new Error(`slot_duration_minutes must be one of: ${ALLOWED_SLOT_DURATIONS.join(", ")}`);
+                error.statusCode = 400;
+                throw error;
+            }
+
+            podCluster.slot_duration_minutes = parsedSlotDuration;
         }
 
         await podCluster.save();
