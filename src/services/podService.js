@@ -1,5 +1,11 @@
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
+const Booking = require("../models/Bookings");
+const TimeSlot = require("../models/TimeSlot");
+const BookingAccessSession = require("../models/BookingAccessSession");
+const OnlineKey = require("../models/OnlineKey");
+const Door = require("../models/Door");
+const Incident = require("../models/Incidents");
 
 /**
  * Helper function to generate row letter from index
@@ -211,7 +217,7 @@ class PodService {
      * Lấy pods available theo cluster
      */
     async getAvailablePodsByCluster(clusterId) {
-        const pods = await Pod.getAvailableByCluster(clusterId);
+        const pods = await Pod.getAvailable(clusterId || null);
         return pods;
     }
 
@@ -299,12 +305,12 @@ class PodService {
     /**
      * Cập nhật trạng thái pod
      */
-    async updatePodStatus(podId, { status }) {
+    async updatePodStatus(podId, { status, maintenance_status }) {
         if (!status) {
             throw new Error("Status is required");
         }
 
-        const validStatuses = ["AVAILABLE", "OCCUPIED", "MAINTENANCE", "OUT_OF_SERVICE"];
+        const validStatuses = ["AVAILABLE", "OCCUPIED", "NEEDS_CLEANING", "CLEANING", "MAINTENANCE"];
         if (!validStatuses.includes(status)) {
             throw new Error(`Invalid status. Must be one of: ${validStatuses.join(", ")}`);
         }
@@ -317,6 +323,9 @@ class PodService {
         }
 
         pod.status = status;
+        if (status === "MAINTENANCE") {
+            pod.maintenance_status = maintenance_status || pod.maintenance_status;
+        }
         await pod.save();
         await pod.populate("cluster");
 
@@ -340,6 +349,51 @@ class PodService {
             error.statusCode = 400;
             throw error;
         }
+
+        // Chặn xóa nếu đã có booking gắn với pod để tránh mồ côi dữ liệu lịch sử
+        const bookingCount = await Booking.countDocuments({ pod_id: podId });
+        if (bookingCount > 0) {
+            const error = new Error("Cannot delete pod because bookings already exist for this pod");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Chặn xóa nếu có phiên truy cập hoặc online key còn hiệu lực
+        const [accessSessionCount, activeKeyCount] = await Promise.all([
+            BookingAccessSession.countDocuments({ pod_id: podId }),
+            OnlineKey.countDocuments({ pod_id: podId, is_revoked: false }),
+        ]);
+
+        if (accessSessionCount > 0) {
+            const error = new Error("Cannot delete pod because access sessions exist for this pod");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (activeKeyCount > 0) {
+            const error = new Error("Cannot delete pod because active online keys exist for this pod");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Chặn xóa khi còn incident chưa đóng
+        const openIncidentCount = await Incident.countDocuments({
+            podId: pod._id,
+            status: { $in: ["PENDING", "INVESTIGATING"] },
+        });
+        if (openIncidentCount > 0) {
+            const error = new Error("Cannot delete pod because unresolved incidents exist for this pod");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Dọn dữ liệu phụ trợ an toàn trước khi xóa pod
+        await Promise.all([
+            TimeSlot.deleteMany({ pod_id: podId }),
+            Door.deleteMany({ pod_id: podId }),
+            OnlineKey.deleteMany({ pod_id: podId }),
+            Incident.deleteMany({ podId: pod._id }),
+        ]);
 
         await Pod.deleteOne({ id: podId });
 

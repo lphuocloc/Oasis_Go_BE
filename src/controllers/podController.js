@@ -92,7 +92,8 @@ exports.getPodsByCluster = async (req, res) => {
 // @access  Public
 exports.getAvailablePods = async (req, res) => {
   try {
-    const pods = await podService.getAvailablePodsByCluster(req.params.clusterId);
+    const { cluster_id } = req.query;
+    const pods = await podService.getAvailablePodsByCluster(cluster_id);
     
     res.status(200).json({
       success: true,
@@ -155,8 +156,9 @@ exports.deletePod = async (req, res) => {
 exports.updatePodStatus = async (req, res) => {
   try {
     const { status } = req.body;
+    const { maintenance_status } = req.body;
     
-    const pod = await podService.updatePodStatus(req.params.id, { status });
+    const pod = await podService.updatePodStatus(req.params.id, { status, maintenance_status });
     
     res.status(200).json({
       success: true,
