@@ -378,7 +378,7 @@ class PodService {
 
         // Chặn xóa khi còn incident chưa đóng
         const openIncidentCount = await Incident.countDocuments({
-            podId: pod._id,
+            $or: [{ pod_id: podId }, { podId: podId }],
             status: { $in: ["PENDING", "INVESTIGATING"] },
         });
         if (openIncidentCount > 0) {
@@ -392,7 +392,7 @@ class PodService {
             TimeSlot.deleteMany({ pod_id: podId }),
             Door.deleteMany({ pod_id: podId }),
             OnlineKey.deleteMany({ pod_id: podId }),
-            Incident.deleteMany({ podId: pod._id }),
+            Incident.deleteMany({ $or: [{ pod_id: podId }, { podId: podId }] }),
         ]);
 
         await Pod.deleteOne({ id: podId });

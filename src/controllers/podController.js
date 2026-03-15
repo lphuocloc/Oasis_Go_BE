@@ -88,12 +88,13 @@ exports.getPodsByCluster = async (req, res) => {
 };
 
 // @desc    Get available pods
-// @route   GET /api/pods/cluster/:clusterId/available
+// @route   GET /api/pods/available?clusterId=...
 // @access  Public
 exports.getAvailablePods = async (req, res) => {
   try {
-    const { cluster_id } = req.query;
-    const pods = await podService.getAvailablePodsByCluster(cluster_id);
+    // Accept camelCase query param and keep backward compatibility.
+    const clusterId = req.query.clusterId || req.query.cluster_id || req.params.clusterId;
+    const pods = await podService.getAvailablePodsByCluster(clusterId);
     
     res.status(200).json({
       success: true,
