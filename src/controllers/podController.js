@@ -88,11 +88,13 @@ exports.getPodsByCluster = async (req, res) => {
 };
 
 // @desc    Get available pods
-// @route   GET /api/pods/cluster/:clusterId/available
+// @route   GET /api/pods/available?clusterId=...
 // @access  Public
 exports.getAvailablePods = async (req, res) => {
   try {
-    const pods = await podService.getAvailablePodsByCluster(req.params.clusterId);
+    // Accept camelCase query param and keep backward compatibility.
+    const clusterId = req.query.clusterId || req.query.cluster_id || req.params.clusterId;
+    const pods = await podService.getAvailablePodsByCluster(clusterId);
     
     res.status(200).json({
       success: true,
@@ -155,8 +157,9 @@ exports.deletePod = async (req, res) => {
 exports.updatePodStatus = async (req, res) => {
   try {
     const { status } = req.body;
+    const { maintenance_status } = req.body;
     
-    const pod = await podService.updatePodStatus(req.params.id, { status });
+    const pod = await podService.updatePodStatus(req.params.id, { status, maintenance_status });
     
     res.status(200).json({
       success: true,

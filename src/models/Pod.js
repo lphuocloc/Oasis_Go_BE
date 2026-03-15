@@ -115,8 +115,9 @@ podSchema.pre("save", async function () {
 
 // Middleware to track previous status and if document is new
 podSchema.pre("save", async function () {
-    if (this.isModified("status")) {
-        this._previousStatus = this.status;
+    if (this.isModified("status") && !this.isNew) {
+        const previousDoc = await this.constructor.findOne({ id: this.id }).select("status").lean();
+        this._previousStatus = previousDoc ? previousDoc.status : null;
     }
     // Track if this is a new document
     this._wasNew = this.isNew;
