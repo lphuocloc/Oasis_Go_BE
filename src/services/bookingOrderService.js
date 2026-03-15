@@ -412,9 +412,23 @@ class BookingOrderService {
                 pod: podMap[booking.pod_id] || null
             }));
 
+            // Get pod cluster info from booked pods (all pods should belong to the same cluster)
+            const clusterIds = [
+                ...new Set(
+                    pods
+                        .map(pod => pod.cluster_id)
+                        .filter(Boolean)
+                )
+            ];
+
+            const podcluster = clusterIds.length > 0
+                ? await PodCluster.findOne({ id: clusterIds[0] }).lean()
+                : null;
+
             return {
                 order,
-                bookings: bookingsWithPods
+                bookings: bookingsWithPods,
+                podcluster
             };
         } catch (error) {
             throw error;
