@@ -194,4 +194,5 @@ router.delete("/reset-identity", protect, identityController.resetIdentity);
  *               $ref: '#/components/schemas/ErrorResponse'
  */
 router.get("/me", protect, identityController.getIdentity);
+
 module.exports = router;
