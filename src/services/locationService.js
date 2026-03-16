@@ -66,7 +66,15 @@ class LocationService {
      * Lấy location hierarchy path
      */
     async getLocationPath(locationId) {
-        const path = await Location.getPath(locationId);
+        const location = await Location.findOne({ id: locationId });
+
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const path = await location.getHierarchyPath();
 
         if (!path || path.length === 0) {
             const error = new Error("Location not found");
@@ -75,6 +83,21 @@ class LocationService {
         }
 
         return path;
+    }
+
+    /**
+     * Lấy tất cả location con (descendants)
+     */
+    async getLocationDescendants(locationId) {
+        const location = await Location.findOne({ id: locationId });
+
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        return Location.getDescendants(locationId);
     }
 
     /**
