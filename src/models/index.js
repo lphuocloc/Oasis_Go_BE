@@ -17,4 +17,8 @@ module.exports = {
   TimeSlot: require("./TimeSlot"),
   Item: require("./Item"),
   PodItem: require("./PodItem"),
+  StaffShift: require("./StaffShift"),
+  LocationShift: require("./LocationShift"),
+  StaffShiftAssignment: require("./StaffShiftAssignment"),
+  StaffAttendanceLog: require("./StaffAttendanceLog"),
 };

@@ -34,6 +34,9 @@ const doorRouter = require("./routes/door");
 const podDeviceRouter = require("./routes/podDevice");
 const podQrCodeRouter = require("./routes/podQrCode");
 const podItemRouter = require("./routes/podItem");
+const staffShiftRouter = require("./routes/staffShift");
+const locationShiftRouter = require("./routes/locationShift");
+const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const app = express();
 
 // Middlewares
@@ -60,6 +63,9 @@ app.use("/api/doors", doorRouter);
 app.use("/api/pod-devices", podDeviceRouter);
 app.use("/api/pod-qr-codes", podQrCodeRouter);
 app.use("/api/pod-items", podItemRouter);
+app.use("/api/staff-shifts", staffShiftRouter);
+app.use("/api/location-shifts", locationShiftRouter);
+app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);
