@@ -3,7 +3,10 @@ module.exports = {
   Location: require("./Location"),
   PodCluster: require("./PodCluster"),
   Pod: require("./Pod"),
+  PodAmenity: require("./PodAmenity"),
   Door: require("./Door"),
+  PodDevice: require("./PodDevice"),
+  PodQrCode: require("./PodQrCode"),
   Booking: require("./Bookings"),
   BookingOrder: require("./BookingOrder"),
   BookingSlot: require("./BookingSlot"),
@@ -11,5 +14,7 @@ module.exports = {
   OnlineKey: require("./OnlineKey"),
   Incident: require("./Incidents"),
   Payment: require("./Payment"),
-  TimeSlot: require("./TimeSlot")
+  TimeSlot: require("./TimeSlot"),
+  Item: require("./Item"),
+  PodItem: require("./PodItem"),
 };
