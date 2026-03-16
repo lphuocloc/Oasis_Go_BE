@@ -170,6 +170,22 @@ class PodService {
         // Bulk insert
         const createdPods = await Pod.insertMany(podsToCreate);
 
+        // Provision 1-1 door records for newly created pods
+        const createdPodIds = createdPods.map((p) => p.id);
+        const existingDoors = await Door.find({ pod_id: { $in: createdPodIds } }).select("pod_id").lean();
+        const existingDoorPodIds = new Set(existingDoors.map((d) => d.pod_id));
+        const doorsToCreate = createdPodIds
+            .filter((podId) => !existingDoorPodIds.has(podId))
+            .map((podId) => ({
+                pod_id: podId,
+                lock_status: "LOCKED",
+                door_sensor: "CLOSED",
+            }));
+
+        if (doorsToCreate.length > 0) {
+            await Door.insertMany(doorsToCreate);
+        }
+
         return createdPods;
     }
 
