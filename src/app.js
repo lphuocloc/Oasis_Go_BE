@@ -14,7 +14,7 @@ connectDB();
 
 // Start booking order cleanup job
 const bookingOrderService = require("./services/bookingOrderService");
-bookingOrderService.startCleanupJob(1); // Run every 1 minute
+bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");

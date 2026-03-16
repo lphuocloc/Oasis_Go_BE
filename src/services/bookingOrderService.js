@@ -13,6 +13,7 @@ const timeSlotService = require("./timeSlotService");
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
 const HOLD_EXPIRATION_MINUTES = 3;
 const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
+const PRICE_UNIT_MULTIPLIER = 10000;
 
 
 class BookingOrderService {
@@ -143,8 +144,10 @@ class BookingOrderService {
                 }
 
                 // Calculate pricing
-                // base_price_modifier is the price per configured slot of this pod cluster
-                const pricePerSlot = cluster.base_price_modifier || 0;
+                // Formula:
+                // total = (base_price_modifier * 10000) * number_of_slots * pod_count
+                const basePriceModifier = cluster.base_price_modifier || 0;
+                const pricePerSlot = basePriceModifier * PRICE_UNIT_MULTIPLIER;
                 const numberOfSlots = durationMinutes / slotDurationMinutes;
 
                 const pricePerPod = pricePerSlot * numberOfSlots;
@@ -247,6 +250,8 @@ class BookingOrderService {
                         slot_duration_minutes: slotDurationMinutes,
                         number_of_slots: numberOfSlots,
                         pods_booked: pod_count,
+                        base_price_modifier: basePriceModifier,
+                        price_unit_multiplier: PRICE_UNIT_MULTIPLIER,
                         price_per_slot: pricePerSlot,
                         price_per_pod: pricePerPod,
                         total_base_price: totalBasePrice,
@@ -729,36 +734,6 @@ class BookingOrderService {
     }
 
     /**
-     * Mark order as paid
-     * @param {String} orderId - Order ID
-     * @returns {Promise<Object>} Updated order
-     */
-    async markOrderAsPaid(orderId) {
-        try {
-            const order = await BookingOrder.findOne({ id: orderId });
-
-            if (!order) {
-                const error = new Error("Booking order not found");
-                error.statusCode = 404;
-                throw error;
-            }
-
-            if (order.status !== 'PENDING') {
-                const error = new Error(`Cannot mark order as paid from ${order.status} status`);
-                error.statusCode = 400;
-                throw error;
-            }
-
-            order.status = 'PAID';
-            await order.save();
-
-            return order;
-        } catch (error) {
-            throw error;
-        }
-    }
-
-    /**
      * Cleanup expired PENDING orders
      * Orders that have been PENDING for more than HOLD_EXPIRATION_MINUTES are cancelled
      * @returns {Promise<Object>} Cleanup result
@@ -827,10 +802,10 @@ class BookingOrderService {
 
     /**
      * Start periodic cleanup job
-     * Runs every minute to clean up expired PENDING orders
-     * @param {Number} intervalMinutes - Interval in minutes (default: 1)
+     * Runs every 5 minutes to clean up expired PENDING orders
+     * @param {Number} intervalMinutes - Interval in minutes (default: 5)
      */
-    startCleanupJob(intervalMinutes = 1) {
+    startCleanupJob(intervalMinutes = 5) {
         console.log(`Starting order cleanup job (interval: ${intervalMinutes} minute(s))`);
 
         // Run immediately on startup

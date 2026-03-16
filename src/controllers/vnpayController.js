@@ -5,7 +5,7 @@ const paymentService = require("../services/paymentService");
 // @access  Public
 exports.createPayment = async (req, res) => {
   try {
-    const { bookingId, amount, orderInfo } = req.body;
+    const { bookingOrderId, amount, orderInfo } = req.body;
     
     // Lấy IP của client
     const ipAddr = req.headers["x-forwarded-for"] ||
@@ -15,7 +15,7 @@ exports.createPayment = async (req, res) => {
       "127.0.0.1";
     
     const result = await paymentService.createPayment({
-      bookingId,
+      bookingOrderId,
       amount,
       orderInfo,
       ipAddr,
@@ -173,6 +173,64 @@ exports.getPaymentsByBookingId = async (req, res) => {
       success: false,
       message: "Error fetching payments",
       error: error.message,
+    });
+  }
+};
+
+// @desc    Get current user's transactions
+// @route   GET /api/vnpay/my-transactions
+// @access  Private
+exports.getMyTransactions = async (req, res) => {
+  try {
+    const userId = req.user && (req.user._id || req.user.id);
+    const { page, limit } = req.query;
+
+    const result = await paymentService.getMyTransactions(userId, { page, limit });
+
+    res.status(200).json({
+      success: true,
+      count: result.transactions.length,
+      pagination: result.pagination,
+      data: result.transactions,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching current user transactions",
+    });
+  }
+};
+
+// @desc    Get all transactions
+// @route   GET /api/vnpay/transactions
+// @access  Private
+exports.getAllTransactions = async (req, res) => {
+  try {
+    const { status, method, type, orderId, startDate, endDate, page, limit } = req.query;
+
+    const result = await paymentService.getAllTransactions({
+      status,
+      method,
+      type,
+      orderId,
+      startDate,
+      endDate,
+      page,
+      limit,
+    });
+
+    res.status(200).json({
+      success: true,
+      count: result.transactions.length,
+      pagination: result.pagination,
+      data: result.transactions,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching transactions",
     });
   }
 };

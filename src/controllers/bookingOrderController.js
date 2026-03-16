@@ -136,30 +136,6 @@ class BookingOrderController {
             });
         }
     }
-
-    /**
-     * Mark order as paid
-     * @route PUT /api/booking-orders/:id/mark-paid
-     */
-    async markOrderAsPaid(req, res) {
-        try {
-            const { id } = req.params;
-
-            const order = await bookingOrderService.markOrderAsPaid(id);
-
-            return res.status(200).json({
-                success: true,
-                message: "Order marked as paid successfully",
-                data: order
-            });
-        } catch (error) {
-            console.error("Error marking order as paid:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to mark order as paid"
-            });
-        }
-    }
 }
 
 module.exports = new BookingOrderController();
