@@ -12,6 +12,10 @@ const connectDB = require("./config/db");
 // Connect to MongoDB
 connectDB();
 
+// Start booking order cleanup job
+const bookingOrderService = require("./services/bookingOrderService");
+bookingOrderService.startCleanupJob(1); // Run every 1 minute
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");
@@ -25,6 +29,11 @@ const bookingRouter = require("./routes/booking");
 const bookingSlotRouter = require("./routes/bookingSlot");
 const bookingOrderRouter = require("./routes/bookingOrder");
 const adminRouter = require("./routes/admin");
+const podAmenityRouter = require("./routes/podAmenity");
+const doorRouter = require("./routes/door");
+const podDeviceRouter = require("./routes/podDevice");
+const podQrCodeRouter = require("./routes/podQrCode");
+const podItemRouter = require("./routes/podItem");
 const app = express();
 
 // Middlewares
@@ -46,6 +55,11 @@ app.use("/api/bookings", bookingRouter);
 app.use("/api/booking-slots", bookingSlotRouter);
 app.use("/api/booking-orders", bookingOrderRouter);
 app.use("/api/admin", adminRouter);
+app.use("/api/pod-amenities", podAmenityRouter);
+app.use("/api/doors", doorRouter);
+app.use("/api/pod-devices", podDeviceRouter);
+app.use("/api/pod-qr-codes", podQrCodeRouter);
+app.use("/api/pod-items", podItemRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

@@ -5,12 +5,14 @@ const Pod = require("../models/Pod");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
+const Location = require("../models/Location");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
 
 // Slot configuration
-const SLOT_DURATION_MINUTES = 30;
+const DEFAULT_SLOT_DURATION_MINUTES = 30;
 const HOLD_EXPIRATION_MINUTES = 3;
+const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 
 
 class BookingOrderService {
@@ -28,6 +30,10 @@ class BookingOrderService {
             end_time,
             total_discount = 0,
             pod_count = 1,
+            require_adjacent = false,
+            floor_preference = null,
+            accept_fragmented = false,
+            accept_mixed_floor = false
         } = orderData;
 
         // Start a session for transaction
@@ -55,6 +61,14 @@ class BookingOrderService {
                 const cluster = await PodCluster.findOne({ id: cluster_id });
                 if (!cluster) {
                     const error = new Error("Pod cluster not found");
+                    error.statusCode = 404;
+                    throw error;
+                }
+
+                // Get location details
+                const location = await Location.findOne({ id: cluster.location_id });
+                if (!location) {
+                    const error = new Error("Location not found for this cluster");
                     error.statusCode = 404;
                     throw error;
                 }
@@ -96,27 +110,42 @@ class BookingOrderService {
                     endDate
                 );
 
-                if (availablePods.length < pod_count) {
-                    const error = new Error(
-                        `Only ${availablePods.length} pod(s) available. You requested ${pod_count} pod(s)`
-                    );
-                    error.statusCode = 409;
-                    throw error;
-                }
-
-                // Select pods to book
-                const podsToBook = availablePods.slice(0, pod_count);
+                // Select pods to book based on preferences
+                const podsToBook = this._selectPodsForBooking(
+                    availablePods,
+                    pod_count,
+                    require_adjacent,
+                    floor_preference,
+                    accept_fragmented,
+                    accept_mixed_floor
+                );
 
                 // Calculate duration in minutes
                 const durationMs = endDate - startDate;
                 const durationMinutes = Math.ceil(durationMs / (1000 * 60));
                 const durationHours = durationMinutes / 60;
+                const slotDurationMinutes = cluster.slot_duration_minutes || DEFAULT_SLOT_DURATION_MINUTES;
+
+                // Validate minimum booking duration (1 hour)
+                if (durationMinutes < MINIMUM_DURATION_MINUTES) {
+                    const error = new Error(`Minimum booking duration is ${MINIMUM_DURATION_MINUTES} minutes (1 hour)`);
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                // Enforce booking duration to align with configured slot size of this cluster
+                if (durationMinutes % slotDurationMinutes !== 0) {
+                    const error = new Error(
+                        `Booking duration must be a multiple of ${slotDurationMinutes} minutes for this pod cluster`
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
 
                 // Calculate pricing
-                // base_price_modifier is the price per 30-minute slot
-                const SLOT_DURATION_MINUTES = 30;
+                // base_price_modifier is the price per configured slot of this pod cluster
                 const pricePerSlot = cluster.base_price_modifier || 0;
-                const numberOfSlots = Math.ceil(durationMinutes / SLOT_DURATION_MINUTES);
+                const numberOfSlots = durationMinutes / slotDurationMinutes;
 
                 const pricePerPod = pricePerSlot * numberOfSlots;
                 const totalBasePrice = pricePerPod * pod_count;
@@ -160,11 +189,12 @@ class BookingOrderService {
                 // Generate time slots and booking slots for each booking
                 const allTimeSlotIds = [];
                 for (const booking of createdBookings) {
-                    // Generate 30-minute time slots for this booking's time range
+                    // Generate slots based on cluster slot configuration
                     const timeSlotDocs = this._generateTimeSlots(
                         booking.pod_id,
                         new Date(booking.start_time),
-                        new Date(booking.end_time)
+                        new Date(booking.end_time),
+                        slotDurationMinutes
                     );
 
                     // Create time slots within transaction
@@ -207,10 +237,14 @@ class BookingOrderService {
                     })),
                     summary: {
                         cluster_id,
+                        cluster_name: cluster.name,
+                        location_id: location.id,
+                        location_name: location.name,
                         start_time: startDate,
                         end_time: endDate,
                         duration_minutes: durationMinutes,
                         duration_hours: durationHours,
+                        slot_duration_minutes: slotDurationMinutes,
                         number_of_slots: numberOfSlots,
                         pods_booked: pod_count,
                         price_per_slot: pricePerSlot,
@@ -278,20 +312,159 @@ class BookingOrderService {
     }
 
     /**
+     * Select pods based on adjacency requirements and floor preference
+     * @private
+     */
+    _selectPodsForBooking(availablePods, podCount, requireAdjacent, floorPreference, acceptFragmented, acceptMixedFloor) {
+        // Tổng kiểm tra (Total check)
+        if (availablePods.length < podCount) {
+            const error = new Error(`Chưa đủ ${podCount} pod trống trong khung giờ này.`);
+            error.statusCode = 409;
+            error.code = 'OUT_OF_STOCK';
+            throw error;
+        }
+
+        // Parse Codes
+        const podInfo = availablePods.map(pod => {
+            const code = pod.code || '';
+            const match = code.match(/^([a-zA-Z]*)(\d+)([a-zA-Z]*)$/);
+            return {
+                pod,
+                prefix: match ? match[1].toUpperCase() : 'UNKNOWN',
+                number: match ? parseInt(match[2], 10) : 0,
+                suffix: match ? match[3].toUpperCase() : 'UNKNOWN',
+                originalCode: code
+            };
+        });
+
+        let bestSelection = [];
+
+        // Bước 1: Lọc lầu (Floor Filter)
+        if (floorPreference && (floorPreference === 'U' || floorPreference === 'L')) {
+            const preferredPods = podInfo.filter(info => info.suffix === floorPreference);
+
+            if (preferredPods.length >= podCount) {
+                // Đủ số lượng trên lầu ưu tiên
+                bestSelection = preferredPods;
+            } else {
+                // Thiếu trên lầu ưu tiên, hỏi người dùng hoặc nếu đã acceptMixedFloor thì lấy trộn
+                if (!acceptMixedFloor) {
+                    const otherPods = podInfo.filter(info => info.suffix !== floorPreference);
+                    const msg = `Chỉ còn ${preferredPods.length} pod trống trên lầu ${floorPreference === 'U' ? 'trên' : 'dưới'} (cần ${podCount}). Hiện đang còn trống ở lầu khác, bạn có đồng ý trộn lầu hoặc đổi lầu không?`;
+                    const error = new Error(msg);
+                    error.statusCode = 409;
+                    error.code = 'CONFIRMATION_REQUIRED_MIXED_FLOOR';
+                    error.data = {
+                        preferred_floor_count: preferredPods.length,
+                        other_floor_count: otherPods.length,
+                        total_available: availablePods.length
+                    };
+                    throw error;
+                } else {
+                    bestSelection = podInfo;
+                }
+            }
+        } else {
+            bestSelection = podInfo;
+        }
+
+        // Bước 2 & Bước 3: Kiểm tra liền kề (Adjacency Check)
+        if (requireAdjacent && podCount > 1) {
+            const groups = {};
+            bestSelection.forEach(info => {
+                const key = `${info.prefix}_${info.suffix}`;
+                if (!groups[key]) groups[key] = [];
+                groups[key].push(info);
+            });
+
+            let allSegments = [];
+            for (const key in groups) {
+                const groupPods = groups[key].sort((a, b) => a.number - b.number);
+                if (groupPods.length === 0) continue;
+
+                let currentSegment = [groupPods[0]];
+                for (let i = 1; i < groupPods.length; i++) {
+                    if (groupPods[i].number === groupPods[i - 1].number + 1) {
+                        currentSegment.push(groupPods[i]);
+                    } else {
+                        allSegments.push({ key, pods: currentSegment, length: currentSegment.length });
+                        currentSegment = [groupPods[i]];
+                    }
+                }
+                allSegments.push({ key, pods: currentSegment, length: currentSegment.length });
+            }
+
+            // Xếp các đoạn (segments) giảm dần theo độ dài
+            allSegments.sort((a, b) => b.length - a.length);
+
+            // Cố tìm 1 cụm liên tục N
+            const perfectSegment = allSegments.find(seg => seg.length >= podCount);
+            if (perfectSegment) {
+                return perfectSegment.pods.slice(0, podCount).map(info => info.pod);
+            }
+
+            // Nếu phải chia thành nhiều cụm (Vơ cạn - Fragmented)
+            // Lấy các khối cần thiết ghép lại
+            let selectedPods = [];
+            let breakdownDescriptions = [];
+            let needed = podCount;
+
+            for (const seg of allSegments) {
+                const take = Math.min(seg.length, needed);
+                if (take > 0) {
+                    selectedPods = selectedPods.concat(seg.pods.slice(0, take));
+
+                    const codeDisplays = seg.pods.slice(0, take).map(p => p.originalCode).join(', ');
+                    breakdownDescriptions.push(`${take} pod khu ${seg.key} (${codeDisplays})`);
+
+                    needed -= take;
+                }
+                if (needed === 0) break;
+            }
+
+            if (!acceptFragmented) {
+                const msg = `Chúng tôi không tìm được dãy ${podCount} pod liền kề. Phương án tốt nhất hiện có là: ${breakdownDescriptions.join(' và ')}. Bạn có đồng ý không?`;
+                const error = new Error(msg);
+                error.statusCode = 409;
+                error.code = 'CONFIRMATION_REQUIRED_FRAGMENTED';
+                error.data = {
+                    breakdown: breakdownDescriptions,
+                    clusters: breakdownDescriptions.length
+                };
+                throw error;
+            }
+
+            // Nếu khách accept, chọn tổ hợp vừa tìm
+            return selectedPods.map(info => info.pod);
+        }
+
+        // Default behavior: ưu tiên pod có last_cleaned_at cũ nhất
+        // Nếu last_cleaned_at là null, đó là pod mới hoàn toàn -> ưu tiên đầu tiên (hoặc coi như rất cũ)
+        bestSelection.sort((a, b) => {
+            const timeA = a.pod.last_cleaned_at ? new Date(a.pod.last_cleaned_at).getTime() : 0;
+            const timeB = b.pod.last_cleaned_at ? new Date(b.pod.last_cleaned_at).getTime() : 0;
+            return timeA - timeB; // Sắp xếp tăng dần: thời gian cũ nhất sẽ lêm trước
+        });
+
+        return bestSelection.slice(0, podCount).map(info => info.pod);
+    }
+
+    /**
      * Generate time slot documents for a booking time range
      * @private
      * @param {String} podId - Pod ID
      * @param {Date} startTime - Start time
      * @param {Date} endTime - End time
+     * @param {Number} slotDurationMinutes - Slot duration in minutes
      * @returns {Array} Array of time slot documents
      */
-    _generateTimeSlots(podId, startTime, endTime) {
+    _generateTimeSlots(podId, startTime, endTime, slotDurationMinutes = DEFAULT_SLOT_DURATION_MINUTES) {
         const slots = [];
         let currentStart = new Date(startTime);
 
         while (currentStart < endTime) {
             const currentEnd = new Date(currentStart);
-            currentEnd.setMinutes(currentEnd.getMinutes() + SLOT_DURATION_MINUTES);
+            currentEnd.setMinutes(currentEnd.getMinutes() + slotDurationMinutes);
 
             // Don't exceed the booking end time
             const slotEnd = currentEnd > endTime ? endTime : currentEnd;
@@ -376,13 +549,39 @@ class BookingOrderService {
             }
 
             // Get all bookings for this order
-            const bookings = await Booking.find({ order_id: orderId })
-                .populate('pod_id')
-                .lean();
+            const bookings = await Booking.find({ order_id: orderId }).lean();
+
+            // Manually fetch pod details for each booking (since pod uses custom 'id' field)
+            const podIds = [...new Set(bookings.map(b => b.pod_id))];
+            const pods = await Pod.find({ id: { $in: podIds } }).lean();
+            const podMap = pods.reduce((map, pod) => {
+                map[pod.id] = pod;
+                return map;
+            }, {});
+
+            // Attach pod details to bookings
+            const bookingsWithPods = bookings.map(booking => ({
+                ...booking,
+                pod: podMap[booking.pod_id] || null
+            }));
+
+            // Get pod cluster info from booked pods (all pods should belong to the same cluster)
+            const clusterIds = [
+                ...new Set(
+                    pods
+                        .map(pod => pod.cluster_id)
+                        .filter(Boolean)
+                )
+            ];
+
+            const podcluster = clusterIds.length > 0
+                ? await PodCluster.findOne({ id: clusterIds[0] }).lean()
+                : null;
 
             return {
                 order,
-                bookings
+                bookings: bookingsWithPods,
+                podcluster
             };
         } catch (error) {
             throw error;
@@ -557,6 +756,96 @@ class BookingOrderService {
         } catch (error) {
             throw error;
         }
+    }
+
+    /**
+     * Cleanup expired PENDING orders
+     * Orders that have been PENDING for more than HOLD_EXPIRATION_MINUTES are cancelled
+     * @returns {Promise<Object>} Cleanup result
+     */
+    async cleanupExpiredOrders() {
+        try {
+            const expirationTime = new Date();
+            expirationTime.setMinutes(expirationTime.getMinutes() - HOLD_EXPIRATION_MINUTES);
+
+            // Find all expired PENDING orders
+            const expiredOrders = await BookingOrder.find({
+                status: 'PENDING',
+                createdAt: { $lt: expirationTime }
+            });
+
+            console.log(`Found ${expiredOrders.length} expired order(s) to cleanup`);
+
+            let cancelledCount = 0;
+            for (const order of expiredOrders) {
+                try {
+                    console.log(`Cleaning up expired order ${order.id}...`);
+
+                    // Get all bookings for this order
+                    const bookings = await Booking.find({ order_id: order.id });
+
+                    for (const booking of bookings) {
+                        // Get all booking slots
+                        const bookingSlots = await BookingSlot.find({ booking_id: booking.id });
+                        const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
+
+                        // Delete time slots (release them)
+                        if (timeSlotIds.length > 0) {
+                            await TimeSlot.deleteMany({ id: { $in: timeSlotIds } });
+                        }
+
+                        // Delete booking slots
+                        await BookingSlot.deleteMany({ booking_id: booking.id });
+                    }
+
+                    // Update booking statuses to CANCELLED
+                    await Booking.updateMany(
+                        { order_id: order.id },
+                        { $set: { status: 'CANCELLED' } }
+                    );
+
+                    // Update order status to CANCELLED
+                    order.status = 'CANCELLED';
+                    await order.save();
+
+                    cancelledCount++;
+                    console.log(`Order ${order.id} cancelled and slots released.`);
+                } catch (err) {
+                    console.error(`Error cleaning up order ${order.id}:`, err);
+                }
+            }
+
+            return {
+                found: expiredOrders.length,
+                cancelled: cancelledCount
+            };
+        } catch (error) {
+            console.error('Error in cleanupExpiredOrders:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Start periodic cleanup job
+     * Runs every minute to clean up expired PENDING orders
+     * @param {Number} intervalMinutes - Interval in minutes (default: 1)
+     */
+    startCleanupJob(intervalMinutes = 1) {
+        console.log(`Starting order cleanup job (interval: ${intervalMinutes} minute(s))`);
+
+        // Run immediately on startup
+        this.cleanupExpiredOrders().catch(err =>
+            console.error('Initial cleanup failed:', err)
+        );
+
+        // Then run periodically
+        setInterval(async () => {
+            try {
+                await this.cleanupExpiredOrders();
+            } catch (error) {
+                console.error('Cleanup job error:', error);
+            }
+        }, intervalMinutes * 60 * 1000);
     }
 }
 

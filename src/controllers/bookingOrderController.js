@@ -9,7 +9,17 @@ class BookingOrderController {
         try {
             // Get user_id from authenticated user (middleware)
             const user_id = req.user._id;
-            const { cluster_id, start_time, end_time, pod_count, total_discount } = req.body;
+            const {
+                cluster_id,
+                start_time,
+                end_time,
+                pod_count,
+                total_discount,
+                require_adjacent,
+                floor_preference,
+                accept_fragmented,
+                accept_mixed_floor
+            } = req.body;
 
             // Validate required fields
             if (!cluster_id || !start_time || !end_time) {
@@ -25,7 +35,11 @@ class BookingOrderController {
                 start_time,
                 end_time,
                 pod_count: pod_count || 1,
-                total_discount: total_discount || 0
+                total_discount: total_discount || 0,
+                require_adjacent: require_adjacent || false,
+                floor_preference: floor_preference || null,
+                accept_fragmented: accept_fragmented || false,
+                accept_mixed_floor: accept_mixed_floor || false
             });
 
             return res.status(201).json({
@@ -35,10 +49,14 @@ class BookingOrderController {
             });
         } catch (error) {
             console.error("Error creating booking order:", error);
-            return res.status(error.statusCode || 500).json({
+            const responsePayload = {
                 success: false,
                 message: error.message || "Failed to create booking order"
-            });
+            };
+            if (error.code) responsePayload.code = error.code;
+            if (error.data) responsePayload.data = error.data;
+
+            return res.status(error.statusCode || 500).json(responsePayload);
         }
     }
 
