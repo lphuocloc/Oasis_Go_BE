@@ -1,5 +1,6 @@
 const admin = require("firebase-admin");
 const path = require("path");
+
 // Initialize Firebase Admin SDK
 const initializeFirebase = () => {
   try {
@@ -73,9 +74,32 @@ const verifyFirebaseToken = async (idToken) => {
     };
   }
 };
+const sendPushNotification = async (fcmToken, { title, body, data = {} }) => {
+  try {
+    const firebaseAdmin = initializeFirebase();
+    if (!firebaseAdmin) throw new Error("Firebase not initialized");
+
+    const message = {
+      notification: {
+        title: title,
+        body: body,
+      },
+      data: data, // gửi kèm data
+      token: fcmToken,
+    };
+
+    const response = await firebaseAdmin.messaging().send(message);
+    console.log("✅ Successfully sent message:", response);
+    return { success: true, response };
+  } catch (error) {
+    console.error("❌ Error sending push notification:", error);
+    return { success: false, error: error.message };
+  }
+};
 
 module.exports = {
   initializeFirebase,
   verifyFirebaseToken,
+  sendPushNotification,
   admin,
 };

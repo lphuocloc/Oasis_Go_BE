@@ -163,7 +163,7 @@ class AuthService {
   /**
    * Đăng nhập với email/password
    */
-  async login({ email, password }) {
+  async login({ email, password, fcmToken }) {
     // Validate input
     if (!email || !password) {
       throw new Error("Email and password are required");
@@ -171,7 +171,9 @@ class AuthService {
 
     // Tìm user và include password
     const user = await User.findOne({ email }).select("+password");
-
+    if (fcmToken) {
+      await User.findByIdAndUpdate(user._id, { fcmToken: fcmToken });
+    }
     if (!user) {
       const error = new Error("Invalid credentials");
       error.statusCode = 401;
@@ -213,6 +215,7 @@ class AuthService {
         name: user.name,
         role: user.role,
         authProvider: user.authProvider,
+        fcmToken: user.fcmToken,
       },
     };
   }
@@ -273,10 +276,7 @@ class AuthService {
     };
   }
 
-  /**
-   * Đăng nhập với Firebase (Google/Facebook)
-   */
-  async loginWithFirebase({ idToken, authProvider }) {
+  async loginWithFirebase({ idToken, authProvider, fcmToken }) {
     if (!idToken || !authProvider) {
       throw new Error("idToken and authProvider are required");
     }
@@ -296,11 +296,11 @@ class AuthService {
       throw new Error("Email not found in Firebase token");
     }
 
-    // Tìm hoặc tạo user
+    // Tìm user
     let user = await User.findOne({ email });
 
     if (user) {
-      // User đã tồn tại - kiểm tra auth provider
+      // Kiểm tra provider
       if (user.authProvider !== authProvider) {
         const error = new Error(
           `Email already registered with ${user.authProvider}. Please use that method to login.`,
@@ -309,23 +309,26 @@ class AuthService {
         throw error;
       }
 
-      // Cập nhật thông tin nếu cần
+      // Update user
       user.firebaseUid = uid;
       if (picture) user.profilePicture = picture;
+      if (fcmToken) user.fcmToken = fcmToken;
+
       await user.save();
     } else {
-      // Tạo user mới
+      // Create user
       user = await User.create({
         email,
         name: name || email.split("@")[0],
         authProvider,
         firebaseUid: uid,
         profilePicture: picture,
-        isVerified: true, // Firebase users đã verified
+        isVerified: true,
+        fcmToken,
       });
     }
 
-    // Tạo JWT token
+    // Generate JWT
     const token = this.generateToken(user._id);
 
     return {
@@ -340,7 +343,6 @@ class AuthService {
       },
     };
   }
-
   /**
    * Lấy thông tin user hiện tại
    */
@@ -368,6 +370,7 @@ class AuthService {
       isVerified: user.isVerified,
       createdAt: user.createdAt,
       identityCardStatus: user.identityCard?.status || "unverified",
+      fcmToken: user.fcmToken,
     };
   }
 
@@ -551,6 +554,39 @@ class AuthService {
       }
       throw error;
     }
+  }
+
+  /**
+   * Cập nhật Token thông báo cho người dùng
+   */
+  async updatePushToken(userId, token) {
+    try {
+      return await User.findByIdAndUpdate(
+        userId,
+        { fcmToken: token },
+        { new: true }, // Trả về bản ghi mới sau khi update
+      );
+    } catch (error) {
+      throw new Error("Lỗi cập nhật token trong DB: " + error.message);
+    }
+  }
+
+  /**
+   * Xóa Token khi người dùng logout
+   */
+  async clearPushToken(userId) {
+    try {
+      return await User.findByIdAndUpdate(userId, { fcmToken: null });
+    } catch (error) {
+      throw new Error("Lỗi xóa token trong DB: " + error.message);
+    }
+  }
+
+  /**
+   * Lấy thông tin User kèm Token để gửi thông báo
+   */
+  async getUserForNotification(userId) {
+    return await User.findById(userId).select("fcmToken name email");
   }
 }
 

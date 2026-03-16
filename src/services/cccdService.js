@@ -1,5 +1,6 @@
 const User = require("../models/User");
 const IdentityCard = require("../models/cccd/IndentityCard");
+const notificationService = require("./notificationService");
 
 class IdentityService {
   // Lấy thông tin định danh chi tiết
@@ -49,9 +50,21 @@ class IdentityService {
     );
 
     // Link tới bảng User
-    await User.findByIdAndUpdate(userId, {
-      identityCard: identity._id,
-    });
+    const user = await User.findByIdAndUpdate(
+      userId,
+      { identityCard: identity._id },
+      { new: true },
+    ).select("fcmToken name");
+    if (user && user.fcmToken) {
+      notificationService
+        .sendPush(
+          user.fcmToken,
+          "Xác thực thành công!",
+          `Chúc mừng ${user.name}, thông tin định danh của bạn đã được cập nhật.`,
+          { screen: "/(main)/home", action: "identity_verified" },
+        )
+        .catch((err) => console.error("Lỗi gửi thông báo:", err));
+    }
 
     return identity.extractedInfo;
   }
