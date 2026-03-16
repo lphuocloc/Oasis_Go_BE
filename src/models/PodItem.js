@@ -45,9 +45,8 @@ const podItemSchema = new mongoose.Schema(
 
 podItemSchema.index({ pod_id: 1, item_id: 1 }, { unique: true });
 
-podItemSchema.pre("save", function (next) {
+podItemSchema.pre("save", async function () {
   this.updated_at = new Date();
-  next();
 });
 
 module.exports = mongoose.model("PodItem", podItemSchema);
