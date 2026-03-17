@@ -178,29 +178,4 @@ router.get("/:id", protect, bookingOrderController.getBookingOrderById);
  */
 router.put("/:id/cancel", protect, bookingOrderController.cancelBookingOrder);
 
-/**
- * @swagger
- * /api/booking-orders/{id}/mark-paid:
- *   put:
- *     summary: Mark order as paid
- *     tags: [BookingOrders]
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *         description: Booking order ID
- *     responses:
- *       200:
- *         description: Order marked as paid successfully
- *       400:
- *         description: Cannot mark order as paid
- *       404:
- *         description: Booking order not found
- *     security:
- *       - bearerAuth: []
- */
-router.put("/:id/mark-paid", protect, bookingOrderController.markOrderAsPaid);
-
 module.exports = router;

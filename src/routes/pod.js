@@ -2,6 +2,10 @@ const express = require("express");
 const router = express.Router();
 const podController = require("../controllers/podController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const {
+	loadManagerScope,
+	requireManagerPodAccess,
+} = require("../middlewares/managerScopeMiddleware");
 
 /**
  * @swagger
@@ -306,7 +310,7 @@ router.get("/:id", podController.getPodById);
  *       500:
  *         description: Server error
  */
-router.put("/:id", protect, authorize("admin", "manager"), podController.updatePod);
+router.put("/:id", protect, authorize("admin"), podController.updatePod);
 
 /**
  * @swagger
@@ -347,7 +351,14 @@ router.put("/:id", protect, authorize("admin", "manager"), podController.updateP
  *       500:
  *         description: Server error
  */
-router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), podController.updatePodStatus);
+router.patch(
+	"/:id/status",
+	protect,
+	authorize("admin", "manager", "cleaner"),
+	loadManagerScope,
+	requireManagerPodAccess({ source: "params", key: "id" }),
+	podController.updatePodStatus
+);
 
 /**
  * @swagger
@@ -371,7 +382,14 @@ router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), p
  *       404:
  *         description: Pod not found
  */
-router.patch("/:id/complete-cleaning", protect, authorize("admin", "manager", "cleaner"), podController.completePodCleaning);
+router.patch(
+	"/:id/complete-cleaning",
+	protect,
+	authorize("admin", "manager", "cleaner"),
+	loadManagerScope,
+	requireManagerPodAccess({ source: "params", key: "id" }),
+	podController.completePodCleaning
+);
 
 /**
  * @swagger

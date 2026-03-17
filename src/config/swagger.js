@@ -34,7 +34,7 @@ const options = {
             },
             {
                 name: 'VNPay Payment',
-                description: 'VNPay payment integration endpoints (Create payment, IPN callback, Query payment)'
+                description: 'VNPay transaction integration endpoints (Create payment URL, callback, query, refund)'
             },
             {
                 name: 'Locations',
@@ -120,70 +120,50 @@ const options = {
                         }
                     }
                 },
-                Payment: {
+                Transaction: {
                     type: 'object',
                     properties: {
-                        paymentId: {
+                        transactionId: {
                             type: 'string',
-                            description: 'UUID payment identifier'
-                        },
-                        bookingId: {
-                            type: 'string',
-                            description: 'Booking ID reference'
+                            description: 'UUID transaction identifier'
                         },
                         orderId: {
                             type: 'string',
-                            description: 'VNPay order ID (unique)'
+                            description: 'BookingOrder ID used as VNPay order ID'
                         },
                         amount: {
                             type: 'number',
-                            description: 'Payment amount in VND'
+                            description: 'Transaction amount in VND'
+                        },
+                        currency: {
+                            type: 'string',
+                            enum: ['VND'],
+                            description: 'Currency code'
+                        },
+                        type: {
+                            type: 'string',
+                            enum: ['CHARGE', 'REFUND', 'PENALTY'],
+                            description: 'Transaction type'
                         },
                         method: {
                             type: 'string',
-                            enum: ['VNPAY', 'CASH', 'BANK_TRANSFER', 'MOMO', 'ZALOPAY'],
-                            description: 'Payment method'
+                            enum: ['VNPAY'],
+                            description: 'Transaction method'
                         },
                         status: {
                             type: 'string',
-                            enum: ['INITIATED', 'AUTHORIZED', 'FAILED', 'REFUNDED', 'CANCELLED'],
-                            description: 'Payment status'
+                            enum: ['PENDING', 'SUCCESS', 'FAILED', 'VOIDED'],
+                            description: 'Transaction status'
                         },
-                        orderInfo: {
+                        providerReference: {
                             type: 'string',
-                            description: 'Order information/description'
-                        },
-                        vnpayData: {
-                            type: 'object',
-                            properties: {
-                                transactionNo: {
-                                    type: 'string',
-                                    description: 'VNPay transaction number'
-                                },
-                                bankCode: {
-                                    type: 'string',
-                                    description: 'Bank code used for payment'
-                                },
-                                responseCode: {
-                                    type: 'string',
-                                    description: 'VNPay response code'
-                                },
-                                payDate: {
-                                    type: 'string',
-                                    description: 'Payment date (yyyyMMddHHmmss)'
-                                }
-                            }
+                            nullable: true,
+                            description: 'Provider transaction reference (e.g. VNPay transaction number)'
                         },
                         createdAt: {
                             type: 'string',
                             format: 'date-time',
-                            description: 'Payment creation date'
-                        },
-                        authorizedAt: {
-                            type: 'string',
-                            format: 'date-time',
-                            nullable: true,
-                            description: 'Payment authorization date'
+                            description: 'Transaction creation date'
                         }
                     }
                 },

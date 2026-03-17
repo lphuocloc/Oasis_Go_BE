@@ -1,6 +1,10 @@
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const {
+	loadManagerScope,
+	requireManagerLocationAccess,
+} = require("../middlewares/managerScopeMiddleware");
 const locationShiftController = require("../controllers/locationShiftController");
 
 /**
@@ -94,6 +98,8 @@ router.get(
 	"/locations/:locationId/working",
 	protect,
 	authorize("admin", "manager"),
+	loadManagerScope,
+	requireManagerLocationAccess({ source: "params", key: "locationId" }),
 	locationShiftController.getWorkingStaffByLocation
 );
 

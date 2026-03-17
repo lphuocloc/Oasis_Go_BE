@@ -2,6 +2,12 @@ const express = require("express");
 const router = express.Router();
 const podClusterController = require("../controllers/podClusterController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const {
+	loadManagerScope,
+	applyManagerLocationScope,
+	requireManagerLocationAccess,
+	requireManagerClusterAccess,
+} = require("../middlewares/managerScopeMiddleware");
 const { uploadPodClusterImage } = require("../config/cloudinary");
 
 /**
@@ -86,7 +92,14 @@ const { uploadPodClusterImage } = require("../config/cloudinary");
  *       500:
  *         description: Server error
  */
-router.get("/", podClusterController.getAllPodClusters);
+router.get(
+	"/",
+	protect,
+	authorize("admin", "manager"),
+	loadManagerScope,
+	applyManagerLocationScope,
+	podClusterController.getAllPodClusters
+);
 
 /**
  * @swagger
@@ -120,7 +133,14 @@ router.get("/", podClusterController.getAllPodClusters);
  *       500:
  *         description: Server error
  */
-router.get("/location/:locationId", podClusterController.getPodClustersByLocation);
+router.get(
+	"/location/:locationId",
+	protect,
+	authorize("admin", "manager"),
+	loadManagerScope,
+	requireManagerLocationAccess({ source: "params", key: "locationId" }),
+	podClusterController.getPodClustersByLocation
+);
 
 /**
  * @swagger
@@ -152,7 +172,14 @@ router.get("/location/:locationId", podClusterController.getPodClustersByLocatio
  *       500:
  *         description: Server error
  */
-router.get("/:id", podClusterController.getPodClusterById);
+router.get(
+	"/:id",
+	protect,
+	authorize("admin", "manager"),
+	loadManagerScope,
+	requireManagerClusterAccess({ source: "params", key: "id" }),
+	podClusterController.getPodClusterById
+);
 
 /**
  * @swagger
@@ -230,7 +257,12 @@ router.get("/:id/images", podClusterController.getPodClusterImages);
  *       500:
  *         description: Server error
  */
-router.delete("/:id/images/:imageId", protect, authorize("admin", "manager"), podClusterController.deletePodClusterImage);
+router.delete(
+	"/:id/images/:imageId",
+	protect,
+	authorize("admin"),
+	podClusterController.deletePodClusterImage
+);
 
 /**
  * @swagger
@@ -295,7 +327,13 @@ router.delete("/:id/images/:imageId", protect, authorize("admin", "manager"), po
  *       500:
  *         description: Server error
  */
-router.post("/", protect, authorize("admin", "manager"), uploadPodClusterImage.array("images", 10), podClusterController.createPodCluster);
+router.post(
+	"/",
+	protect,
+	authorize("admin"),
+	uploadPodClusterImage.array("images", 10),
+	podClusterController.createPodCluster
+);
 
 /**
  * @swagger
@@ -348,7 +386,13 @@ router.post("/", protect, authorize("admin", "manager"), uploadPodClusterImage.a
  *       500:
  *         description: Server error
  */
-router.put("/:id", protect, authorize("admin", "manager"), uploadPodClusterImage.array("images", 10), podClusterController.updatePodCluster);
+router.put(
+	"/:id",
+	protect,
+	authorize("admin"),
+	uploadPodClusterImage.array("images", 10),
+	podClusterController.updatePodCluster
+);
 
 /**
  * @swagger
@@ -375,6 +419,11 @@ router.put("/:id", protect, authorize("admin", "manager"), uploadPodClusterImage
  *       500:
  *         description: Server error
  */
-router.delete("/:id", protect, authorize("admin", "manager"), podClusterController.deletePodCluster);
+router.delete(
+	"/:id",
+	protect,
+	authorize("admin"),
+	podClusterController.deletePodCluster
+);
 
 module.exports = router;

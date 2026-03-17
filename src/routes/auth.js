@@ -34,7 +34,7 @@ const { protect } = require("../middlewares/authMiddleware");
  *                 type: string
  *                 format: password
  *                 minLength: 6
- *                 example: password123
+ *                 example: 123213
  *               name:
  *                 type: string
  *                 example: John Doe
@@ -504,8 +504,8 @@ router.get("/me", protect, authController.getMe);
  * @swagger
  * /api/auth/update-profile:
  *   put:
- *     summary: Cập nhật thông tin hồ sơ người dùng
- *     description: Cho phép người dùng đã đăng nhập cập nhật tên hiển thị và ảnh đại diện.
+ *     summary: Update user profile information
+ *     description: Allows authenticated users to update display name and avatar.
  *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
@@ -518,15 +518,15 @@ router.get("/me", protect, authController.getMe);
  *             properties:
  *               name:
  *                 type: string
- *                 description: Tên mới của người dùng
+ *                 description: New display name
  *                 example: Nguyễn Văn A
  *               avatar:
  *                 type: string
- *                 description: URL ảnh đại diện mới hoặc chuỗi base64
+ *                 description: New avatar URL or base64 string
  *                 example: https://example.com/new-avatar.jpg
  *     responses:
  *       200:
- *         description: Cập nhật hồ sơ thành công
+ *         description: Profile updated successfully
  *         content:
  *           application/json:
  *             schema:
@@ -544,19 +544,19 @@ router.get("/me", protect, authController.getMe);
  *                     user:
  *                       $ref: '#/components/schemas/User'
  *       401:
- *         description: Không có quyền truy cập
+ *         description: Unauthorized
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       404:
- *         description: Không tìm thấy người dùng
+ *         description: User not found
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       500:
- *         description: Lỗi hệ thống
+ *         description: Internal server error
  *         content:
  *           application/json:
  *             schema:
@@ -567,8 +567,8 @@ router.put("/update-profile", protect, authController.updateProfile);
  * @swagger
  * /api/auth/forgot-password:
  *   post:
- *     summary: Quên mật khẩu - gửi OTP qua email
- *     description: Gửi mã OTP để xác thực yêu cầu đặt lại mật khẩu
+ *     summary: Forgot password - send OTP via email
+ *     description: Send OTP code to verify password reset request
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -585,7 +585,7 @@ router.put("/update-profile", protect, authController.updateProfile);
  *                 example: user@example.com
  *     responses:
  *       200:
- *         description: OTP đã được gửi qua email
+ *         description: OTP sent to email successfully
  *         content:
  *           application/json:
  *             schema:
@@ -596,15 +596,15 @@ router.put("/update-profile", protect, authController.updateProfile);
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: OTP reset pass đã được gửi
+ *                   example: Password reset OTP has been sent
  *       404:
- *         description: Email không tồn tại
+ *         description: Email not found
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       500:
- *         description: Lỗi hệ thống
+ *         description: Internal server error
  *         content:
  *           application/json:
  *             schema:
@@ -616,8 +616,8 @@ router.post("/forgot-password", authController.forgotPassword);
  * @swagger
  * /api/auth/verify-reset-otp:
  *   post:
- *     summary: Xác thực OTP reset mật khẩu
- *     description: Xác thực OTP và trả về reset password token (JWT ngắn hạn)
+ *     summary: Verify password reset OTP
+ *     description: Verify OTP and return a short-lived reset password token (JWT)
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -638,7 +638,7 @@ router.post("/forgot-password", authController.forgotPassword);
  *                 example: "123456"
  *     responses:
  *       200:
- *         description: OTP hợp lệ, trả về reset token
+ *         description: Valid OTP, reset token returned
  *         content:
  *           application/json:
  *             schema:
@@ -649,15 +649,15 @@ router.post("/forgot-password", authController.forgotPassword);
  *                   example: true
  *                 resetPasswordToken:
  *                   type: string
- *                   description: JWT token dùng để đặt lại mật khẩu (hiệu lực 10 phút)
+ *                   description: JWT token used to reset password (valid for 10 minutes)
  *       400:
- *         description: OTP không đúng hoặc hết hạn
+ *         description: Invalid or expired OTP
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       500:
- *         description: Lỗi hệ thống
+ *         description: Internal server error
  *         content:
  *           application/json:
  *             schema:
@@ -669,8 +669,8 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
  * @swagger
  * /api/auth/reset-password:
  *   post:
- *     summary: Đặt lại mật khẩu mới
- *     description: Đặt lại mật khẩu bằng reset password token
+ *     summary: Reset password
+ *     description: Set a new password using reset password token
  *     tags: [Authentication]
  *     requestBody:
  *       required: true
@@ -684,14 +684,14 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
  *             properties:
  *               resetPasswordToken:
  *                 type: string
- *                 description: JWT reset token nhận từ verify-reset-otp
+ *                 description: JWT reset token received from verify-reset-otp
  *               newPassword:
  *                 type: string
  *                 format: password
  *                 example: newPassword123
  *     responses:
  *       200:
- *         description: Đặt lại mật khẩu thành công
+ *         description: Password reset successfully
  *         content:
  *           application/json:
  *             schema:
@@ -702,15 +702,15 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: Mật khẩu đã được cập nhật
+ *                   example: Password has been updated
  *       401:
- *         description: Token không hợp lệ hoặc hết hạn
+ *         description: Invalid or expired token
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/Error'
  *       500:
- *         description: Lỗi hệ thống
+ *         description: Internal server error
  *         content:
  *           application/json:
  *             schema:

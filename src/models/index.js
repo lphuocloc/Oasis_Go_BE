@@ -13,7 +13,7 @@ module.exports = {
   BookingAccessSession: require("./BookingAccessSession"),
   OnlineKey: require("./OnlineKey"),
   Incident: require("./Incidents"),
-  Payment: require("./Payment"),
+  Transaction: require("./Transaction"),
   TimeSlot: require("./TimeSlot"),
   Item: require("./Item"),
   Warehouse: require("./Warehouse"),
