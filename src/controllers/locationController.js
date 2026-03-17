@@ -111,7 +111,7 @@ exports.getLocationDescendants = async (req, res) => {
 // @access  Private (Admin)
 exports.createLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, isActive } = req.body;
+        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
 
         const location = await locationService.createLocation({
             type,
@@ -119,6 +119,8 @@ exports.createLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            lat,
+            lng,
             isActive,
         });
 
@@ -141,7 +143,7 @@ exports.createLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.updateLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, isActive } = req.body;
+        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
 
         const location = await locationService.updateLocation(req.params.id, {
             type,
@@ -149,6 +151,8 @@ exports.updateLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            lat,
+            lng,
             isActive,
         });
 
