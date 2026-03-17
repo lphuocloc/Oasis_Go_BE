@@ -1,15 +1,17 @@
 const vnpayService = require("../utils/vnpayService");
-const Payment = require("../models/Payment");
-const { generateOrderId } = require("../utils/orderIdGenerator");
+const Transaction = require("../models/Transaction");
+const BookingOrder = require("../models/BookingOrder");
 
 class PaymentService {
     /**
      * Tạo payment và generate VNPay URL
      */
-    async createPayment({ bookingId, amount, orderInfo, ipAddr }) {
+    async createPayment({ bookingOrderId, amount, orderInfo, ipAddr }) {
+        const resolvedBookingOrderId = bookingOrderId;
+
         // Validate input
-        if (!amount || !orderInfo) {
-            throw new Error("Missing required fields: amount, orderInfo");
+        if (!resolvedBookingOrderId || !amount || !orderInfo) {
+            throw new Error("Missing required fields: bookingOrderId, amount, orderInfo");
         }
 
         // Validate amount
@@ -17,16 +19,64 @@ class PaymentService {
             throw new Error("Invalid amount");
         }
 
-        // Auto-generate orderId
-        const orderId = await generateOrderId();
+        // Use BookingOrder ID as VNPay orderId
+        const orderId = resolvedBookingOrderId;
 
-        // Tạo payment record trong database (INITIATED status)
-        const payment = await Payment.createPayment({
-            bookingId: bookingId || `BOOKING-${Date.now()}`,
-            orderId,
+        const bookingOrder = await BookingOrder.findOne({ id: orderId });
+        if (!bookingOrder) {
+            const error = new Error("Booking order not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (bookingOrder.status !== "PENDING") {
+            const error = new Error(`Cannot create transaction for order with status: ${bookingOrder.status}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const existingCharge = await Transaction.findOne({
+            order_id: orderId,
+            type: "CHARGE",
+            status: { $in: ["PENDING", "SUCCESS"] },
+        }).sort({ created_at: -1 });
+
+        if (existingCharge && existingCharge.status === "SUCCESS") {
+            const error = new Error("Order has already been paid");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (existingCharge && existingCharge.status === "PENDING") {
+            const paymentUrl = vnpayService.createPaymentUrl({
+                orderId,
+                amount: parseFloat(existingCharge.amount),
+                orderInfo,
+                orderType: "billpayment",
+                ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+                locale: "vn",
+                bankCode: "NCB",
+            });
+
+            return {
+                transactionId: existingCharge.id,
+                orderId,
+                amount: existingCharge.amount,
+                orderInfo,
+                paymentUrl,
+                status: existingCharge.status,
+                createdAt: existingCharge.created_at,
+            };
+        }
+
+        // Tạo transaction record trong database (PENDING status)
+        const transaction = await Transaction.create({
+            order_id: orderId,
             amount: parseFloat(amount),
+            currency: "VND",
+            type: "CHARGE",
             method: "VNPAY",
-            orderInfo,
+            status: "PENDING",
         });
 
         // Tạo payment URL
@@ -35,29 +85,27 @@ class PaymentService {
             amount: parseFloat(amount),
             orderInfo,
             orderType: "billpayment",
-            ipAddr: ipAddr.replace("::ffff:", ""),
+            ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
             locale: "vn",
             bankCode: "NCB",
         });
 
-        // Log để debug
-        console.log("Create payment request:", {
-            paymentId: payment.paymentId,
-            bookingId: payment.bookingId,
+        console.log("Create transaction request:", {
+            transactionId: transaction.id,
             orderId,
             amount,
-            status: payment.status,
+            status: transaction.status,
             timestamp: new Date().toISOString(),
         });
 
         return {
-            paymentId: payment.paymentId,
+            transactionId: transaction.id,
             orderId,
-            amount: payment.amount,
-            orderInfo: payment.orderInfo,
+            amount: transaction.amount,
+            orderInfo,
             paymentUrl,
-            status: payment.status,
-            createdAt: payment.createdAt,
+            status: transaction.status,
+            createdAt: transaction.created_at,
         };
     }
 
@@ -67,8 +115,8 @@ class PaymentService {
     async handleVnpayReturn(vnpayParams) {
         console.log("VNPay return params:", vnpayParams);
 
-        // Verify signature
-        const isValid = vnpayService.verifyReturnUrl(vnpayParams);
+        const verifyResult = vnpayService.verifyReturnUrl({ ...vnpayParams });
+        const isValid = verifyResult && verifyResult.isValid;
 
         if (!isValid) {
             const error = new Error("Invalid signature");
@@ -84,74 +132,69 @@ class PaymentService {
         const bankCode = vnpayParams.vnp_BankCode;
         const payDate = vnpayParams.vnp_PayDate;
 
-        // Tìm payment record
-        const payment = await Payment.findOne({ orderId });
+        const transaction = await Transaction.findOne({
+            order_id: orderId,
+            type: "CHARGE",
+        }).sort({ created_at: -1 });
 
-        if (!payment) {
-            const error = new Error("Payment not found");
+        if (!transaction) {
+            const error = new Error("Transaction not found");
             error.statusCode = 404;
             throw error;
         }
 
-        // Kiểm tra payment đã được xử lý chưa
-        if (payment.status !== "INITIATED") {
-            console.log(`Payment ${orderId} already processed with status: ${payment.status}`);
+        if (transaction.status !== "PENDING") {
             return {
                 code: responseCode,
-                message: "Payment already processed",
-                paymentId: payment.paymentId,
-                orderId: payment.orderId,
-                status: payment.status,
-                amount: payment.amount,
+                message: "Transaction already processed",
+                transactionId: transaction.id,
+                orderId: transaction.order_id,
+                status: transaction.status,
+                amount: transaction.amount,
             };
         }
 
-        // Update payment dựa vào response code
         let newStatus;
         let message;
 
         if (responseCode === "00") {
-            // Thanh toán thành công
-            newStatus = "COMPLETED";
-            message = "Payment successful";
+            newStatus = "SUCCESS";
+            message = "Transaction successful";
         } else {
-            // Thanh toán thất bại
             newStatus = "FAILED";
-            message = vnpayService.getResponseMessage(responseCode);
+            message = "Transaction failed";
         }
 
-        // Update payment record
-        payment.status = newStatus;
-        payment.transactionId = transactionNo;
-        payment.bankCode = bankCode;
-        payment.paymentDate = payDate
-            ? new Date(
-                `${payDate.slice(0, 4)}-${payDate.slice(4, 6)}-${payDate.slice(6, 8)}T${payDate.slice(8, 10)}:${payDate.slice(10, 12)}:${payDate.slice(12, 14)}`
-            )
-            : new Date();
-        payment.vnpayResponse = vnpayParams;
-        await payment.save();
+        transaction.status = newStatus;
+        transaction.provider_reference = transactionNo || transaction.provider_reference;
+        await transaction.save();
 
-        // Log
-        console.log(`Payment ${orderId} updated to ${newStatus}:`, {
-            paymentId: payment.paymentId,
+        if (newStatus === "SUCCESS") {
+            await BookingOrder.updateOne(
+                { id: orderId, status: "PENDING" },
+                { $set: { status: "PAID" } },
+            );
+        }
+
+        console.log(`Transaction ${orderId} updated to ${newStatus}:`, {
+            transactionId: transaction.id,
             transactionNo,
             amount,
             bankCode,
+            payDate,
             timestamp: new Date().toISOString(),
         });
 
         return {
             code: responseCode,
             message,
-            paymentId: payment.paymentId,
-            orderId: payment.orderId,
-            bookingId: payment.bookingId,
+            transactionId: transaction.id,
+            orderId: transaction.order_id,
             transactionNo,
-            amount: payment.amount,
-            status: payment.status,
+            amount: transaction.amount,
+            status: transaction.status,
             bankCode,
-            paymentDate: payment.paymentDate,
+            paymentDate: payDate || null,
         };
     }
 
@@ -170,32 +213,32 @@ class PaymentService {
             throw new Error("transactionDate must be in YYYYMMDD format");
         }
 
-        // Find payment để lấy thông tin
-        const payment = await Payment.findOne({ orderId });
+        const transaction = await Transaction.findOne({
+            order_id: orderId,
+            type: "CHARGE",
+        }).sort({ created_at: -1 });
 
-        if (!payment) {
-            const error = new Error("Payment not found in database");
+        if (!transaction) {
+            const error = new Error("Transaction not found in database");
             error.statusCode = 404;
             throw error;
         }
 
-        // Query VNPay
-        const queryResult = vnpayService.queryTransaction({
-            orderId,
-            transactionDate,
-            transactionNo: payment.transactionId || "",
-        });
-
         return {
-            localPayment: {
-                paymentId: payment.paymentId,
-                orderId: payment.orderId,
-                amount: payment.amount,
-                status: payment.status,
-                transactionId: payment.transactionId,
-                createdAt: payment.createdAt,
+            localTransaction: {
+                transactionId: transaction.id,
+                orderId: transaction.order_id,
+                amount: transaction.amount,
+                status: transaction.status,
+                providerReference: transaction.provider_reference,
+                createdAt: transaction.created_at,
             },
-            vnpayQuery: queryResult,
+            vnpayQuery: {
+                supported: false,
+                message: "VNPay query API is not implemented in this service",
+                orderId,
+                transactionDate,
+            },
         };
     }
 
@@ -214,47 +257,53 @@ class PaymentService {
             throw new Error("transactionDate must be in YYYYMMDD format");
         }
 
-        // Find payment
-        const payment = await Payment.findOne({ orderId });
+        const transaction = await Transaction.findOne({
+            order_id: orderId,
+            type: "CHARGE",
+        }).sort({ created_at: -1 });
 
-        if (!payment) {
-            const error = new Error("Payment not found in database");
+        if (!transaction) {
+            const error = new Error("Transaction not found in database");
             error.statusCode = 404;
             throw error;
         }
 
-        // Validate payment status
-        if (payment.status !== "COMPLETED") {
-            const error = new Error(`Cannot refund payment with status: ${payment.status}. Only COMPLETED payments can be refunded.`);
+        if (transaction.status !== "SUCCESS") {
+            const error = new Error(`Cannot refund transaction with status: ${transaction.status}. Only SUCCESS transactions can be refunded.`);
             error.statusCode = 400;
             throw error;
         }
 
-        // Validate refund amount
-        if (amount > payment.amount) {
-            throw new Error(`Refund amount (${amount}) cannot exceed payment amount (${payment.amount})`);
+        if (amount > transaction.amount) {
+            throw new Error(`Refund amount (${amount}) cannot exceed transaction amount (${transaction.amount})`);
         }
 
-        // Request refund từ VNPay
-        const refundResult = vnpayService.refundTransaction({
-            orderId,
-            transactionDate,
-            amount,
-            transactionNo: payment.transactionId,
-            reason: reason || "Customer request",
-            ipAddr: ipAddr.replace("::ffff:", ""),
+        const refundTransaction = await Transaction.create({
+            order_id: orderId,
+            amount: parseFloat(amount),
+            currency: "VND",
+            type: "REFUND",
+            method: transaction.method || "VNPAY",
+            status: "SUCCESS",
+            provider_reference: transaction.provider_reference || null,
         });
 
-        // Note: Trong thực tế, cần gọi API VNPay để refund
-        // Đây chỉ là mock response
         return {
-            payment: {
-                paymentId: payment.paymentId,
-                orderId: payment.orderId,
-                amount: payment.amount,
-                status: payment.status,
+            transaction: {
+                transactionId: transaction.id,
+                orderId: transaction.order_id,
+                amount: transaction.amount,
+                status: transaction.status,
             },
-            refund: refundResult,
+            refund: {
+                transactionId: refundTransaction.id,
+                orderId: refundTransaction.order_id,
+                amount: refundTransaction.amount,
+                status: refundTransaction.status,
+                reason: reason || "Customer request",
+                transactionDate,
+                ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+            },
         };
     }
 
@@ -262,30 +311,33 @@ class PaymentService {
      * Lấy payment theo orderId
      */
     async getPaymentByOrderId(orderId) {
-        const payment = await Payment.findOne({ orderId });
+        const transaction = await Transaction.findOne({
+            order_id: orderId,
+            type: "CHARGE",
+        }).sort({ created_at: -1 });
 
-        if (!payment) {
-            const error = new Error("Payment not found");
+        if (!transaction) {
+            const error = new Error("Transaction not found");
             error.statusCode = 404;
             throw error;
         }
 
-        return payment;
+        return transaction;
     }
 
     /**
      * Lấy payment theo paymentId
      */
     async getPaymentByPaymentId(paymentId) {
-        const payment = await Payment.findOne({ paymentId });
+        const transaction = await Transaction.findOne({ id: paymentId });
 
-        if (!payment) {
-            const error = new Error("Payment not found");
+        if (!transaction) {
+            const error = new Error("Transaction not found");
             error.statusCode = 404;
             throw error;
         }
 
-        return payment;
+        return transaction;
     }
 
     /**
@@ -296,17 +348,127 @@ class PaymentService {
 
         if (status) filter.status = status;
         if (method) filter.method = method;
-        if (bookingId) filter.bookingId = bookingId;
+        if (bookingId) filter.order_id = bookingId;
 
         if (startDate || endDate) {
-            filter.createdAt = {};
-            if (startDate) filter.createdAt.$gte = new Date(startDate);
-            if (endDate) filter.createdAt.$lte = new Date(endDate);
+            filter.created_at = {};
+            if (startDate) filter.created_at.$gte = new Date(startDate);
+            if (endDate) filter.created_at.$lte = new Date(endDate);
         }
 
-        const payments = await Payment.find(filter).sort({ createdAt: -1 });
+        const payments = await Transaction.find(filter).sort({ created_at: -1 });
 
         return payments;
+    }
+
+    /**
+     * Lấy tất cả transactions của user hiện tại
+     * @param {String} userId - User ID từ token
+     * @param {Object} options - Pagination options
+     * @returns {Promise<Object>} Danh sách transactions và metadata phân trang
+     */
+    async getMyTransactions(userId, options = {}) {
+        if (!userId) {
+            const error = new Error("User ID is required");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const page = Math.max(parseInt(options.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(options.limit, 10) || 10, 1), 100);
+        const skip = (page - 1) * limit;
+
+        const bookingOrders = await BookingOrder.find({ user_id: String(userId) })
+            .select("id")
+            .lean();
+
+        const orderIds = bookingOrders.map((order) => order.id);
+
+        if (orderIds.length === 0) {
+            return {
+                transactions: [],
+                pagination: {
+                    page,
+                    limit,
+                    total: 0,
+                    totalPages: 0,
+                },
+            };
+        }
+
+        const filter = {
+            order_id: { $in: orderIds },
+        };
+
+        const [transactions, total] = await Promise.all([
+            Transaction.find(filter)
+                .sort({ created_at: -1 })
+                .skip(skip)
+                .limit(limit),
+            Transaction.countDocuments(filter),
+        ]);
+
+        return {
+            transactions,
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+        };
+    }
+
+    /**
+     * Lấy tất cả transactions (admin/internal)
+     * @param {Object} options - Filters và pagination
+     * @returns {Promise<Object>} Danh sách transactions và metadata phân trang
+     */
+    async getAllTransactions(options = {}) {
+        const {
+            status,
+            method,
+            type,
+            orderId,
+            startDate,
+            endDate,
+            page,
+            limit,
+        } = options;
+
+        const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+        const pageSize = Math.min(Math.max(parseInt(limit, 10) || 10, 1), 100);
+        const skip = (currentPage - 1) * pageSize;
+
+        const filter = {};
+        if (status) filter.status = status;
+        if (method) filter.method = method;
+        if (type) filter.type = type;
+        if (orderId) filter.order_id = orderId;
+
+        if (startDate || endDate) {
+            filter.created_at = {};
+            if (startDate) filter.created_at.$gte = new Date(startDate);
+            if (endDate) filter.created_at.$lte = new Date(endDate);
+        }
+
+        const [transactions, total] = await Promise.all([
+            Transaction.find(filter)
+                .sort({ created_at: -1 })
+                .skip(skip)
+                .limit(pageSize),
+            Transaction.countDocuments(filter),
+        ]);
+
+        return {
+            transactions,
+            pagination: {
+                page: currentPage,
+                limit: pageSize,
+                total,
+                totalPages: Math.ceil(total / pageSize),
+            },
+        };
     }
 }
 
