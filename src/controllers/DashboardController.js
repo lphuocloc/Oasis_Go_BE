@@ -5,10 +5,10 @@ const Booking = require("../models/Bookings");
 const Incident = require("../models/Incidents");
 const User = require("../models/User");
 const Location = require("../models/Location");
-const Payment = require("../models/Payment");
+const Transaction = require("../models/Transaction");
 
 const OPEN_INCIDENT_STATUSES = ["PENDING", "INVESTIGATING"];
-const SUCCESS_PAYMENT_STATUSES = ["AUTHORIZED", "COMPLETED", "SUCCESS"];
+const SUCCESS_PAYMENT_STATUSES = ["SUCCESS"];
 
 const toDateOrNull = (value) => {
   if (!value) return null;
@@ -152,44 +152,47 @@ exports.getAdminStats = async (req, res) => {
         { $group: { _id: "$role", count: { $sum: 1 } } },
         { $project: { _id: 0, role: "$_id", count: 1 } },
       ]),
-      Payment.aggregate([
-        { $match: { status: { $in: SUCCESS_PAYMENT_STATUSES } } },
+      Transaction.aggregate([
+        { $match: { status: { $in: SUCCESS_PAYMENT_STATUSES }, type: "CHARGE" } },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
-      Payment.aggregate([
+      Transaction.aggregate([
         {
           $match: {
-            createdAt: { $gte: range.from, $lte: range.to },
+            created_at: { $gte: range.from, $lte: range.to },
+            type: "CHARGE",
             status: { $in: SUCCESS_PAYMENT_STATUSES },
           },
         },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
-      Payment.countDocuments({
-        createdAt: { $gte: range.from, $lte: range.to },
+      Transaction.countDocuments({
+        created_at: { $gte: range.from, $lte: range.to },
+        type: "CHARGE",
         status: { $in: SUCCESS_PAYMENT_STATUSES },
       }),
-      Payment.aggregate([
+      Transaction.aggregate([
         {
           $match: {
-            createdAt: { $gte: range.from, $lte: range.to },
-            status: { $in: ["REFUNDED"] },
+            created_at: { $gte: range.from, $lte: range.to },
+            type: "REFUND",
+            status: { $in: SUCCESS_PAYMENT_STATUSES },
           },
         },
         { $group: { _id: null, total: { $sum: "$amount" } } },
       ]),
-      Payment.aggregate([
-        { $match: { createdAt: { $gte: range.from, $lte: range.to } } },
+      Transaction.aggregate([
+        { $match: { created_at: { $gte: range.from, $lte: range.to } } },
         { $group: { _id: "$method", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
         { $project: { _id: 0, method: "$_id", amount: 1, count: 1 } },
       ]),
-      Payment.aggregate([
-        { $match: { createdAt: { $gte: range.from, $lte: range.to } } },
+      Transaction.aggregate([
+        { $match: { created_at: { $gte: range.from, $lte: range.to } } },
         { $group: { _id: "$status", amount: { $sum: "$amount" }, count: { $sum: 1 } } },
         { $project: { _id: 0, status: "$_id", amount: 1, count: 1 } },
       ]),
-      Payment.find({ createdAt: { $gte: range.from, $lte: range.to } })
-        .sort({ createdAt: -1 })
+      Transaction.find({ created_at: { $gte: range.from, $lte: range.to } })
+        .sort({ created_at: -1 })
         .limit(10)
         .lean(),
       Location.find({}).select("id name type").lean(),
@@ -383,13 +386,13 @@ exports.getAdminStats = async (req, res) => {
           byMethod: revenueByMethod,
           byStatus: revenueByStatus,
           recentTransactions: recentPayments.map((p) => ({
-            id: p.paymentId || String(p._id),
-            orderId: p.orderId,
-            type: p.status === "REFUNDED" ? "REFUND" : "CHARGE",
+            id: p.id || String(p._id),
+            orderId: p.order_id,
+            type: p.type,
             amount: p.amount,
-            currency: "VND",
+            currency: p.currency || "VND",
             status: p.status,
-            created_at: p.createdAt,
+            created_at: p.created_at,
           })),
         },
         users: {
