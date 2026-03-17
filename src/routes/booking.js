@@ -2,6 +2,11 @@ const express = require("express");
 const router = express.Router();
 const bookingController = require("../controllers/bookingController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const {
+	loadManagerScope,
+	applyManagerBookingScope,
+	requireManagerPodAccess,
+} = require("../middlewares/managerScopeMiddleware");
 
 /**
  * @swagger
@@ -110,7 +115,14 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *       200:
  *         description: Bookings retrieved successfully
  */
-router.get("/", protect, authorize("admin", "manager"), bookingController.getAllBookings);
+router.get(
+	"/",
+	protect,
+	authorize("admin", "manager"),
+	loadManagerScope,
+	applyManagerBookingScope,
+	bookingController.getAllBookings
+);
 
 /**
  * @swagger
@@ -235,7 +247,14 @@ router.get("/user/:userId", protect, bookingController.getBookingsByUser);
  *       200:
  *         description: Pod bookings retrieved
  */
-router.get("/pod/:podId", protect, authorize("admin", "manager"), bookingController.getBookingsByPod);
+router.get(
+	"/pod/:podId",
+	protect,
+	authorize("admin", "manager"),
+	loadManagerScope,
+	requireManagerPodAccess({ source: "params", key: "podId" }),
+	bookingController.getBookingsByPod
+);
 
 /**
  * @swagger

@@ -66,7 +66,15 @@ class LocationService {
      * Lấy location hierarchy path
      */
     async getLocationPath(locationId) {
-        const path = await Location.getPath(locationId);
+        const location = await Location.findOne({ id: locationId });
+
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const path = await location.getHierarchyPath();
 
         if (!path || path.length === 0) {
             const error = new Error("Location not found");
@@ -78,9 +86,24 @@ class LocationService {
     }
 
     /**
+     * Lấy tất cả location con (descendants)
+     */
+    async getLocationDescendants(locationId) {
+        const location = await Location.findOne({ id: locationId });
+
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        return Location.getDescendants(locationId);
+    }
+
+    /**
      * Tạo location mới
      */
-    async createLocation({ type, name, description, parent_id, address, isActive }) {
+    async createLocation({ type, name, description, parent_id, address, lat, lng, isActive }) {
         // Validate required fields
         if (!type || !name) {
             throw new Error("Type and name are required");
@@ -121,6 +144,8 @@ class LocationService {
             description,
             parent_id: parent_id || null,
             address,
+            lat: lat !== undefined ? lat : null,
+            lng: lng !== undefined ? lng : null,
             isActive: isActive !== undefined ? isActive : true,
         });
 
@@ -131,7 +156,7 @@ class LocationService {
      * Cập nhật location
      */
     async updateLocation(locationId, updates) {
-        const { type, name, description, parent_id, address, isActive } = updates;
+        const { type, name, description, parent_id, address, lat, lng, isActive } = updates;
 
         const location = await Location.findOne({ id: locationId });
         if (!location) {
@@ -153,6 +178,8 @@ class LocationService {
         if (description !== undefined) location.description = description;
         if (parent_id !== undefined) location.parent_id = parent_id;
         if (address !== undefined) location.address = address;
+        if (lat !== undefined) location.lat = lat;
+        if (lng !== undefined) location.lng = lng;
         if (isActive !== undefined) location.isActive = isActive;
 
         await location.save();

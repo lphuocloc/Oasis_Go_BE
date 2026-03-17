@@ -5,9 +5,12 @@ const podClusterService = require("../services/podClusterService");
 // @access  Public
 exports.getAllPodClusters = async (req, res) => {
   try {
-    const { location_id } = req.query;
+    const { location_id, scope_location_ids } = req.query;
 
-    const podClusters = await podClusterService.getAllPodClusters({ location_id });
+    const podClusters = await podClusterService.getAllPodClusters({
+      location_id,
+      scope_location_ids,
+    });
 
     res.status(200).json({
       success: true,

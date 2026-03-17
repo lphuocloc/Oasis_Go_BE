@@ -67,26 +67,36 @@ class BookingService {
   }
 
   /**
-   * Get all bookings with filters
-   * @param {Object} filters - Filter options
-   * @returns {Promise<Object>} List of bookings with pagination
+   * Get all bookings with filters (with optional pagination)
+   * @param {Object} filters - Filter options (user_id, pod_id, order_id, status, start_date, end_date, page, limit)
+   * @returns {Promise<Object>} List of bookings with pagination (if page/limit provided)
    */
   async getAllBookings(filters = {}) {
     const {
       user_id,
       pod_id,
+      pod_ids,
       order_id,
       status,
       start_date,
       end_date,
-      page = 1,
-      limit = 20,
+      page,
+      limit,
     } = filters;
 
     const query = {};
 
     if (user_id) query.user_id = user_id;
     if (pod_id) query.pod_id = pod_id;
+    if (pod_ids) {
+      const ids = Array.isArray(pod_ids)
+        ? pod_ids
+        : String(pod_ids)
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean);
+      query.pod_id = { $in: ids };
+    }
     if (order_id) query.order_id = order_id;
     if (status) query.status = status;
 
@@ -96,13 +106,26 @@ class BookingService {
       if (end_date) query.start_time.$lte = new Date(end_date);
     }
 
-    const skip = (page - 1) * limit;
+    // If no pagination params, return all results
+    if (!page && !limit) {
+      const bookings = await Booking.find(query)
+        .sort({ created_at: -1 })
+        .populate("user", "id name email phone")
+        .populate("pod", "id name description status")
+        .populate("order", "id final_total_price status");
+      return { bookings };
+    }
+
+    // With pagination
+    const pageNum = parseInt(page) || 1;
+    const limitNum = parseInt(limit) || 20;
+    const skip = (pageNum - 1) * limitNum;
 
     const [bookings, total] = await Promise.all([
       Booking.find(query)
         .sort({ created_at: -1 })
         .skip(skip)
-        .limit(parseInt(limit))
+        .limit(limitNum)
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
         .populate("order", "id final_total_price status"),
@@ -112,10 +135,10 @@ class BookingService {
     return {
       bookings,
       pagination: {
-        current_page: parseInt(page),
-        total_pages: Math.ceil(total / limit),
+        current_page: pageNum,
+        total_pages: Math.ceil(total / limitNum),
         total_items: total,
-        items_per_page: parseInt(limit),
+        items_per_page: limitNum,
       },
     };
   }

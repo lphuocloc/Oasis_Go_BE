@@ -16,5 +16,13 @@ module.exports = {
   Transaction: require("./Transaction"),
   TimeSlot: require("./TimeSlot"),
   Item: require("./Item"),
+  Warehouse: require("./Warehouse"),
+  LocationWarehouse: require("./LocationWarehouse"),
+  InventoryStock: require("./InventoryStock"),
+  InventoryCheckoutLog: require("./InventoryCheckoutLog"),
   PodItem: require("./PodItem"),
+  StaffShift: require("./StaffShift"),
+  LocationShift: require("./LocationShift"),
+  StaffShiftAssignment: require("./StaffShiftAssignment"),
+  StaffAttendanceLog: require("./StaffAttendanceLog"),
 };
