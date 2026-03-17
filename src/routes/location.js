@@ -361,6 +361,6 @@ router.put("/:id", protect, authorize("admin"), locationController.updateLocatio
  *       500:
  *         description: Server error
  */
-router.delete("/:id", protect, authorize("admin", "manager"), locationController.deleteLocation);
+router.delete("/:id", protect, authorize("admin"), locationController.deleteLocation);
 
 module.exports = router;

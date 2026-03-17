@@ -3,6 +3,7 @@ const router = express.Router();
 const authMiddleware = require("../middlewares/authMiddleware");
 const dashboardController = require("../controllers/DashboardController");
 const { protect } = require("../middlewares/authMiddleware");
+const { loadManagerScope } = require("../middlewares/managerScopeMiddleware");
 
 /**
  * @swagger
@@ -47,6 +48,7 @@ const { protect } = require("../middlewares/authMiddleware");
  */
 router.get("/", 
     protect, 
+    loadManagerScope,
     authMiddleware.authorize("admin", "manager"), 
     dashboardController.getDashboard 
 );

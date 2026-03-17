@@ -9,10 +9,28 @@ class PodClusterService {
     /**
      * Lấy tất cả pod clusters với filters
      */
-    async getAllPodClusters({ location_id }) {
+    async getAllPodClusters({ location_id, scope_location_ids }) {
         const filter = {};
 
-        if (location_id) filter.location_id = location_id;
+        const scopedLocationIds = scope_location_ids
+            ? String(scope_location_ids)
+                .split(",")
+                .map((id) => id.trim())
+                .filter(Boolean)
+            : [];
+
+        if (scopedLocationIds.length > 0) {
+            if (location_id) {
+                if (!scopedLocationIds.includes(String(location_id))) {
+                    return [];
+                }
+                filter.location_id = location_id;
+            } else {
+                filter.location_id = { $in: scopedLocationIds };
+            }
+        } else if (location_id) {
+            filter.location_id = location_id;
+        }
 
         const podClusters = await PodCluster.find(filter)
             .populate("location")
