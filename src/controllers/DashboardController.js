@@ -74,14 +74,17 @@ const normalizeIsRejected = (value) => {
 
 exports.getDashboard = async (req, res) => {
   try {
-    const { from, to, groupBy = "day" } = req.query;
-
-    const now = new Date();
-    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
-
-    const rangeFrom = from ? new Date(from) : startOfToday;
-    const rangeTo = to ? new Date(to) : endOfToday;
+    const { from, to, groupBy = "hour" } = req.query;
+    const range = getDateRange(from, to);
+    const rangeFrom = range.from;
+    const rangeTo = range.to;
+    const isManager = req.user && req.user.role === "manager";
+    const scopedPodIds = isManager
+      ? new Set(((req.managerScope && req.managerScope.podIds) || []).map((id) => String(id)))
+      : null;
+    const scopedClusterIds = isManager
+      ? new Set(((req.managerScope && req.managerScope.clusterIds) || []).map((id) => String(id)))
+      : null;
 
     const podService = require("../services/podService");
     const bookingService = require("../services/bookingService");
@@ -89,29 +92,170 @@ exports.getDashboard = async (req, res) => {
 
     const podFilters = {};
     const bookingFilters = { start_date: rangeFrom, end_date: rangeTo };
+    if (isManager) {
+      bookingFilters.pod_ids = Array.from(scopedPodIds);
+    }
     const incidentFilters = {};
 
-    const [pods, bookingsResult, incidents] = await Promise.all([
+    const [podsRaw, bookingsResult, incidentsRaw, clustersTotalRaw] = await Promise.all([
       podService.getAllPods(podFilters),
       bookingService.getAllBookings(bookingFilters),
       incidentService.getIncidents(incidentFilters),
+      PodCluster.countDocuments({}),
     ]);
 
-    const bookings = bookingsResult.bookings;
+    const pods = isManager
+      ? podsRaw.filter((pod) => scopedPodIds.has(String(pod.id)))
+      : podsRaw;
+
+    const podMongoIdSet = new Set(pods.map((pod) => String(pod._id)).filter(Boolean));
+
+    const rawBookings = Array.isArray(bookingsResult && bookingsResult.bookings)
+      ? bookingsResult.bookings
+      : [];
+    const bookings = isManager
+      ? rawBookings.filter((booking) => scopedPodIds.has(String(booking.pod_id)))
+      : rawBookings;
+
+    const incidents = isManager
+      ? incidentsRaw.filter((incident) => {
+          const incidentPodId = incident.podId || (incident.pod && incident.pod._id) || null;
+          return incidentPodId ? podMongoIdSet.has(String(incidentPodId)) : false;
+        })
+      : incidentsRaw;
+
+    const clustersTotal = isManager
+      ? scopedClusterIds.size
+      : clustersTotalRaw;
+
+    const normalizeStatus = (status) => {
+      if (!status) return "UNKNOWN";
+      return String(status).trim().toUpperCase();
+    };
+
+    const getBookingAmount = (booking) => {
+      const raw = booking.total_price != null ? booking.total_price : booking.base_price;
+      const amount = Number(raw || 0);
+      return Number.isFinite(amount) ? amount : 0;
+    };
+
+    const bookingStatusCounts = countByField(
+      bookings.map((booking) => ({
+        ...booking,
+        status: normalizeStatus(booking.status),
+      })),
+      "status"
+    );
+    const podStatusCounts = countByField(
+      pods.map((pod) => ({
+        ...pod,
+        status: normalizeStatus(pod.status),
+      })),
+      "status"
+    );
+
+    const bookingStatusDenominator = bookings.length || 1;
+    const podStatusDenominator = pods.length || 1;
+
+    const bookingStatusRating = buildPieData(bookingStatusCounts).map((item) => ({
+      status: item.status,
+      count: item.count,
+      rate: Number(((item.count / bookingStatusDenominator) * 100).toFixed(2)),
+    }));
+    const podStatusRealtime = buildPieData(podStatusCounts).map((item) => ({
+      status: item.status,
+      count: item.count,
+      rate: Number(((item.count / podStatusDenominator) * 100).toFixed(2)),
+    }));
+
+    const nonRevenueStatuses = new Set(["CANCELLED", "FAILED", "EXPIRED"]);
+    const billableBookings = bookings.filter(
+      (booking) => !nonRevenueStatuses.has(normalizeStatus(booking.status))
+    );
+    const revenueInRange = billableBookings.reduce((sum, booking) => sum + getBookingAmount(booking), 0);
+
+    const resolvedGroupBy = ["hour", "day", "month"].includes(String(groupBy))
+      ? String(groupBy)
+      : "hour";
+    const toBucketKey = (dateValue) => {
+      const d = toDateOrNull(dateValue);
+      if (!d) return null;
+
+      const yyyy = d.getFullYear();
+      const mm = String(d.getMonth() + 1).padStart(2, "0");
+      const dd = String(d.getDate()).padStart(2, "0");
+      const hh = String(d.getHours()).padStart(2, "0");
+
+      if (resolvedGroupBy === "month") return `${yyyy}-${mm}`;
+      if (resolvedGroupBy === "day") return `${yyyy}-${mm}-${dd}`;
+      return `${yyyy}-${mm}-${dd} ${hh}:00`;
+    };
+
+    const revenueBucketMap = new Map();
+    billableBookings.forEach((booking) => {
+      const bookingTime = booking.start_time || booking.start_date || booking.createdAt;
+      const bucket = toBucketKey(bookingTime);
+      if (!bucket) return;
+      revenueBucketMap.set(bucket, (revenueBucketMap.get(bucket) || 0) + getBookingAmount(booking));
+    });
+
+    const revenueTrend = Array.from(revenueBucketMap.entries())
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([label, amount]) => ({ label, amount: Number(amount.toFixed(2)) }));
+
+    const incidentsByStatus = countByField(
+      incidents.map((incident) => ({
+        ...incident,
+        status: normalizeStatus(incident.status),
+      })),
+      "status"
+    );
+    const openIncidents = incidents.filter((incident) =>
+      OPEN_INCIDENT_STATUSES.includes(normalizeStatus(incident.status))
+    ).length;
 
     const summary = {
       podsTotal: pods.length,
+      clustersTotal,
       bookingsInRange: bookings.length,
       incidentsTotal: incidents.length,
+      openIncidents,
+      revenueInRange: Number(revenueInRange.toFixed(2)),
     };
 
     return res.status(200).json({
       success: true,
       data: {
         summary,
-        pods: { list: pods },
-        bookings: { from: rangeFrom, to: rangeTo, list: bookings },
-        incidents: { list: incidents },
+        ratings: {
+          bookingStatus: bookingStatusRating,
+          podStatusRealtime,
+        },
+        charts: {
+          bookingStatus: bookingStatusRating,
+          podStatusRealtime,
+          revenueTrend: {
+            groupBy: resolvedGroupBy,
+            points: revenueTrend,
+          },
+        },
+        pods: {
+          list: pods,
+          statusSummary: podStatusRealtime,
+        },
+        bookings: {
+          from: rangeFrom,
+          to: rangeTo,
+          list: bookings,
+          statusSummary: bookingStatusRating,
+          revenue: {
+            total: Number(revenueInRange.toFixed(2)),
+          },
+        },
+        incidents: {
+          list: incidents,
+          byStatus: buildPieData(incidentsByStatus),
+        },
       },
     });
   } catch (error) {

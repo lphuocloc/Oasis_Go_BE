@@ -75,6 +75,7 @@ class BookingService {
     const {
       user_id,
       pod_id,
+      pod_ids,
       order_id,
       status,
       start_date,
@@ -87,6 +88,15 @@ class BookingService {
 
     if (user_id) query.user_id = user_id;
     if (pod_id) query.pod_id = pod_id;
+    if (pod_ids) {
+      const ids = Array.isArray(pod_ids)
+        ? pod_ids
+        : String(pod_ids)
+            .split(",")
+            .map((id) => id.trim())
+            .filter(Boolean);
+      query.pod_id = { $in: ids };
+    }
     if (order_id) query.order_id = order_id;
     if (status) query.status = status;
 
