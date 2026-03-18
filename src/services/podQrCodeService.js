@@ -1,10 +1,77 @@
 const { randomBytes } = require("crypto");
 const PodQrCode = require("../models/PodQrCode");
 const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
 
 const createToken = () => randomBytes(16).toString("hex");
 
 class PodQrCodeService {
+  async generateQrCodesByPodCluster(clusterId, options = {}) {
+    if (!clusterId) {
+      const error = new Error("cluster_id is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const cluster = await PodCluster.findOne({ id: clusterId });
+    if (!cluster) {
+      const error = new Error("Pod cluster not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const pods = await Pod.find({ cluster_id: clusterId }).sort({ code: 1, createdAt: 1 });
+    if (pods.length === 0) {
+      const error = new Error("No pods found in this cluster");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const now = Date.now();
+    const fallbackExpiresAt = new Date(now + 30 * 60 * 1000);
+    const expiresAt = options.expires_at ? new Date(options.expires_at) : fallbackExpiresAt;
+
+    if (Number.isNaN(expiresAt.getTime())) {
+      const error = new Error("expires_at is invalid");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (expiresAt.getTime() <= now) {
+      const error = new Error("expires_at must be in the future");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const isActive = options.is_active !== undefined ? options.is_active : true;
+    const deactivateExisting = options.deactivate_existing !== false;
+    const podIds = pods.map((pod) => pod.id);
+
+    if (isActive && deactivateExisting) {
+      await PodQrCode.updateMany({ pod_id: { $in: podIds }, is_active: true }, { $set: { is_active: false } });
+    }
+
+    const docsToCreate = pods.map((pod) => ({
+      pod_id: pod.id,
+      qr_token: `${pod.code}-${createToken()}`.toUpperCase(),
+      expires_at: expiresAt,
+      is_active: isActive,
+    }));
+
+    const createdQrCodes = await PodQrCode.insertMany(docsToCreate, { ordered: true });
+
+    return {
+      cluster_id: cluster.id,
+      cluster_name: cluster.name,
+      total_pods: pods.length,
+      created_count: createdQrCodes.length,
+      expires_at: expiresAt,
+      is_active: isActive,
+      deactivate_existing: deactivateExisting,
+      created_qr_codes: createdQrCodes,
+    };
+  }
+
   async createQrCode(data) {
     const { pod_id, qr_token, expires_at, is_active } = data;
 
