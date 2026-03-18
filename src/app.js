@@ -41,6 +41,7 @@ const inventoryStockRouter = require("./routes/inventoryStock");
 const inventoryCheckoutLogRouter = require("./routes/inventoryCheckoutLog");
 const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
+const staffWorkRosterRouter = require("./routes/staffWorkRoster");
 const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const app = express();
 
@@ -75,6 +76,7 @@ app.use("/api/inventory-stocks", inventoryStockRouter);
 app.use("/api/inventory-checkout-logs", inventoryCheckoutLogRouter);
 app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
+app.use("/api/staff-work-rosters", staffWorkRosterRouter);
 app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);

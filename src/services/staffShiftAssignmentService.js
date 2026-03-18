@@ -3,10 +3,36 @@ const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const Location = require("../models/Location");
 const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
 class StaffShiftAssignmentService {
+  getStartOfWeek(weekStartDateInput) {
+    if (!weekStartDateInput) {
+      const error = new Error("week_start_date is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const parsed = new Date(weekStartDateInput);
+    if (Number.isNaN(parsed.getTime())) {
+      const error = new Error("week_start_date must be a valid date (YYYY-MM-DD)");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const startOfWeek = new Date(parsed);
+    startOfWeek.setHours(0, 0, 0, 0);
+    if (startOfWeek.getDay() !== 0) {
+      const error = new Error("week_start_date must be Sunday (day 0)");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    return startOfWeek;
+  }
+
   async assignManager({ staff_id, parent_location_id, shift_id, work_date }) {
     if (!staff_id || !parent_location_id || !work_date) {
       const error = new Error("staff_id, parent_location_id and work_date are required");
@@ -47,6 +73,10 @@ class StaffShiftAssignmentService {
     const normalizedWorkDate = new Date(date);
     normalizedWorkDate.setHours(0, 0, 0, 0);
 
+    const startOfWeek = new Date(normalizedWorkDate);
+    startOfWeek.setDate(normalizedWorkDate.getDate() - normalizedWorkDate.getDay());
+    startOfWeek.setHours(0, 0, 0, 0);
+
     const locationShiftQuery = {
       location_id: parent_location_id,
     };
@@ -84,27 +114,82 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    const existingAssignments = await StaffShiftAssignment.find({
+    const rosters = await StaffWorkRoster.find({
       staff_id,
       location_shift_id: { $in: targetLocationShiftIds },
-      work_date: normalizedWorkDate,
-    }).lean();
+      is_active: true,
+    })
+      .sort({ day_of_week: 1, created_at: 1 })
+      .lean();
 
-    const existingByLocationShift = new Set(existingAssignments.map((item) => item.location_shift_id));
+    if (rosters.length === 0) {
+      const error = new Error("No active roster found for this manager in selected location/shift scope");
+      error.statusCode = 400;
+      throw error;
+    }
 
-    const assignmentsToCreate = scopedLocationShifts
-      .filter((item) => !existingByLocationShift.has(item.id))
-      .filter((item) => !nonManagerLocationShiftIds.includes(item.id))
-      .map((item) => ({
-        staff_id,
-        location_shift_id: item.id,
-        work_date: normalizedWorkDate,
-        status: "ASSIGNED",
-      }));
+    const scopedById = new Map(scopedLocationShifts.map((item) => [item.id, item]));
+    const assignmentsToCreate = rosters
+      .map((roster) => {
+        const scopedLocationShift = scopedById.get(roster.location_shift_id);
+        if (!scopedLocationShift) {
+          return null;
+        }
+
+        const workDate = new Date(startOfWeek);
+        workDate.setDate(startOfWeek.getDate() + Number(roster.day_of_week));
+        workDate.setHours(0, 0, 0, 0);
+
+        return {
+          staff_id,
+          location_shift_id: roster.location_shift_id,
+          work_date: workDate,
+          status: "ASSIGNED",
+        };
+      })
+      .filter(Boolean);
+
+    if (assignmentsToCreate.length === 0) {
+      const error = new Error("No valid roster entries found in selected location/shift scope");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const existingAssignments = await StaffShiftAssignment.find({
+      $or: assignmentsToCreate.map((assignment) => ({
+        staff_id: assignment.staff_id,
+        location_shift_id: assignment.location_shift_id,
+        work_date: assignment.work_date,
+      })),
+    })
+      .select("staff_id location_shift_id work_date")
+      .lean();
+
+    const existingKeys = new Set(
+      existingAssignments.map(
+        (item) => `${item.staff_id}|${item.location_shift_id}|${new Date(item.work_date).toISOString()}`
+      )
+    );
+
+    const dedupedAssignments = [];
+    const seenKeys = new Set();
+    assignmentsToCreate.forEach((assignment) => {
+      const key =
+        `${assignment.staff_id}|${assignment.location_shift_id}|${assignment.work_date.toISOString()}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        dedupedAssignments.push(assignment);
+      }
+    });
+
+    const newAssignments = dedupedAssignments.filter((assignment) => {
+      const key = `${assignment.staff_id}|${assignment.location_shift_id}|${assignment.work_date.toISOString()}`;
+      return !existingKeys.has(key);
+    });
 
     let createdAssignments = [];
-    if (assignmentsToCreate.length > 0) {
-      createdAssignments = await StaffShiftAssignment.insertMany(assignmentsToCreate, {
+    if (newAssignments.length > 0) {
+      createdAssignments = await StaffShiftAssignment.insertMany(newAssignments, {
         ordered: false,
       });
     }
@@ -113,13 +198,136 @@ class StaffShiftAssignmentService {
       parent_location_id,
       shift_id: shift_id || null,
       staff_id,
-      work_date: normalizedWorkDate,
+      week_start_date: startOfWeek,
       total_target_locations: 1,
       total_location_shifts_found: scopedLocationShifts.length,
+      roster_count: rosters.length,
       assigned_count: createdAssignments.length,
-      skipped_existing_count: existingAssignments.length,
+      skipped_existing_count: dedupedAssignments.length - createdAssignments.length,
       non_manager_location_shift_ids: nonManagerLocationShiftIds,
       assigned_location_shift_ids: createdAssignments.map((item) => item.location_shift_id),
+    };
+  }
+
+  async generateWeeklyAssignmentsFromRoster({ staff_id, week_start_date }) {
+    if (!staff_id) {
+      const error = new Error("staff_id is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const staff = await this.findUserById(staff_id);
+    if (!staff) {
+      const error = new Error("Staff not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const startOfWeek = this.getStartOfWeek(week_start_date);
+
+    const rosters = await StaffWorkRoster.find({ staff_id, is_active: true })
+      .sort({ day_of_week: 1, created_at: 1 })
+      .lean();
+
+    if (rosters.length === 0) {
+      const error = new Error("No active roster found for this staff");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const rosterLocationShiftIds = [...new Set(rosters.map((item) => item.location_shift_id))];
+    const locationShifts = await LocationShift.find({ id: { $in: rosterLocationShiftIds } }).lean();
+    const locationShiftMap = new Map(locationShifts.map((item) => [item.id, item]));
+
+    const shiftIds = [...new Set(locationShifts.map((item) => item.shift_id))];
+    const shifts = await StaffShift.find({ id: { $in: shiftIds } }).lean();
+    const shiftMap = new Map(shifts.map((item) => [item.id, item]));
+
+    const assignmentsToCreate = rosters
+      .map((roster) => {
+        const locationShift = locationShiftMap.get(roster.location_shift_id);
+        if (!locationShift) {
+          return null;
+        }
+
+        const workDate = new Date(startOfWeek);
+        workDate.setDate(startOfWeek.getDate() + Number(roster.day_of_week));
+        workDate.setHours(0, 0, 0, 0);
+
+        return {
+          staff_id,
+          location_shift_id: roster.location_shift_id,
+          work_date: workDate,
+          status: "ASSIGNED",
+        };
+      })
+      .filter(Boolean);
+
+    if (assignmentsToCreate.length === 0) {
+      const error = new Error("No valid location_shift found from roster");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const existingAssignments = await StaffShiftAssignment.find({
+      $or: assignmentsToCreate.map((assignment) => ({
+        staff_id: assignment.staff_id,
+        location_shift_id: assignment.location_shift_id,
+        work_date: assignment.work_date,
+      })),
+    })
+      .select("staff_id location_shift_id work_date")
+      .lean();
+
+    const existingKeys = new Set(
+      existingAssignments.map(
+        (item) => `${item.staff_id}|${item.location_shift_id}|${new Date(item.work_date).toISOString()}`
+      )
+    );
+
+    const dedupedAssignments = [];
+    const seenKeys = new Set();
+    assignmentsToCreate.forEach((assignment) => {
+      const key =
+        `${assignment.staff_id}|${assignment.location_shift_id}|${assignment.work_date.toISOString()}`;
+      if (!seenKeys.has(key)) {
+        seenKeys.add(key);
+        dedupedAssignments.push(assignment);
+      }
+    });
+
+    const newAssignments = dedupedAssignments.filter((assignment) => {
+      const key = `${assignment.staff_id}|${assignment.location_shift_id}|${assignment.work_date.toISOString()}`;
+      return !existingKeys.has(key);
+    });
+
+    let createdAssignments = [];
+    if (newAssignments.length > 0) {
+      createdAssignments = await StaffShiftAssignment.insertMany(newAssignments, { ordered: false });
+    }
+
+    const createdWithShiftTime = createdAssignments.map((assignment) => {
+      const locationShift = locationShiftMap.get(assignment.location_shift_id) || null;
+      const shift = locationShift ? shiftMap.get(locationShift.shift_id) || null : null;
+
+      return {
+        id: assignment.id,
+        staff_id: assignment.staff_id,
+        location_shift_id: assignment.location_shift_id,
+        work_date: assignment.work_date,
+        status: assignment.status,
+        shift_start_time: shift ? shift.start_time : null,
+        shift_end_time: shift ? shift.end_time : null,
+      };
+    });
+
+    return {
+      staff_id,
+      week_start_date: startOfWeek,
+      roster_count: rosters.length,
+      created_count: createdAssignments.length,
+      skipped_existing_count: dedupedAssignments.length - createdAssignments.length,
+      assignments: createdWithShiftTime,
     };
   }
 
@@ -175,7 +383,17 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    assignment.checkin_at = new Date();
+    const existingCheckinLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKIN",
+    }).select("id").lean();
+
+    if (existingCheckinLog) {
+      const error = new Error("You have already checked in");
+      error.statusCode = 400;
+      throw error;
+    }
+
     assignment.status = "CHECKED_IN";
     await assignment.save();
 
@@ -213,13 +431,29 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    if (!assignment.checkin_at || assignment.status !== "CHECKED_IN") {
+    if (assignment.status !== "CHECKED_IN") {
       const error = new Error("You must check in before check out");
       error.statusCode = 400;
       throw error;
     }
 
-    if (assignment.checkout_at) {
+    const existingCheckinLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKIN",
+    }).select("id").lean();
+
+    if (!existingCheckinLog) {
+      const error = new Error("You must check in before check out");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const existingCheckoutLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKOUT",
+    }).select("id").lean();
+
+    if (existingCheckoutLog) {
       const error = new Error("You have already checked out");
       error.statusCode = 400;
       throw error;

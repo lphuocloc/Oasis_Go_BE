@@ -23,6 +23,7 @@ module.exports = {
   PodItem: require("./PodItem"),
   StaffShift: require("./StaffShift"),
   LocationShift: require("./LocationShift"),
+  StaffWorkRoster: require("./StaffWorkRoster"),
   StaffShiftAssignment: require("./StaffShiftAssignment"),
   StaffAttendanceLog: require("./StaffAttendanceLog"),
 };

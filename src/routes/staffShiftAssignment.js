@@ -28,7 +28,7 @@ const staffShiftAssignmentController = require("../controllers/staffShiftAssignm
  * @swagger
  * /api/staff-shift-assignments/admin/assign-manager:
  *   post:
- *     summary: Admin assigns manager to shifts configured on the parent location
+ *     summary: Admin generates weekly manager assignments from active roster in scoped location/shift
  *     tags: [Staff Shift Assignments]
  *     security:
  *       - bearerAuth: []
@@ -48,22 +48,23 @@ const staffShiftAssignmentController = require("../controllers/staffShiftAssignm
  *                 description: Manager user id
  *               parent_location_id:
  *                 type: string
- *                 description: Parent location id to assign manager directly
+ *                 description: Parent location id used to scope location_shift
  *               shift_id:
  *                 type: string
- *                 description: Optional filter for a specific staff shift id
+ *                 description: Optional staff shift id filter inside location scope
  *               work_date:
  *                 type: string
  *                 format: date
+ *                 description: Any date in target week; system will auto-calculate week_start_date (Sunday)
  *           example:
  *             staff_id: 3128f3f2-6c4f-4f3d-a6c8-df1b2d6ef734
  *             parent_location_id: 8f2ce391-f69c-4f5f-a65e-fd35f0c4ef10
  *             work_date: 2026-03-17
  *     responses:
  *       201:
- *         description: Assignment created successfully
+ *         description: Weekly assignments generated successfully from manager roster
  *       400:
- *         description: Invalid input or no location_shift available on parent location
+ *         description: Invalid input, no valid manager location_shift, or no active roster in scope
  *       404:
  *         description: Staff, shift, or parent location not found
  */
@@ -76,9 +77,52 @@ router.post(
 
 /**
  * @swagger
+ * /api/staff-shift-assignments/admin/generate-weekly-from-roster:
+ *   post:
+ *     summary: Generate one-week shift assignments from active staff roster
+ *     tags: [Staff Shift Assignments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - staff_id
+ *               - week_start_date
+ *             properties:
+ *               staff_id:
+ *                 type: string
+ *                 description: Staff user id
+ *               week_start_date:
+ *                 type: string
+ *                 format: date
+ *                 description: Sunday date of target week (day 0)
+ *           example:
+ *             staff_id: 3128f3f2-6c4f-4f3d-a6c8-df1b2d6ef734
+ *             week_start_date: 2026-03-22
+ *     responses:
+ *       201:
+ *         description: Weekly assignments generated successfully
+ *       400:
+ *         description: Invalid request or roster not found
+ *       404:
+ *         description: Staff not found
+ */
+router.post(
+  "/admin/generate-weekly-from-roster",
+  protect,
+  authorize("admin"),
+  staffShiftAssignmentController.generateWeeklyAssignmentsFromRoster
+);
+
+/**
+ * @swagger
  * /api/staff-shift-assignments/checkin:
  *   post:
- *     summary: Staff/Cleaner check in for assigned shift assignment
+ *     summary: Staff/Cleaner check in for assigned shift assignment (create CHECKIN log)
  *     tags: [Staff Shift Assignments]
  *     security:
  *       - bearerAuth: []
@@ -95,7 +139,7 @@ router.post(
  *                 type: string
  *     responses:
  *       200:
- *         description: Check-in successful
+ *         description: Check-in successful and CHECKIN attendance log created
  *       400:
  *         description: Invalid check-in request
  *       403:
@@ -114,7 +158,7 @@ router.post(
  * @swagger
  * /api/staff-shift-assignments/checkout:
  *   post:
- *     summary: Staff/Cleaner check out for assigned shift assignment
+ *     summary: Staff/Cleaner check out for assigned shift assignment (requires CHECKIN log)
  *     tags: [Staff Shift Assignments]
  *     security:
  *       - bearerAuth: []
@@ -126,7 +170,7 @@ router.post(
  *             $ref: '#/components/schemas/StaffShiftActionRequest'
  *     responses:
  *       200:
- *         description: Check-out successful
+ *         description: Check-out successful and CHECKOUT attendance log created
  *       400:
  *         description: Invalid check-out request
  *       403:

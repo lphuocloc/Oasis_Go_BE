@@ -22,6 +22,26 @@ const assignManager = async (req, res) => {
   }
 };
 
+const generateWeeklyAssignmentsFromRoster = async (req, res) => {
+  try {
+    const result = await staffShiftAssignmentService.generateWeeklyAssignmentsFromRoster({
+      staff_id: req.body.staff_id,
+      week_start_date: req.body.week_start_date,
+    });
+
+    res.status(201).json({
+      success: true,
+      message: "Weekly assignments generated from roster successfully",
+      data: result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to generate assignments from roster",
+    });
+  }
+};
+
 const checkinWork = async (req, res) => {
   try {
     const result = await staffShiftAssignmentService.checkinWork({
@@ -64,6 +84,7 @@ const checkoutWork = async (req, res) => {
 
 module.exports = {
   assignManager,
+  generateWeeklyAssignmentsFromRoster,
   checkinWork,
   checkoutWork,
 };
