@@ -94,8 +94,6 @@ const { uploadPodClusterImage } = require("../config/cloudinary");
  */
 router.get(
 	"/",
-	protect,
-	authorize("admin", "manager", "user"),
 	loadManagerScope,
 	applyManagerLocationScope,
 	podClusterController.getAllPodClusters

@@ -6,8 +6,8 @@ const { protect } = require("../middlewares/authMiddleware");
  * @swagger
  * /api/identity/update-cccd:
  *   post:
- *     summary: Cập nhật hoặc tạo mới thông tin định danh (CCCD)
- *     description: API thực hiện "Upsert" - Nếu User chưa có CCCD sẽ tạo mới, nếu có rồi sẽ ghi đè thông tin mới từ mã QR.
+ *     summary: Create or update identity information (Citizen ID)
+ *     description: Upsert identity data. If the user has no identity record, create one; otherwise overwrite with new QR data.
  *     tags:
  *       - Identity
  *     security:
@@ -24,7 +24,7 @@ const { protect } = require("../middlewares/authMiddleware");
  *             properties:
  *               qrCode:
  *                 type: string
- *                 description: Chuỗi raw quét từ QR Code
+ *                 description: Raw string scanned from QR Code
  *                 example: "036095000123|Nguyễn Văn A|01011995|Nam|Hà Nội"
  *               infor:
  *                 type: object
@@ -48,7 +48,7 @@ const { protect } = require("../middlewares/authMiddleware");
  *                     example: "Hà Nội"
  *     responses:
  *       200:
- *         description: Xác thực thành công
+ *         description: Identity verification successful
  *         content:
  *           application/json:
  *             schema:
@@ -59,7 +59,7 @@ const { protect } = require("../middlewares/authMiddleware");
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: "Xác thực danh tính thành công!"
+ *                   example: "Identity verification successful!"
  *                 data:
  *                   type: object
  *                   properties:
@@ -78,11 +78,11 @@ const { protect } = require("../middlewares/authMiddleware");
  *                       type: string
  *                       format: date-time
  *       400:
- *         description: Dữ liệu không hợp lệ hoặc CCCD đã được sử dụng
+ *         description: Invalid data or Citizen ID already in use
  *       401:
- *         description: Unauthorized - Token không hợp lệ hoặc hết hạn
+ *         description: Unauthorized - Invalid or expired token
  *       500:
- *         description: Server Error - Lỗi hệ thống
+ *         description: Server error
  */
 router.post("/update-cccd", protect, identityController.updateIdentityFromQR);
 
@@ -90,15 +90,15 @@ router.post("/update-cccd", protect, identityController.updateIdentityFromQR);
  * @swagger
  * /api/identity/reset-identity:
  *   delete:
- *     summary: Reset thông tin định danh (CCCD)
- *     description: Xóa bản ghi IdentityCard của người dùng hiện tại và gỡ liên kết identityCard trong bảng User.
+ *     summary: Reset identity information
+ *     description: Delete current user's IdentityCard record and unlink identityCard from User document.
  *     tags:
  *       - Identity
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Reset định danh thành công
+ *         description: Identity reset successfully
  *         content:
  *           application/json:
  *             schema:
@@ -109,9 +109,9 @@ router.post("/update-cccd", protect, identityController.updateIdentityFromQR);
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: "Đã reset định danh thành công. Bạn có thể thực hiện định danh mới."
+ *                   example: "Identity reset successfully. You can verify a new identity now."
  *       404:
- *         description: Không tìm thấy thông tin định danh để xóa
+ *         description: Identity information not found to delete
  *         content:
  *           application/json:
  *             schema:
@@ -122,25 +122,25 @@ router.post("/update-cccd", protect, identityController.updateIdentityFromQR);
  *                   example: false
  *                 message:
  *                   type: string
- *                   example: "Không tìm thấy thông tin định danh để reset."
+ *                   example: "No identity information found to reset."
  *       401:
- *         description: Unauthorized - Chưa đăng nhập hoặc token hết hạn
+ *         description: Unauthorized - Not logged in or token expired
  *       500:
- *         description: Lỗi hệ thống khi xử lý
+ *         description: Internal server error
  */
 router.delete("/reset-identity", protect, identityController.resetIdentity);
 /**
  * @swagger
  * /api/identity/me:
  *   get:
- *     summary: Lấy thông tin định danh chi tiết của người dùng hiện tại
+ *     summary: Get current user's detailed identity information
  *     tags:
  *       - Identity
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: Lấy dữ liệu thành công
+ *         description: Data retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -168,13 +168,13 @@ router.delete("/reset-identity", protect, identityController.resetIdentity);
  *                       type: string
  *                       example: "123 Đường ABC, Phường X, Quận Y, TP. Hồ Chí Minh"
  *       401:
- *         description: Chưa xác thực (Token không hợp lệ hoặc hết hạn)
+ *         description: Unauthorized (invalid or expired token)
  *         content:
  *           application/json:
  *             schema:
  *               $ref: '#/components/schemas/ErrorResponse'
  *       404:
- *         description: Người dùng chưa thực hiện định danh
+ *         description: User has not completed identity verification
  *         content:
  *           application/json:
  *             schema:
@@ -185,9 +185,9 @@ router.delete("/reset-identity", protect, identityController.resetIdentity);
  *                   example: false
  *                 message:
  *                   type: string
- *                   example: "Người dùng chưa thực hiện xác thực danh tính."
+ *                   example: "User has not completed identity verification."
  *       500:
- *         description: Lỗi hệ thống
+ *         description: Internal server error
  *         content:
  *           application/json:
  *             schema:
