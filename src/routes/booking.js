@@ -171,6 +171,45 @@ router.post("/", protect, bookingController.createBooking);
 
 /**
  * @swagger
+ * /api/bookings/checkin:
+ *   post:
+ *     summary: Checkin booking using qr_token and key_token
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - qr_token
+ *               - key_token
+ *             properties:
+ *               qr_token:
+ *                 type: string
+ *               key_token:
+ *                 type: string
+ *                 description: Customer key token
+ *     responses:
+ *       200:
+ *         description: Checkin successful
+ *       400:
+ *         description: Invalid request or booking status
+ *       401:
+ *         description: Invalid key token
+ *       403:
+ *         description: QR expired, wrong user key, or checkin not allowed
+ *       404:
+ *         description: QR or booking not found
+ *       429:
+ *         description: Too many invalid attempts, cooldown is active
+ */
+router.post("/checkin", protect, bookingController.checkinWithQrAndKey);
+
+/**
+ * @swagger
  * /api/bookings/check-availability/{podId}:
  *   get:
  *     summary: Check pod availability for time range
@@ -383,6 +422,38 @@ router.post("/:id/start", protect, bookingController.startUsing);
  *         description: Booking completed
  */
 router.post("/:id/complete", protect, bookingController.completeBooking);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/cleaner-access:
+ *   post:
+ *     summary: Enable or disable cleaner access confirmation for booking
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - allowed
+ *             properties:
+ *               allowed:
+ *                 type: boolean
+ *                 example: true
+ *     responses:
+ *       200:
+ *         description: Cleaner access flag updated
+ */
+router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFlag);
 
 /**
  * @swagger

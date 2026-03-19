@@ -734,6 +734,114 @@ class BookingOrderService {
     }
 
     /**
+     * Checkout bookings in an order with partial success handling
+     * @param {String} orderId - Booking order ID
+     * @param {Object} actor - Authenticated user
+     * @param {Object} options - Checkout options
+     * @returns {Promise<Object>} Checkout summary
+     */
+    async checkoutOrder(orderId, actor, options = {}) {
+        const order = await BookingOrder.findOne({ id: orderId });
+        if (!order) {
+            const error = new Error("Booking order not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const actorId = String(actor?._id || actor?.id || "");
+        const isOwner = actorId && actorId === String(order.user_id);
+        if (!isOwner) {
+            const error = new Error("Only order owner can checkout this booking order");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const scope = String(options.scope || "ALL_IN_ORDER").toUpperCase();
+        if (!["ALL_IN_ORDER", "SELECTED_BOOKINGS"].includes(scope)) {
+            const error = new Error("scope must be ALL_IN_ORDER or SELECTED_BOOKINGS");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        let selectedBookingIds = [];
+        if (scope === "SELECTED_BOOKINGS") {
+            const bookingIdsFromList = Array.isArray(options.booking_ids)
+                ? options.booking_ids
+                : [];
+            const bookingIdSingle = options.booking_id ? [options.booking_id] : [];
+
+            const mergedBookingIds = [...bookingIdsFromList, ...bookingIdSingle]
+                .map((id) => String(id).trim())
+                .filter(Boolean);
+
+            if (mergedBookingIds.length === 0) {
+                const error = new Error("booking_ids is required when scope is SELECTED_BOOKINGS");
+                error.statusCode = 400;
+                throw error;
+            }
+
+            selectedBookingIds = [...new Set(mergedBookingIds)];
+        }
+
+        const bookingQuery = { order_id: orderId };
+        if (scope === "SELECTED_BOOKINGS") {
+            bookingQuery.id = { $in: selectedBookingIds };
+        }
+
+        const bookings = await Booking.find(bookingQuery).sort({ createdAt: 1 });
+        if (bookings.length === 0) {
+            const error = new Error("No bookings found for checkout");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const requestedAt = new Date();
+
+        const checked_out = [];
+        const skipped = [];
+
+        for (const booking of bookings) {
+            if (booking.status === "COMPLETED") {
+                skipped.push({ id: booking.id, reason: "ALREADY_COMPLETED" });
+                continue;
+            }
+
+            if (booking.status === "CANCELLED") {
+                skipped.push({ id: booking.id, reason: "CANCELLED" });
+                continue;
+            }
+
+            if (booking.status !== "IN_USE") {
+                skipped.push({ id: booking.id, reason: "NOT_IN_USE" });
+                continue;
+            }
+
+            booking.status = "COMPLETED";
+            booking.actual_end_time = requestedAt;
+            booking.cleaner_access_allowed = true;
+            booking.cleaner_access_updated_at = new Date();
+            await booking.save();
+
+            checked_out.push({
+                id: booking.id,
+                pod_id: booking.pod_id,
+                status: booking.status,
+                actual_end_time: booking.actual_end_time,
+            });
+        }
+
+        return {
+            order_id: order.id,
+            scope,
+            total_bookings: bookings.length,
+            checked_out_count: checked_out.length,
+            skipped_count: skipped.length,
+            checked_out,
+            skipped,
+        };
+    }
+
+    /**
      * Cleanup expired PENDING orders
      * Orders that have been PENDING for more than HOLD_EXPIRATION_MINUTES are cancelled
      * @returns {Promise<Object>} Cleanup result

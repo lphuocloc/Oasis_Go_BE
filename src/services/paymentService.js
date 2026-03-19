@@ -1,8 +1,89 @@
 const vnpayService = require("../utils/vnpayService");
 const Transaction = require("../models/Transaction");
 const BookingOrder = require("../models/BookingOrder");
+const Booking = require("../models/Bookings");
+const OnlineKey = require("../models/OnlineKey");
+const { randomInt } = require("crypto");
 
 class PaymentService {
+    async _generateOnlineKeyToken() {
+        const MAX_RETRY = 10;
+
+        for (let attempt = 0; attempt < MAX_RETRY; attempt += 1) {
+            const token = String(randomInt(0, 1000000)).padStart(6, "0");
+            const exists = await OnlineKey.exists({ key_token: token, is_revoked: false });
+            if (!exists) {
+                return token;
+            }
+        }
+
+        const error = new Error("Unable to generate unique online key token");
+        error.statusCode = 500;
+        throw error;
+    }
+
+    async _ensureOnlineKeysForOrder(orderId) {
+        const REQUIRED_KEY_TYPES = ["CUSTOMER", "CLEANER"];
+        const bookings = await Booking.find({
+            order_id: orderId,
+            status: { $in: ["BOOKED", "IN_USE", "COMPLETED"] },
+        })
+            .select("id pod_id user_id start_time end_time")
+            .lean();
+
+        if (bookings.length === 0) {
+            return { created: 0, totalBookings: 0 };
+        }
+
+        const bookingIds = bookings.map((booking) => booking.id);
+        const existingKeys = await OnlineKey.find({
+            booking_id: { $in: bookingIds },
+            key_type: { $in: REQUIRED_KEY_TYPES },
+        })
+            .select("booking_id key_type")
+            .lean();
+
+        const existingKeyByBookingAndType = new Set(
+            existingKeys.map((key) => `${key.booking_id}:${key.key_type}`)
+        );
+        const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+        const CLEANER_EXTRA_MINUTES_MS = 30 * 60 * 1000;
+
+        const docsToCreate = [];
+        for (const booking of bookings) {
+            for (const keyType of REQUIRED_KEY_TYPES) {
+                const dedupeKey = `${booking.id}:${keyType}`;
+                if (existingKeyByBookingAndType.has(dedupeKey)) {
+                    continue;
+                }
+
+                docsToCreate.push({
+                    booking_id: booking.id,
+                    pod_id: booking.pod_id,
+                    user_id: String(booking.user_id),
+                    key_type: keyType,
+                    key_token: await this._generateOnlineKeyToken(),
+                    valid_from:
+                        keyType === "CLEANER"
+                            ? new Date(booking.start_time)
+                            : new Date(new Date(booking.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS),
+                    valid_to:
+                        keyType === "CLEANER"
+                            ? new Date(new Date(booking.end_time).getTime() + CLEANER_EXTRA_MINUTES_MS)
+                            : new Date(booking.end_time),
+                    is_revoked: false,
+                });
+            }
+        }
+
+        if (docsToCreate.length === 0) {
+            return { created: 0, totalBookings: bookings.length };
+        }
+
+        await OnlineKey.insertMany(docsToCreate, { ordered: false });
+        return { created: docsToCreate.length, totalBookings: bookings.length };
+    }
+
     /**
      * Tạo payment và generate VNPay URL
      */
@@ -144,6 +225,10 @@ class PaymentService {
         }
 
         if (transaction.status !== "PENDING") {
+            if (responseCode === "00" && transaction.status === "SUCCESS") {
+                await this._ensureOnlineKeysForOrder(orderId);
+            }
+
             return {
                 code: responseCode,
                 message: "Transaction already processed",
@@ -174,6 +259,8 @@ class PaymentService {
                 { id: orderId, status: "PENDING" },
                 { $set: { status: "PAID" } },
             );
+
+            await this._ensureOnlineKeysForOrder(orderId);
         }
 
         console.log(`Transaction ${orderId} updated to ${newStatus}:`, {

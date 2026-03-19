@@ -4,8 +4,71 @@ const Pod = require("../models/Pod");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
+const OnlineKey = require("../models/OnlineKey");
+const PodQrCode = require("../models/PodQrCode");
 
 class BookingService {
+  _getAllowedKeyTypesByRole(viewerRole = null) {
+    const normalizedRole = String(viewerRole || "").toLowerCase();
+
+    if (normalizedRole === "user") {
+      return ["CUSTOMER"];
+    }
+
+    if (normalizedRole === "cleaner") {
+      return ["CLEANER"];
+    }
+
+    return null;
+  }
+
+  _mapKeyRole(keyType = "") {
+    const normalized = String(keyType).toUpperCase();
+    if (normalized === "CUSTOMER") return "customer";
+    if (normalized === "CLEANER") return "cleaner";
+    return "manager";
+  }
+
+  async _attachOnlineKeys(bookings = [], viewerRole = null) {
+    if (!Array.isArray(bookings) || bookings.length === 0) {
+      return bookings;
+    }
+
+    const bookingIds = [...new Set(bookings.map((booking) => String(booking.id)).filter(Boolean))];
+    if (bookingIds.length === 0) {
+      return bookings;
+    }
+
+    const allowedKeyTypes = this._getAllowedKeyTypesByRole(viewerRole);
+    const keyQuery = { booking_id: { $in: bookingIds } };
+    if (allowedKeyTypes) {
+      keyQuery.key_type = { $in: allowedKeyTypes };
+    }
+
+    const onlineKeys = await OnlineKey.find(keyQuery)
+      .sort({ createdAt: -1 })
+      .select("id booking_id key_type key_token valid_from valid_to is_revoked");
+
+    const keyMap = onlineKeys.reduce((map, key) => {
+      const bookingId = String(key.booking_id);
+      if (!map[bookingId]) map[bookingId] = [];
+      const keyData = typeof key.toObject === "function" ? key.toObject() : key;
+      map[bookingId].push({
+        ...keyData,
+        role: this._mapKeyRole(keyData.key_type),
+      });
+      return map;
+    }, {});
+
+    return bookings.map((booking) => {
+      const plainBooking = typeof booking.toObject === "function" ? booking.toObject() : booking;
+      return {
+        ...plainBooking,
+        online_keys: keyMap[String(plainBooking.id)] || [],
+      };
+    });
+  }
+
   /**
    * Create a new booking
    * @param {Object} bookingData - Booking data
@@ -29,7 +92,7 @@ class BookingService {
     }
 
     // Validate user exists
-    const user = await User.findOne({ id: user_id });
+    const user = await User.findById(user_id);
     if (!user) {
       throw new Error("User not found");
     }
@@ -92,9 +155,9 @@ class BookingService {
       const ids = Array.isArray(pod_ids)
         ? pod_ids
         : String(pod_ids)
-            .split(",")
-            .map((id) => id.trim())
-            .filter(Boolean);
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean);
       query.pod_id = { $in: ids };
     }
     if (order_id) query.order_id = order_id;
@@ -167,8 +230,9 @@ class BookingService {
    * @param {String} status - Optional status filter
    * @returns {Promise<Array>} User's bookings
    */
-  async getBookingsByUser(userId, status = null) {
-    return await Booking.getByUser(userId, status);
+  async getBookingsByUser(userId, status = null, viewerRole = null) {
+    const bookings = await Booking.getByUser(userId, status);
+    return await this._attachOnlineKeys(bookings, viewerRole);
   }
 
   /**
@@ -186,8 +250,9 @@ class BookingService {
    * @param {String} orderId - Order ID
    * @returns {Promise<Array>} Order's bookings
    */
-  async getBookingsByOrder(orderId) {
-    return await Booking.getByOrder(orderId);
+  async getBookingsByOrder(orderId, viewerRole = null) {
+    const bookings = await Booking.getByOrder(orderId);
+    return await this._attachOnlineKeys(bookings, viewerRole);
   }
 
   /**
@@ -246,6 +311,69 @@ class BookingService {
     const booking = await Booking.findOne({ id: bookingId });
     if (!booking) {
       throw new Error("Booking not found");
+    }
+
+    return await booking.startUsing();
+  }
+
+  /**
+   * Checkin by qr_token and key_token
+   * @param {Object} params
+   * @returns {Promise<Object>} Updated booking
+   */
+  async checkinWithQrAndKey({ qr_token, key_token, actor }) {
+    if (!qr_token || !key_token) {
+      const error = new Error("qr_token and key_token are required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
+    if (!qrCode) {
+      const error = new Error("QR code is invalid or inactive");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (new Date(qrCode.expires_at).getTime() < Date.now()) {
+      const error = new Error("QR code has expired");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const onlineKey = await OnlineKey.validateOnlineKey({
+      pod_id: qrCode.pod_id,
+      key_type: "CUSTOMER",
+      key_token,
+    });
+
+    const actorId = String(actor?._id || actor?.id || "");
+    if (!actorId || String(onlineKey.user_id) !== actorId) {
+      const error = new Error("This key does not belong to current user");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({
+      id: onlineKey.booking_id,
+      user_id: actorId,
+      pod_id: qrCode.pod_id,
+    });
+
+    if (!booking) {
+      const error = new Error("No valid booking found for this qr_token and key_token");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (booking.status === "IN_USE") {
+      return booking;
+    }
+
+    if (booking.status !== "BOOKED") {
+      const error = new Error(`Cannot checkin booking with status ${booking.status}`);
+      error.statusCode = 400;
+      throw error;
     }
 
     return await booking.startUsing();
@@ -326,6 +454,47 @@ class BookingService {
    */
   async checkAvailability(podId, startTime, endTime) {
     return await Booking.isPodAvailable(podId, startTime, endTime);
+  }
+
+  /**
+   * Toggle cleaner access confirmation for a booking
+   * @param {String} bookingId - Booking ID
+   * @param {Object} actor - Authenticated user
+   * @param {Boolean} allowed - Cleaner access confirmation flag
+   * @returns {Promise<Object>} Updated booking
+   */
+  async setCleanerAccessFlag(bookingId, actor, allowed) {
+    if (typeof allowed !== "boolean") {
+      throw new Error("allowed must be boolean");
+    }
+
+    const booking = await Booking.findOne({ id: bookingId });
+    if (!booking) {
+      throw new Error("Booking not found");
+    }
+
+    const actorRole = String(actor?.role || "");
+    const actorId = String(actor?._id || actor?.id || "");
+    const isOwner = actorId && actorId === String(booking.user_id);
+    const canManage = ["admin", "manager"].includes(actorRole);
+
+    if (!isOwner && !canManage) {
+      const error = new Error("Not authorized to update cleaner access for this booking");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (booking.status === "CANCELLED") {
+      const error = new Error("Cannot update cleaner access for cancelled booking");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    booking.cleaner_access_allowed = allowed;
+    booking.cleaner_access_updated_at = new Date();
+    await booking.save();
+
+    return booking;
   }
 }
 

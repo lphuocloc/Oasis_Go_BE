@@ -40,6 +40,16 @@ const bookingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    cleaner_access_allowed: {
+      type: Boolean,
+      default: false,
+      required: true,
+      index: true,
+    },
+    cleaner_access_updated_at: {
+      type: Date,
+      default: null,
+    },
     status: {
       type: String,
       enum: {
@@ -107,6 +117,16 @@ bookingSchema.methods.startUsing = async function () {
   if (this.status !== "BOOKED") {
     throw new Error(`Cannot start using from ${this.status} status`);
   }
+
+  const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+  const now = Date.now();
+  const startWindow = new Date(this.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS;
+  const endWindow = new Date(this.start_time).getTime() + CHECKIN_GRACE_PERIOD_MS;
+
+  if (now < startWindow || now > endWindow) {
+    throw new Error("Check-in is only allowed from 15 minutes before start_time to 15 minutes after start_time");
+  }
+
   this.status = "IN_USE";
   await this.save();
   return this;

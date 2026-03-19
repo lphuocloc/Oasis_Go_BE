@@ -1,5 +1,6 @@
 const Door = require("../models/Door");
 const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
 
 class DoorService {
   async createDoor(data) {
@@ -64,6 +65,54 @@ class DoorService {
     await this.getDoorById(id);
     await Door.deleteOne({ id });
     return { message: "Door deleted successfully" };
+  }
+
+  async generateDoorsByPodCluster(clusterId) {
+    if (!clusterId) {
+      const error = new Error("cluster_id is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const cluster = await PodCluster.findOne({ id: clusterId });
+    if (!cluster) {
+      const error = new Error("Pod cluster not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const pods = await Pod.find({ cluster_id: clusterId }).sort({ code: 1, createdAt: 1 });
+    if (pods.length === 0) {
+      const error = new Error("No pods found in this cluster");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const podIds = pods.map((pod) => pod.id);
+    const existingDoors = await Door.find({ pod_id: { $in: podIds } }).select("pod_id");
+    const existingPodIdSet = new Set(existingDoors.map((door) => door.pod_id));
+
+    const docsToCreate = pods
+      .filter((pod) => !existingPodIdSet.has(pod.id))
+      .map((pod) => ({
+        pod_id: pod.id,
+        lock_status: "LOCKED",
+        door_sensor: "CLOSED",
+      }));
+
+    const createdDoors = docsToCreate.length > 0
+      ? await Door.insertMany(docsToCreate, { ordered: false })
+      : [];
+
+    return {
+      cluster_id: cluster.id,
+      cluster_name: cluster.name,
+      total_pods: pods.length,
+      existing_doors: existingDoors.length,
+      created_count: createdDoors.length,
+      skipped_count: pods.length - createdDoors.length,
+      created_doors: createdDoors,
+    };
   }
 }
 

@@ -73,7 +73,7 @@ const getBookingsByUser = async (req, res) => {
     try {
         const { userId } = req.params;
         const { status } = req.query;
-        const bookings = await bookingService.getBookingsByUser(userId, status);
+        const bookings = await bookingService.getBookingsByUser(userId, status, req.user?.role);
         res.status(200).json({
             success: true,
             message: "User bookings retrieved successfully",
@@ -118,7 +118,7 @@ const getBookingsByPod = async (req, res) => {
 const getBookingsByOrder = async (req, res) => {
     try {
         const { orderId } = req.params;
-        const bookings = await bookingService.getBookingsByOrder(orderId);
+        const bookings = await bookingService.getBookingsByOrder(orderId, req.user?.role);
         res.status(200).json({
             success: true,
             message: "Order bookings retrieved successfully",
@@ -174,6 +174,44 @@ const startUsing = async (req, res) => {
             success: false,
             message: error.message || "Failed to start booking",
         });
+    }
+};
+
+/**
+ * Checkin booking using QR token and key token
+ * @route POST /api/bookings/checkin
+ * @access Private
+ */
+const checkinWithQrAndKey = async (req, res) => {
+    try {
+        const { qr_token, key_token } = req.body;
+        const booking = await bookingService.checkinWithQrAndKey({
+            qr_token,
+            key_token,
+            actor: req.user,
+        });
+
+        res.status(200).json({
+            success: true,
+            message: "Checkin successful",
+            data: booking,
+        });
+    } catch (error) {
+        const statusCode = error.statusCode || 400;
+        const response = {
+            success: false,
+            message: error.message || "Failed to checkin",
+        };
+
+        if (error.remaining_attempts !== undefined) {
+            response.remaining_attempts = error.remaining_attempts;
+        }
+
+        if (error.cooldown_until) {
+            response.cooldown_until = error.cooldown_until;
+        }
+
+        res.status(statusCode).json(response);
     }
 };
 
@@ -279,6 +317,34 @@ const checkAvailability = async (req, res) => {
     }
 };
 
+/**
+ * Set cleaner access confirmation flag for booking
+ * @route POST /api/bookings/:id/cleaner-access
+ * @access Private
+ */
+const setCleanerAccessFlag = async (req, res) => {
+    try {
+        const { allowed } = req.body;
+        const booking = await bookingService.setCleanerAccessFlag(
+            req.params.id,
+            req.user,
+            allowed
+        );
+
+        res.status(200).json({
+            success: true,
+            message: `Cleaner access ${allowed ? "enabled" : "disabled"} successfully`,
+            data: booking,
+        });
+    } catch (error) {
+        const statusCode = error.statusCode || 400;
+        res.status(statusCode).json({
+            success: false,
+            message: error.message || "Failed to update cleaner access",
+        });
+    }
+};
+
 module.exports = {
     createBooking,
     getAllBookings,
@@ -287,9 +353,11 @@ module.exports = {
     getBookingsByPod,
     getBookingsByOrder,
     updateBooking,
+    checkinWithQrAndKey,
     startUsing,
     completeBooking,
     cancelBooking,
     deleteBooking,
     checkAvailability,
+    setCleanerAccessFlag,
 };

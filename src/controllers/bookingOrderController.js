@@ -136,6 +136,35 @@ class BookingOrderController {
             });
         }
     }
+
+    /**
+     * Checkout booking order (all or selected bookings)
+     * @route POST /api/booking-orders/:id/checkout
+     */
+    async checkoutBookingOrder(req, res) {
+        try {
+            const { id } = req.params;
+            const { scope, booking_id, booking_ids } = req.body || {};
+
+            const result = await bookingOrderService.checkoutOrder(id, req.user, {
+                scope,
+                booking_id,
+                booking_ids,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Booking order checkout processed",
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error checkout booking order:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to checkout booking order",
+            });
+        }
+    }
 }
 
 module.exports = new BookingOrderController();
