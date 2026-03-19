@@ -307,14 +307,7 @@ class BookingService {
    * @param {String} bookingId - Booking ID
    * @returns {Promise<Object>} Updated booking
    */
-  async startUsing(bookingId) {
-    const booking = await Booking.findOne({ id: bookingId });
-    if (!booking) {
-      throw new Error("Booking not found");
-    }
 
-    return await booking.startUsing();
-  }
 
   /**
    * Checkin by qr_token and key_token
@@ -379,20 +372,7 @@ class BookingService {
     return await booking.startUsing();
   }
 
-  /**
-   * Complete booking
-   * @param {String} bookingId - Booking ID
-   * @param {Date} actualEndTime - Actual end time
-   * @returns {Promise<Object>} Updated booking
-   */
-  async completeBooking(bookingId, actualEndTime = null) {
-    const booking = await Booking.findOne({ id: bookingId });
-    if (!booking) {
-      throw new Error("Booking not found");
-    }
 
-    return await booking.complete(actualEndTime);
-  }
 
   /**
    * Cancel booking
@@ -430,20 +410,6 @@ class BookingService {
    * @param {String} bookingId - Booking ID
    * @returns {Promise<Object>} Deleted booking
    */
-  async deleteBooking(bookingId) {
-    const booking = await Booking.findOne({ id: bookingId });
-    if (!booking) {
-      throw new Error("Booking not found");
-    }
-
-    // Only allow deletion of cancelled bookings
-    if (booking.status !== "CANCELLED") {
-      throw new Error("Can only delete cancelled bookings");
-    }
-
-    await Booking.deleteOne({ id: bookingId });
-    return booking;
-  }
 
   /**
    * Check pod availability for time range

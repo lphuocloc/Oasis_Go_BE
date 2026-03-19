@@ -156,26 +156,6 @@ const updateBooking = async (req, res) => {
     }
 };
 
-/**
- * Start using pod
- * @route POST /api/bookings/:id/start
- * @access Private
- */
-const startUsing = async (req, res) => {
-    try {
-        const booking = await bookingService.startUsing(req.params.id);
-        res.status(200).json({
-            success: true,
-            message: "Booking started successfully",
-            data: booking,
-        });
-    } catch (error) {
-        res.status(400).json({
-            success: false,
-            message: error.message || "Failed to start booking",
-        });
-    }
-};
 
 /**
  * Checkin booking using QR token and key token
@@ -215,30 +195,7 @@ const checkinWithQrAndKey = async (req, res) => {
     }
 };
 
-/**
- * Complete booking
- * @route POST /api/bookings/:id/complete
- * @access Private
- */
-const completeBooking = async (req, res) => {
-    try {
-        const { actual_end_time } = req.body;
-        const booking = await bookingService.completeBooking(
-            req.params.id,
-            actual_end_time
-        );
-        res.status(200).json({
-            success: true,
-            message: "Booking completed successfully",
-            data: booking,
-        });
-    } catch (error) {
-        res.status(400).json({
-            success: false,
-            message: error.message || "Failed to complete booking",
-        });
-    }
-};
+
 
 /**
  * Cancel booking
@@ -261,25 +218,6 @@ const cancelBooking = async (req, res) => {
     }
 };
 
-/**
- * Delete booking
- * @route DELETE /api/bookings/:id
- * @access Private (Admin)
- */
-const deleteBooking = async (req, res) => {
-    try {
-        await bookingService.deleteBooking(req.params.id);
-        res.status(200).json({
-            success: true,
-            message: "Booking deleted successfully",
-        });
-    } catch (error) {
-        res.status(400).json({
-            success: false,
-            message: error.message || "Failed to delete booking",
-        });
-    }
-};
 
 /**
  * Check pod availability
@@ -354,10 +292,7 @@ module.exports = {
     getBookingsByOrder,
     updateBooking,
     checkinWithQrAndKey,
-    startUsing,
-    completeBooking,
     cancelBooking,
-    deleteBooking,
     checkAvailability,
     setCleanerAccessFlag,
 };

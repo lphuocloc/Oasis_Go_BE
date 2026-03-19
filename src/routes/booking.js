@@ -376,55 +376,6 @@ router.put("/:id", protect, bookingController.updateBooking);
 
 /**
  * @swagger
- * /api/bookings/{id}/start:
- *   post:
- *     summary: Start using pod (BOOKED -> IN_USE)
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking started
- */
-router.post("/:id/start", protect, bookingController.startUsing);
-
-/**
- * @swagger
- * /api/bookings/{id}/complete:
- *   post:
- *     summary: Complete booking
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               actual_end_time:
- *                 type: string
- *                 format: date-time
- *     responses:
- *       200:
- *         description: Booking completed
- */
-router.post("/:id/complete", protect, bookingController.completeBooking);
-
-/**
- * @swagger
  * /api/bookings/{id}/cleaner-access:
  *   post:
  *     summary: Enable or disable cleaner access confirmation for booking
@@ -475,24 +426,5 @@ router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFl
  */
 router.post("/:id/cancel", protect, bookingController.cancelBooking);
 
-/**
- * @swagger
- * /api/bookings/{id}:
- *   delete:
- *     summary: Delete booking (cancelled only)
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking deleted
- */
-router.delete("/:id", protect, authorize("admin"), bookingController.deleteBooking);
 
 module.exports = router;
