@@ -690,14 +690,18 @@ class BookingOrderService {
                     throw error;
                 }
 
-                if (order.status === 'PAID') {
-                    const error = new Error("Cannot cancel paid order");
+                // Get all bookings for this order
+                const bookings = await Booking.find({ order_id: orderId }).session(session);
+
+                const hasStartedOrCompletedBooking = bookings.some(
+                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED"
+                );
+
+                if (hasStartedOrCompletedBooking) {
+                    const error = new Error("Cannot cancel order because one or more bookings are already in use or completed");
                     error.statusCode = 400;
                     throw error;
                 }
-
-                // Get all bookings for this order
-                const bookings = await Booking.find({ order_id: orderId }).session(session);
 
                 // Release time slots for each booking
                 for (const booking of bookings) {
@@ -721,8 +725,7 @@ class BookingOrderService {
                 ).session(session);
 
                 // Cancel the order within transaction
-                order.status = 'CANCELLED';
-                await order.save({ session });
+                await order.cancelOrder({ session });
 
                 return order;
             });

@@ -85,15 +85,17 @@ bookingOrderSchema.methods.markAsPaid = async function () {
 };
 
 // Instance method to cancel order
-bookingOrderSchema.methods.cancelOrder = async function () {
+bookingOrderSchema.methods.cancelOrder = async function ({ session } = {}) {
     if (this.status === "CANCELLED") {
         throw new Error("Order is already cancelled");
     }
-    if (this.status === "PAID") {
-        throw new Error("Cannot cancel paid order directly. Use partial cancellation.");
+
+    if (!["PENDING", "PAID", "PARTIALLY_CANCELLED"].includes(this.status)) {
+        throw new Error(`Cannot cancel order from ${this.status} status`);
     }
+
     this.status = "CANCELLED";
-    await this.save();
+    await this.save({ session });
     return this;
 };
 
