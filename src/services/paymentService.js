@@ -80,8 +80,19 @@ class PaymentService {
             return { created: 0, totalBookings: bookings.length };
         }
 
-        await OnlineKey.insertMany(docsToCreate, { ordered: false });
-        return { created: docsToCreate.length, totalBookings: bookings.length };
+        try {
+            await OnlineKey.insertMany(docsToCreate, { ordered: false });
+            return { created: docsToCreate.length, totalBookings: bookings.length };
+        } catch (error) {
+            const isBulkWriteError = error?.name === "BulkWriteError" || error?.code === 11000;
+            if (!isBulkWriteError) {
+                throw error;
+            }
+
+            // Concurrent VNPay return/IPN callbacks may race to insert the same active key.
+            // Duplicate-key errors are safe to ignore because the key already exists.
+            return { created: 0, totalBookings: bookings.length };
+        }
     }
 
     /**

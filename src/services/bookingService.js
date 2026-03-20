@@ -52,6 +52,10 @@ class BookingService {
     const keyMap = onlineKeys.reduce((map, key) => {
       const bookingId = String(key.booking_id);
       if (!map[bookingId]) map[bookingId] = [];
+      if (map[bookingId].some((existing) => existing.key_type === key.key_type)) {
+        return map;
+      }
+
       const keyData = typeof key.toObject === "function" ? key.toObject() : key;
       map[bookingId].push({
         ...keyData,

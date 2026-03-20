@@ -84,6 +84,14 @@ onlineKeySchema.index({ key_type: 1 });
 onlineKeySchema.index({ valid_from: 1, valid_to: 1 });
 onlineKeySchema.index({ is_revoked: 1 });
 onlineKeySchema.index({ key_token: 1, key_type: 1, is_revoked: 1 });
+onlineKeySchema.index(
+    { booking_id: 1, key_type: 1 },
+    {
+        unique: true,
+        partialFilterExpression: { is_revoked: false },
+        name: "uniq_active_online_key_per_booking_and_type",
+    }
+);
 
 onlineKeySchema.methods.isLocked = function (now = new Date()) {
     return Boolean(this.locked_until && this.locked_until.getTime() > now.getTime());
