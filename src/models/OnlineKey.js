@@ -164,7 +164,13 @@ onlineKeySchema.statics.validateOnlineKey = async function ({
         const booking = await Booking.findOne({
             id: onlineKey.booking_id,
             status: { $in: ["BOOKED", "IN_USE", "COMPLETED"] },
-        }).select("id cleaner_access_allowed");
+        }).select("id cleaner_access_allowed checkin_state");
+
+        if (booking?.checkin_state === "NO_SHOW") {
+            const error = new Error("Cleaner access is blocked for NO_SHOW booking");
+            error.statusCode = 403;
+            throw error;
+        }
 
         if (!booking || !booking.cleaner_access_allowed) {
             const error = new Error("Cleaner access is not confirmed by user");
