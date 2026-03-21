@@ -110,8 +110,12 @@ class BookingService {
         },
         {
           $set: {
+            status: "COMPLETED",
+            actual_end_time: booking.end_time || now,
             checkin_state: "NO_SHOW",
             no_show_marked_at: new Date(),
+            cleaner_access_allowed: false,
+            cleaner_access_updated_at: new Date(),
           },
         }
       );
@@ -121,6 +125,17 @@ class BookingService {
       }
 
       markedCount += 1;
+
+      await OnlineKey.updateMany(
+        {
+          booking_id: booking.id,
+          key_type: "CLEANER",
+          is_revoked: false,
+        },
+        {
+          $set: { is_revoked: true },
+        }
+      );
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng kết thúc do không check-in",
