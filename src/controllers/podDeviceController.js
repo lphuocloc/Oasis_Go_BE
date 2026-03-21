@@ -19,6 +19,24 @@ exports.getAllDevices = async (req, res) => {
   }
 };
 
+exports.getDevicesByPodCluster = async (req, res) => {
+  try {
+    const { clusterId } = req.params;
+    const result = await podDeviceService.getDevicesByPodCluster(clusterId, req.query);
+    res.status(200).json({
+      success: true,
+      count: result.total_devices,
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching pod devices by cluster",
+    });
+  }
+};
+
 exports.getDeviceById = async (req, res) => {
   try {
     const device = await podDeviceService.getDeviceById(req.params.id);
@@ -46,5 +64,23 @@ exports.deleteDevice = async (req, res) => {
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ success: false, message: error.message || "Error deleting pod device" });
+  }
+};
+
+exports.generateDevicesByPodCluster = async (req, res) => {
+  try {
+    const { clusterId } = req.params;
+    const result = await podDeviceService.generateDevicesByPodCluster(clusterId, req.body || {});
+    res.status(201).json({
+      success: true,
+      message: "Pod devices generated successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error generating pod devices by cluster",
+    });
   }
 };

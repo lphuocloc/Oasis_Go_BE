@@ -1,6 +1,12 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const normalizeTaskId = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
 const inventoryCheckoutLogSchema = new mongoose.Schema(
   {
     id: {
@@ -24,10 +30,12 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
     cleaning_task_id: {
       type: String,
       default: null,
+      set: normalizeTaskId,
     },
     maintenance_task_id: {
       type: String,
       default: null,
+      set: normalizeTaskId,
     },
     quantity: {
       type: Number,
@@ -38,7 +46,7 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
       type: String,
       required: [true, "Action type is required"],
       enum: {
-        values: ["CHECKOUT", "RETURN", "WASTE"],
+        values: ["CHECKOUT", "RETURN", "WASTE", "INITIAL", "ADJUSTMENT"],
         message: "{VALUE} is not a valid action type",
       },
       index: true,
@@ -53,5 +61,39 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
     timestamps: { createdAt: "created_at", updatedAt: false },
   }
 );
+
+inventoryCheckoutLogSchema.pre("validate", function () {
+  const hasCleaningTask = Boolean(this.cleaning_task_id);
+  const hasMaintenanceTask = Boolean(this.maintenance_task_id);
+  const isAdminAction = this.action_type === "INITIAL" || this.action_type === "ADJUSTMENT";
+
+  if (!isAdminAction) {
+    if (hasCleaningTask && hasMaintenanceTask) {
+      this.invalidate(
+        "cleaning_task_id",
+        "Only one of cleaning_task_id or maintenance_task_id can be provided"
+      );
+      this.invalidate(
+        "maintenance_task_id",
+        "Only one of cleaning_task_id or maintenance_task_id can be provided"
+      );
+    }
+
+    if (!hasCleaningTask && !hasMaintenanceTask) {
+      this.invalidate(
+        "cleaning_task_id",
+        "Either cleaning_task_id or maintenance_task_id is required"
+      );
+    }
+  }
+
+  if (this.action_type === "WASTE" && !this.reason) {
+    this.invalidate("reason", "reason is required when action_type is WASTE");
+  }
+});
+
+inventoryCheckoutLogSchema.index({ created_at: -1 });
+inventoryCheckoutLogSchema.index({ inventory_stock_id: 1, created_at: -1 });
+inventoryCheckoutLogSchema.index({ staff_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("InventoryCheckoutLog", inventoryCheckoutLogSchema);

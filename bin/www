@@ -7,6 +7,7 @@
 var app = require('../src/app');
 var debug = require('debug')('be:server');
 var http = require('http');
+var initSocketServer = require('../src/socket/socketServer').initSocketServer;
 
 /**
  * Get port from environment and store in Express.
@@ -20,6 +21,7 @@ app.set('port', port);
  */
 
 var server = http.createServer(app);
+initSocketServer(server);
 
 /**
  * Listen on provided port, on all network interfaces.
