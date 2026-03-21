@@ -96,7 +96,7 @@ router.post("/", protect, bookingOrderController.createBookingOrder);
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, PAID, PARTIALLY_CANCELLED, CANCELLED]
+ *           enum: [PENDING, PAID, PARTIAL_CANCEL, FULLY_CANCELLED, CANCEL]
  *         description: Filter by status
  *       - in: query
  *         name: start_date
@@ -159,6 +159,21 @@ router.get("/:id", protect, bookingOrderController.getBookingOrderById);
  *   put:
  *     summary: Cancel booking order
  *     tags: [BookingOrders]
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               booking_id:
+ *                 type: string
+ *                 description: Cancel one booking inside a PAID order
+ *               booking_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Cancel multiple bookings inside a PAID/PARTIAL_CANCEL order
  *     parameters:
  *       - in: path
  *         name: id

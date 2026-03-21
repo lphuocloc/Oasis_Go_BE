@@ -34,7 +34,7 @@ const bookingOrderSchema = new mongoose.Schema(
         status: {
             type: String,
             enum: {
-                values: ["PENDING", "PAID", "PARTIALLY_CANCELLED", "CANCELLED"],
+                values: ["PENDING", "PAID", "PARTIAL_CANCEL", "FULLY_CANCELLED", "CANCEL"],
                 message: "{VALUE} is not a valid status",
             },
             default: "PENDING",
@@ -86,15 +86,15 @@ bookingOrderSchema.methods.markAsPaid = async function () {
 
 // Instance method to cancel order
 bookingOrderSchema.methods.cancelOrder = async function ({ session } = {}) {
-    if (this.status === "CANCELLED") {
+    if (["CANCEL", "FULLY_CANCELLED"].includes(this.status)) {
         throw new Error("Order is already cancelled");
     }
 
-    if (!["PENDING", "PAID", "PARTIALLY_CANCELLED"].includes(this.status)) {
+    if (!["PENDING", "PAID", "PARTIAL_CANCEL"].includes(this.status)) {
         throw new Error(`Cannot cancel order from ${this.status} status`);
     }
 
-    this.status = "CANCELLED";
+    this.status = this.status === "PENDING" ? "CANCEL" : "FULLY_CANCELLED";
     await this.save({ session });
     return this;
 };
@@ -104,7 +104,7 @@ bookingOrderSchema.methods.partiallyCancelOrder = async function () {
     if (this.status !== "PAID") {
         throw new Error("Can only partially cancel paid orders");
     }
-    this.status = "PARTIALLY_CANCELLED";
+    this.status = "PARTIAL_CANCEL";
     await this.save();
     return this;
 };

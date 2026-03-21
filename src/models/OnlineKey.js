@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require("uuid");
 const Booking = require("./Bookings");
 
 const MAX_FAILED_ATTEMPTS = 5;
-const DEFAULT_COOLDOWN_MINUTES = 15;
+const DEFAULT_COOLDOWN_MINUTES = 5;
 
 const onlineKeySchema = new mongoose.Schema(
     {

@@ -47,6 +47,33 @@ const {
  *           type: string
  *           format: date-time
  *           description: Actual end time (when completed)
+ *         cleaner_access_allowed:
+ *           type: boolean
+ *           description: Whether cleaner access has been enabled by user
+ *         cleaner_access_updated_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         checkin_state:
+ *           type: string
+ *           enum: [PENDING, MANUAL_CHECKED_IN, AUTO_ACTIVATED, NO_SHOW]
+ *           description: Check-in tracking state
+ *         checked_in_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         checkin_source:
+ *           type: string
+ *           enum: [USER_QR, SYSTEM_AUTO]
+ *           nullable: true
+ *         auto_activated_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         no_show_marked_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
  *         status:
  *           type: string
  *           enum: [BOOKED, IN_USE, COMPLETED, CANCELLED]

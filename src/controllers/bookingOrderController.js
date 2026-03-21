@@ -120,12 +120,18 @@ class BookingOrderController {
     async cancelBookingOrder(req, res) {
         try {
             const { id } = req.params;
+            const { booking_id, booking_ids } = req.body || {};
 
-            const order = await bookingOrderService.cancelBookingOrder(id);
+            const order = await bookingOrderService.cancelBookingOrder(id, req.user, {
+                booking_ids: [
+                    ...(Array.isArray(booking_ids) ? booking_ids : []),
+                    ...(booking_id ? [booking_id] : []),
+                ],
+            });
 
             return res.status(200).json({
                 success: true,
-                message: "Booking order cancelled successfully",
+                message: "Booking order cancellation processed successfully",
                 data: order
             });
         } catch (error) {
