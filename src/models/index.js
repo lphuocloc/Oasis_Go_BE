@@ -25,4 +25,7 @@ module.exports = {
   LocationShift: require("./LocationShift"),
   StaffShiftAssignment: require("./StaffShiftAssignment"),
   StaffAttendanceLog: require("./StaffAttendanceLog"),
+  CleaningTask: require("./CleaningTask"),
+  CleaningPhoto: require("./CleaningPhoto"),
+  MaintenanceTask: require("./MaintenanceTask"),
 };
