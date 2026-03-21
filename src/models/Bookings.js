@@ -40,6 +40,46 @@ const bookingSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    cleaner_access_allowed: {
+      type: Boolean,
+      default: false,
+      required: true,
+      index: true,
+    },
+    cleaner_access_updated_at: {
+      type: Date,
+      default: null,
+    },
+    checkin_state: {
+      type: String,
+      enum: {
+        values: ["PENDING", "MANUAL_CHECKED_IN", "AUTO_ACTIVATED", "NO_SHOW"],
+        message: "{VALUE} is not a valid checkin_state",
+      },
+      default: "PENDING",
+      required: true,
+      index: true,
+    },
+    checked_in_at: {
+      type: Date,
+      default: null,
+    },
+    checkin_source: {
+      type: String,
+      enum: {
+        values: ["USER_QR", "SYSTEM_AUTO", null],
+        message: "{VALUE} is not a valid checkin_source",
+      },
+      default: null,
+    },
+    auto_activated_at: {
+      type: Date,
+      default: null,
+    },
+    no_show_marked_at: {
+      type: Date,
+      default: null,
+    },
     status: {
       type: String,
       enum: {
@@ -70,6 +110,7 @@ const bookingSchema = new mongoose.Schema(
 bookingSchema.index({ user_id: 1, status: 1 });
 bookingSchema.index({ pod_id: 1, start_time: 1 });
 bookingSchema.index({ status: 1, created_at: -1 });
+bookingSchema.index({ status: 1, checkin_state: 1, start_time: 1 });
 
 // Virtual for order details
 bookingSchema.virtual("order", {
@@ -107,7 +148,21 @@ bookingSchema.methods.startUsing = async function () {
   if (this.status !== "BOOKED") {
     throw new Error(`Cannot start using from ${this.status} status`);
   }
+
+  const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+  const now = Date.now();
+  const startWindow = new Date(this.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS;
+  const endWindow = new Date(this.start_time).getTime() + CHECKIN_GRACE_PERIOD_MS;
+
+  if (now < startWindow || now > endWindow) {
+    throw new Error("Check-in is only allowed from 15 minutes before start_time to 15 minutes after start_time");
+  }
+
   this.status = "IN_USE";
+  this.checkin_state = "MANUAL_CHECKED_IN";
+  this.checked_in_at = new Date();
+  this.checkin_source = "USER_QR";
+  this.no_show_marked_at = null;
   await this.save();
   return this;
 };
@@ -132,6 +187,11 @@ bookingSchema.methods.cancel = async function () {
     throw new Error("Booking is already cancelled");
   }
   this.status = "CANCELLED";
+  this.checkin_state = "PENDING";
+  this.checked_in_at = null;
+  this.checkin_source = null;
+  this.auto_activated_at = null;
+  this.no_show_marked_at = null;
   await this.save();
   return this;
 };

@@ -16,6 +16,10 @@ connectDB();
 const bookingOrderService = require("./services/bookingOrderService");
 bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 
+// Start booking auto-activation checkin job
+const bookingService = require("./services/bookingService");
+bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");

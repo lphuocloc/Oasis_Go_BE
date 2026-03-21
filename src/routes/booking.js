@@ -47,6 +47,33 @@ const {
  *           type: string
  *           format: date-time
  *           description: Actual end time (when completed)
+ *         cleaner_access_allowed:
+ *           type: boolean
+ *           description: Whether cleaner access has been enabled by user
+ *         cleaner_access_updated_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         checkin_state:
+ *           type: string
+ *           enum: [PENDING, MANUAL_CHECKED_IN, AUTO_ACTIVATED, NO_SHOW]
+ *           description: Check-in tracking state
+ *         checked_in_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         checkin_source:
+ *           type: string
+ *           enum: [USER_QR, SYSTEM_AUTO]
+ *           nullable: true
+ *         auto_activated_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
+ *         no_show_marked_at:
+ *           type: string
+ *           format: date-time
+ *           nullable: true
  *         status:
  *           type: string
  *           enum: [BOOKED, IN_USE, COMPLETED, CANCELLED]
@@ -168,6 +195,45 @@ router.get(
  *         description: Booking created successfully
  */
 router.post("/", protect, bookingController.createBooking);
+
+/**
+ * @swagger
+ * /api/bookings/checkin:
+ *   post:
+ *     summary: Checkin booking using qr_token and key_token
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - qr_token
+ *               - key_token
+ *             properties:
+ *               qr_token:
+ *                 type: string
+ *               key_token:
+ *                 type: string
+ *                 description: Customer key token
+ *     responses:
+ *       200:
+ *         description: Checkin successful
+ *       400:
+ *         description: Invalid request or booking status
+ *       401:
+ *         description: Invalid key token
+ *       403:
+ *         description: QR expired, wrong user key, or checkin not allowed
+ *       404:
+ *         description: QR or booking not found
+ *       429:
+ *         description: Too many invalid attempts, cooldown is active
+ */
+router.post("/checkin", protect, bookingController.checkinWithQrAndKey);
 
 /**
  * @swagger
@@ -337,29 +403,9 @@ router.put("/:id", protect, bookingController.updateBooking);
 
 /**
  * @swagger
- * /api/bookings/{id}/start:
+ * /api/bookings/{id}/cleaner-access:
  *   post:
- *     summary: Start using pod (BOOKED -> IN_USE)
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking started
- */
-router.post("/:id/start", protect, bookingController.startUsing);
-
-/**
- * @swagger
- * /api/bookings/{id}/complete:
- *   post:
- *     summary: Complete booking
+ *     summary: Enable or disable cleaner access confirmation for booking
  *     tags: [Bookings]
  *     security:
  *       - bearerAuth: []
@@ -370,19 +416,22 @@ router.post("/:id/start", protect, bookingController.startUsing);
  *         schema:
  *           type: string
  *     requestBody:
+ *       required: true
  *       content:
  *         application/json:
  *           schema:
  *             type: object
+ *             required:
+ *               - allowed
  *             properties:
- *               actual_end_time:
- *                 type: string
- *                 format: date-time
+ *               allowed:
+ *                 type: boolean
+ *                 example: true
  *     responses:
  *       200:
- *         description: Booking completed
+ *         description: Cleaner access flag updated
  */
-router.post("/:id/complete", protect, bookingController.completeBooking);
+router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFlag);
 
 /**
  * @swagger
@@ -404,24 +453,5 @@ router.post("/:id/complete", protect, bookingController.completeBooking);
  */
 router.post("/:id/cancel", protect, bookingController.cancelBooking);
 
-/**
- * @swagger
- * /api/bookings/{id}:
- *   delete:
- *     summary: Delete booking (cancelled only)
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking deleted
- */
-router.delete("/:id", protect, authorize("admin"), bookingController.deleteBooking);
 
 module.exports = router;

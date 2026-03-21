@@ -10,6 +10,24 @@ exports.createDoor = async (req, res) => {
   }
 };
 
+exports.generateDoorsByPodCluster = async (req, res) => {
+  try {
+    const { clusterId } = req.params;
+    const result = await doorService.generateDoorsByPodCluster(clusterId);
+    res.status(201).json({
+      success: true,
+      message: "Doors generated successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error generating doors by cluster",
+    });
+  }
+};
+
 exports.getAllDoors = async (req, res) => {
   try {
     const doors = await doorService.getAllDoors(req.query);

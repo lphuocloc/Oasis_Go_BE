@@ -127,6 +127,19 @@ const emitQrCodeEvent = (qrCode, action = "updated") => {
     });
 };
 
+const emitDoorUnlockRequest = ({ pod_id, payload = {} }) => {
+    if (!ioInstance || !pod_id) return false;
+
+    const room = getPodRoom(pod_id);
+    ioInstance.to(room).emit("door:unlock_requested", {
+        pod_id,
+        requested_at: new Date().toISOString(),
+        ...payload,
+    });
+
+    return getPodRoomClientCount(pod_id) > 0;
+};
+
 const initSocketServer = (httpServer) => {
     if (ioInstance) return ioInstance;
 
@@ -229,4 +242,5 @@ module.exports = {
     initSocketServer,
     getSocketServer,
     emitQrCodeEvent,
+    emitDoorUnlockRequest,
 };
