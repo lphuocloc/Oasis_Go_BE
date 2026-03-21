@@ -2,7 +2,11 @@ const inventoryStockService = require("../services/inventoryStockService");
 
 exports.createInventoryStock = async (req, res) => {
   try {
-    const stock = await inventoryStockService.createInventoryStock(req.body);
+    const data = {
+      ...req.body,
+      staff_id: req.user?.id, // Pass authenticated user ID for auto-logging
+    };
+    const stock = await inventoryStockService.createInventoryStock(data);
     res.status(201).json({ success: true, message: "Inventory stock created successfully", data: stock });
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -31,7 +35,11 @@ exports.getInventoryStockById = async (req, res) => {
 
 exports.updateInventoryStock = async (req, res) => {
   try {
-    const stock = await inventoryStockService.updateInventoryStock(req.params.id, req.body);
+    const data = {
+      ...req.body,
+      staff_id: req.user?.id, // Pass authenticated user ID for auto-logging
+    };
+    const stock = await inventoryStockService.updateInventoryStock(req.params.id, data);
     res.status(200).json({ success: true, message: "Inventory stock updated successfully", data: stock });
   } catch (error) {
     const statusCode = error.statusCode || 500;

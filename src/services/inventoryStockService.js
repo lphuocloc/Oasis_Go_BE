@@ -2,6 +2,7 @@ const InventoryStock = require("../models/InventoryStock");
 const Warehouse = require("../models/Warehouse");
 const Item = require("../models/Item");
 const InventoryCheckoutLog = require("../models/InventoryCheckoutLog");
+const inventoryCheckoutLogService = require("./inventoryCheckoutLogService");
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -10,7 +11,7 @@ const createError = (message, statusCode) => {
 };
 
 exports.createInventoryStock = async (data) => {
-  const { warehouse_id, item_id, quantity_available = 0 } = data;
+  const { warehouse_id, item_id, quantity_available = 0, staff_id } = data;
 
   if (!warehouse_id || !item_id) {
     throw createError("warehouse_id and item_id are required", 400);
@@ -31,11 +32,29 @@ exports.createInventoryStock = async (data) => {
     throw createError("quantity_available cannot be negative", 400);
   }
 
-  return InventoryStock.create({
+  const stock = await InventoryStock.create({
     warehouse_id,
     item_id,
     quantity_available: Number(quantity_available),
   });
+
+  // Auto-log stock creation if staff_id provided
+  if (staff_id) {
+    try {
+      await inventoryCheckoutLogService.createAutoLog({
+        inventory_stock_id: stock.id,
+        staff_id,
+        quantity: Number(quantity_available),
+        action_type: "INITIAL",
+        reason: "Stock created",
+      });
+    } catch (logError) {
+      console.error("Failed to create auto-log for stock creation:", logError);
+      // Don't throw - stock creation succeeded, log failure is secondary
+    }
+  }
+
+  return stock;
 };
 
 exports.getAllInventoryStocks = async (query = {}) => {
@@ -53,6 +72,7 @@ exports.getInventoryStockById = async (id) => {
 };
 
 exports.updateInventoryStock = async (id, data) => {
+  const { staff_id } = data;
   const stock = await InventoryStock.findOne({ id });
   if (!stock) throw createError("Inventory stock not found", 404);
 
@@ -75,17 +95,42 @@ exports.updateInventoryStock = async (id, data) => {
 
   if (duplicate) throw createError("Inventory stock already exists for this warehouse and item", 409);
 
+  // Track old quantity for auto-log
+  const oldQuantity = stock.quantity_available;
+  let quantityChanged = false;
+
   if (data.quantity_available !== undefined) {
     if (Number(data.quantity_available) < 0) {
       throw createError("quantity_available cannot be negative", 400);
     }
-    stock.quantity_available = Number(data.quantity_available);
+    const newQuantity = Number(data.quantity_available);
+    if (newQuantity !== oldQuantity) {
+      quantityChanged = true;
+    }
+    stock.quantity_available = newQuantity;
   }
 
   stock.warehouse_id = nextWarehouseId;
   stock.item_id = nextItemId;
 
   await stock.save();
+
+  // Auto-log quantity adjustment if changed and staff_id provided
+  if (quantityChanged && staff_id) {
+    try {
+      await inventoryCheckoutLogService.createAutoLog({
+        inventory_stock_id: stock.id,
+        staff_id,
+        quantity: stock.quantity_available,
+        action_type: "ADJUSTMENT",
+        reason: "Stock quantity adjusted",
+      });
+    } catch (logError) {
+      console.error("Failed to create auto-log for stock adjustment:", logError);
+      // Don't throw - stock update succeeded, log failure is secondary
+    }
+  }
+
   return stock;
 };
 

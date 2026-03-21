@@ -12,6 +12,57 @@ const staffShiftAssignmentController = require("../controllers/staffShiftAssignm
 
 /**
  * @swagger
+ * /api/staff-shift-assignments/me:
+ *   get:
+ *     summary: Get my shift assignments (for manager/cleaner)
+ *     tags: [Staff Shift Assignments]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: work_date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter by a specific work date (YYYY-MM-DD)
+ *       - in: query
+ *         name: from_date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter start date (used with to_date)
+ *       - in: query
+ *         name: to_date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter end date (used with from_date)
+ *       - in: query
+ *         name: status
+ *         required: false
+ *         schema:
+ *           type: string
+ *         description: Comma-separated statuses (ASSIGNED,CHECKED_IN,COMPLETED,ABSENT)
+ *     responses:
+ *       200:
+ *         description: My shift assignments retrieved successfully
+ *       400:
+ *         description: Invalid query parameters
+ *       401:
+ *         description: Unauthorized
+ */
+router.get(
+  "/me",
+  protect,
+  authorize("manager", "cleaner"),
+  staffShiftAssignmentController.getMyAssignments
+);
+
+/**
+ * @swagger
  * components:
  *   schemas:
  *     StaffShiftActionRequest:
