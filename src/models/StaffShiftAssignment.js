@@ -21,9 +21,14 @@ const staffShiftAssignmentSchema = new mongoose.Schema(
 			ref: "LocationShift",
 			index: true,
 		},
-		work_date: {
+		start_date: {
 			type: Date,
-			required: [true, "Work date is required"],
+			required: [true, "Start date is required"],
+			index: true,
+		},
+		end_date: {
+			type: Date,
+			required: [true, "End date is required"],
 			index: true,
 		},
 		status: {
@@ -31,7 +36,7 @@ const staffShiftAssignmentSchema = new mongoose.Schema(
 			required: true,
 			default: "ASSIGNED",
 			enum: {
-				values: ["ASSIGNED", "CHECKED_IN", "COMPLETED", "ABSENT"],
+				values: ["ASSIGNED", "COMPLETED", "ABSENT"],
 				message: "{VALUE} is not a valid status",
 			},
 			index: true,
@@ -51,7 +56,7 @@ const staffShiftAssignmentSchema = new mongoose.Schema(
 );
 
 staffShiftAssignmentSchema.index(
-	{ staff_id: 1, location_shift_id: 1, work_date: 1 },
+	{ staff_id: 1, location_shift_id: 1, start_date: 1, end_date: 1 },
 	{ unique: true }
 );
 

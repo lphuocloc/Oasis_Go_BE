@@ -95,8 +95,6 @@ class LocationShiftService {
       assignmentQuery.$or = [
         {
           status: "CHECKED_IN",
-          checkin_at: { $ne: null },
-          checkout_at: null,
         },
         {
           status: "ASSIGNED",
@@ -104,14 +102,12 @@ class LocationShiftService {
       ];
     } else {
       assignmentQuery.status = "CHECKED_IN";
-      assignmentQuery.checkin_at = { $ne: null };
-      assignmentQuery.checkout_at = null;
     }
 
-    if (filters.work_date) {
-      const date = new Date(filters.work_date);
+    if (filters.target_date) {
+      const date = new Date(filters.target_date);
       if (Number.isNaN(date.getTime())) {
-        const error = new Error("work_date must be a valid date (YYYY-MM-DD)");
+        const error = new Error("target_date must be a valid date (YYYY-MM-DD)");
         error.statusCode = 400;
         throw error;
       }
@@ -122,7 +118,8 @@ class LocationShiftService {
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
 
-      assignmentQuery.work_date = { $gte: startOfDay, $lte: endOfDay };
+      assignmentQuery.start_date = { $lte: endOfDay };
+      assignmentQuery.end_date = { $gte: startOfDay };
     }
 
     const assignments = await StaffShiftAssignment.find(assignmentQuery)
@@ -163,7 +160,8 @@ class LocationShiftService {
 
       return {
         assignment_id: assignment.id,
-        work_date: assignment.work_date,
+        start_date: assignment.start_date,
+        end_date: assignment.end_date,
         status: assignment.status,
         checkin_at: assignment.checkin_at,
         checkout_at: assignment.checkout_at,

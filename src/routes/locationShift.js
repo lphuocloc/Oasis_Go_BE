@@ -73,11 +73,12 @@ router.post(
  *         schema:
  *           type: string
  *       - in: query
- *         name: work_date
+ *         name: target_date
  *         required: false
  *         schema:
  *           type: string
  *           format: date
+ *         description: Return assignments whose date range covers this date
  *       - in: query
  *         name: role
  *         required: false

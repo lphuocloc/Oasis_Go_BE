@@ -5,6 +5,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
 	loadManagerScope,
 	requireManagerPodAccess,
+	applyManagerPodScope,
 } = require("../middlewares/managerScopeMiddleware");
 
 /**
@@ -199,7 +200,14 @@ router.post("/create", protect, authorize("admin"), podController.createPods);
  *       500:
  *         description: Server error
  */
-router.get("/", podController.getAllPods);
+router.get(
+	"/",
+	protect,
+	authorize("admin", "manager", "user"),
+	loadManagerScope,
+	applyManagerPodScope,
+	podController.getAllPods
+);
 
 /**
  * @swagger
@@ -219,7 +227,14 @@ router.get("/", podController.getAllPods);
  *       500:
  *         description: Server error
  */
-router.get("/available", podController.getAvailablePods);
+router.get(
+	"/available",
+	protect,
+	authorize("admin", "manager", "user"),
+	loadManagerScope,
+	applyManagerPodScope,
+	podController.getAvailablePods
+);
 
 /**
  * @swagger
@@ -239,7 +254,14 @@ router.get("/available", podController.getAvailablePods);
  *       500:
  *         description: Server error
  */
-router.get("/cluster/:clusterId", podController.getPodsByCluster);
+router.get(
+	"/cluster/:clusterId",
+	protect,
+	authorize("admin", "manager", "user"),
+	loadManagerScope,
+	applyManagerPodScope,
+	podController.getPodsByCluster
+);
 
 /**
  * @swagger
@@ -261,7 +283,14 @@ router.get("/cluster/:clusterId", podController.getPodsByCluster);
  *       500:
  *         description: Server error
  */
-router.get("/:id", podController.getPodById);
+router.get(
+	"/:id",
+	protect,
+	authorize("admin", "manager", "user"),
+	loadManagerScope,
+	requireManagerPodAccess({ source: "params", key: "id" }),
+	podController.getPodById
+);
 
 /**
  * @swagger

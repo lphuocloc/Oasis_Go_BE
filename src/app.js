@@ -48,6 +48,7 @@ const cleaningPhotoRouter = require("./routes/cleaningPhoto");
 const maintenanceTaskRouter = require("./routes/maintenanceTask");
 const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
+const staffWorkRosterRouter = require("./routes/staffWorkRoster");
 const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const app = express();
 
@@ -85,6 +86,7 @@ app.use("/api/cleaning-photos", cleaningPhotoRouter);
 app.use("/api/maintenance-tasks", maintenanceTaskRouter);
 app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
+app.use("/api/staff-work-rosters", staffWorkRosterRouter);
 app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);

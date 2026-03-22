@@ -1,6 +1,5 @@
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const StaffAttendanceLog = require("../models/StaffAttendanceLog");
-const Location = require("../models/Location");
 const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
 const User = require("../models/User");
@@ -141,16 +140,84 @@ class StaffShiftAssignmentService {
     };
   }
 
-  async assignManager({ staff_id, parent_location_id, shift_id, work_date }) {
-    if (!staff_id || !parent_location_id || !work_date) {
-      const error = new Error("staff_id, parent_location_id and work_date are required");
+  buildDateTimeFromDateAndClock(dateValue, clockValue) {
+    if (!dateValue || !clockValue) {
+      return null;
+    }
+
+    const [hourStr, minuteStr, secondStr = "00"] = String(clockValue).split(":");
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    const second = Number(secondStr);
+
+    if (
+      !Number.isInteger(hour) ||
+      !Number.isInteger(minute) ||
+      !Number.isInteger(second) ||
+      hour < 0 ||
+      hour > 23 ||
+      minute < 0 ||
+      minute > 59 ||
+      second < 0 ||
+      second > 59
+    ) {
+      return null;
+    }
+
+    const datetime = new Date(dateValue);
+    datetime.setHours(hour, minute, second, 0);
+    return datetime;
+  }
+
+  normalizeDateRange(startDateInput, endDateInput) {
+    if (!startDateInput || !endDateInput) {
+      const error = new Error("start_date and end_date are required");
       error.statusCode = 400;
       throw error;
     }
 
-    const [staff, parentLocation] = await Promise.all([
+    const parsedStart = new Date(startDateInput);
+    const parsedEnd = new Date(endDateInput);
+
+    if (Number.isNaN(parsedStart.getTime()) || Number.isNaN(parsedEnd.getTime())) {
+      const error = new Error("start_date and end_date must be valid dates (YYYY-MM-DD)");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const startDate = new Date(parsedStart);
+    startDate.setHours(0, 0, 0, 0);
+
+    const endDate = new Date(parsedEnd);
+    endDate.setHours(23, 59, 59, 999);
+
+    if (startDate > endDate) {
+      const error = new Error("start_date must be less than or equal to end_date");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    return { startDate, endDate };
+  }
+
+
+
+  async createAssignment(data) {
+    const { staff_id, location_shift_id, start_date, end_date } = data;
+
+    if (!staff_id || !location_shift_id || !start_date || !end_date) {
+      const error = new Error(
+        "staff_id, location_shift_id, start_date and end_date are required"
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const { startDate, endDate } = this.normalizeDateRange(start_date, end_date);
+
+    const [staff, locationShift] = await Promise.all([
       this.findUserById(staff_id),
-      Location.findOne({ id: parent_location_id }),
+      LocationShift.findOne({ id: location_shift_id }).lean(),
     ]);
 
     if (!staff) {
@@ -159,103 +226,171 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    if (staff.role !== "manager") {
-      const error = new Error("Selected staff must have role manager");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    if (!parentLocation) {
-      const error = new Error("Parent location not found");
+    if (!locationShift) {
+      const error = new Error("Location shift not found");
       error.statusCode = 404;
       throw error;
     }
 
-    const date = new Date(work_date);
-    if (Number.isNaN(date.getTime())) {
-      const error = new Error("work_date must be a valid date (YYYY-MM-DD)");
-      error.statusCode = 400;
+    // Get the shift to calculate checkin_at and checkout_at
+    const shift = await StaffShift.findOne({ id: locationShift.shift_id }).lean();
+    if (!shift) {
+      const error = new Error("Shift template not found for this location shift");
+      error.statusCode = 404;
       throw error;
     }
 
-    const normalizedWorkDate = new Date(date);
-    normalizedWorkDate.setHours(0, 0, 0, 0);
-
-    const locationShiftQuery = {
-      location_id: parent_location_id,
-    };
-
-    if (shift_id) {
-      locationShiftQuery.shift_id = shift_id;
-    }
-
-    const scopedLocationShifts = await LocationShift.find(locationShiftQuery).lean();
-
-    if (scopedLocationShifts.length === 0) {
-      const error = new Error("No location_shift found for this parent location and condition");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const shiftIds = [...new Set(scopedLocationShifts.map((item) => item.shift_id))];
-    const shifts = await StaffShift.find({ id: { $in: shiftIds } }).lean();
-    const shiftMap = new Map(shifts.map((item) => [item.id, item]));
-
-    const nonManagerLocationShiftIds = scopedLocationShifts
-      .filter((item) => {
-        const shift = shiftMap.get(item.shift_id);
-        return !shift || shift.role !== "MANAGER";
-      })
-      .map((item) => item.id);
-
-    const targetLocationShiftIds = scopedLocationShifts
-      .filter((item) => !nonManagerLocationShiftIds.includes(item.id))
-      .map((item) => item.id);
-
-    if (targetLocationShiftIds.length === 0) {
-      const error = new Error("No valid MANAGER location_shift found in child locations");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const existingAssignments = await StaffShiftAssignment.find({
+    // Check for duplicate assignment with same date range
+    const existing = await StaffShiftAssignment.findOne({
       staff_id,
-      location_shift_id: { $in: targetLocationShiftIds },
-      work_date: normalizedWorkDate,
+      location_shift_id,
+      start_date: startDate,
+      end_date: endDate,
     }).lean();
 
-    const existingByLocationShift = new Set(existingAssignments.map((item) => item.location_shift_id));
-
-    const assignmentsToCreate = scopedLocationShifts
-      .filter((item) => !existingByLocationShift.has(item.id))
-      .filter((item) => !nonManagerLocationShiftIds.includes(item.id))
-      .map((item) => ({
-        staff_id,
-        location_shift_id: item.id,
-        work_date: normalizedWorkDate,
-        status: "ASSIGNED",
-      }));
-
-    let createdAssignments = [];
-    if (assignmentsToCreate.length > 0) {
-      createdAssignments = await StaffShiftAssignment.insertMany(assignmentsToCreate, {
-        ordered: false,
-      });
+    if (existing) {
+      const error = new Error("Assignment already exists for this staff, location shift and date range");
+      error.statusCode = 409;
+      throw error;
     }
 
-    return {
-      parent_location_id,
-      shift_id: shift_id || null,
-      staff_id,
-      work_date: normalizedWorkDate,
-      total_target_locations: 1,
-      total_location_shifts_found: scopedLocationShifts.length,
-      assigned_count: createdAssignments.length,
-      skipped_existing_count: existingAssignments.length,
-      non_manager_location_shift_ids: nonManagerLocationShiftIds,
-      assigned_location_shift_ids: createdAssignments.map((item) => item.location_shift_id),
-    };
+    try {
+      const assignment = await StaffShiftAssignment.create({
+        staff_id,
+        location_shift_id,
+        start_date: startDate,
+        end_date: endDate,
+        checkin_at: this.buildDateTimeFromDateAndClock(startDate, shift.start_time),
+        checkout_at: this.buildDateTimeFromDateAndClock(endDate, shift.end_time),
+        status: "ASSIGNED",
+      });
+
+      return assignment;
+    } catch (error) {
+      if (error && error.code === 11000) {
+        const duplicateError = new Error("Assignment already exists for this date range");
+        duplicateError.statusCode = 409;
+        throw duplicateError;
+      }
+      throw error;
+    }
   }
+
+  async getAssignments(filters = {}) {
+    const query = {};
+
+    if (filters.staff_id) {
+      query.staff_id = filters.staff_id;
+    }
+
+    if (filters.location_shift_id) {
+      query.location_shift_id = filters.location_shift_id;
+    }
+
+    if (filters.status) {
+      query.status = filters.status;
+    }
+
+    if (filters.start_date || filters.end_date) {
+      query.$and = [];
+      if (filters.start_date) {
+        const parsedStart = new Date(filters.start_date);
+        parsedStart.setHours(0, 0, 0, 0);
+        query.$and.push({ end_date: { $gte: parsedStart } });
+      }
+      if (filters.end_date) {
+        const parsedEnd = new Date(filters.end_date);
+        parsedEnd.setHours(23, 59, 59, 999);
+        query.$and.push({ start_date: { $lte: parsedEnd } });
+      }
+    }
+
+    return StaffShiftAssignment.find(query).sort({ start_date: 1, created_at: -1 });
+  }
+
+  async getAssignmentById(id) {
+    const assignment = await StaffShiftAssignment.findOne({ id });
+
+    if (!assignment) {
+      const error = new Error("Assignment not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    return assignment;
+  }
+
+  async updateAssignment(id, data) {
+    const assignment = await this.getAssignmentById(id);
+
+    let startDate = assignment.start_date;
+    let endDate = assignment.end_date;
+
+    // If date range changes, validate and recalculate times
+    if (data.start_date || data.end_date) {
+      const newStart = data.start_date ? new Date(data.start_date) : assignment.start_date;
+      const newEnd = data.end_date ? new Date(data.end_date) : assignment.end_date;
+
+      newStart.setHours(0, 0, 0, 0);
+      newEnd.setHours(23, 59, 59, 999);
+
+      if (newStart > newEnd) {
+        const error = new Error("start_date must be less than or equal to end_date");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Check for duplicate with new date range
+      if (data.start_date || data.end_date) {
+        const existingOther = await StaffShiftAssignment.findOne({
+          id: { $ne: id },
+          staff_id: assignment.staff_id,
+          location_shift_id: assignment.location_shift_id,
+          start_date: newStart,
+          end_date: newEnd,
+        }).lean();
+
+        if (existingOther) {
+          const error = new Error("Assignment already exists for this date range");
+          error.statusCode = 409;
+          throw error;
+        }
+      }
+
+      startDate = newStart;
+      endDate = newEnd;
+
+      // Recalculate times based on shift
+      const locationShift = await LocationShift.findOne({ id: assignment.location_shift_id }).lean();
+      const shift = await StaffShift.findOne({ id: locationShift.shift_id }).lean();
+
+      assignment.checkin_at = this.buildDateTimeFromDateAndClock(startDate, shift.start_time);
+      assignment.checkout_at = this.buildDateTimeFromDateAndClock(endDate, shift.end_time);
+      assignment.start_date = startDate;
+      assignment.end_date = endDate;
+    }
+
+    if (data.status !== undefined) {
+      const validStatuses = ["ASSIGNED", "CHECKED_IN", "COMPLETED", "ABSENT"];
+      if (!validStatuses.includes(data.status)) {
+        const error = new Error(`Invalid status. Must be one of: ${validStatuses.join(", ")}`);
+        error.statusCode = 400;
+        throw error;
+      }
+      assignment.status = data.status;
+    }
+
+    await assignment.save();
+    return assignment;
+  }
+
+  async deleteAssignment(id) {
+    const assignment = await this.getAssignmentById(id);
+    await StaffShiftAssignment.deleteOne({ id });
+    return assignment;
+  }
+
+
 
   async findUserById(staffId) {
     const userQuery = { $or: [{ id: staffId }] };
@@ -291,27 +426,22 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    if (assignment.checkout_at) {
-      const error = new Error("Shift has already been checked out");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    if (assignment.status === "CHECKED_IN") {
-      const error = new Error("You have already checked in");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    if (["COMPLETED", "ABSENT"].includes(assignment.status)) {
+    if (assignment.status === "ABSENT") {
       const error = new Error(`Cannot check in assignment with status ${assignment.status}`);
       error.statusCode = 400;
       throw error;
     }
 
-    assignment.checkin_at = new Date();
-    assignment.status = "CHECKED_IN";
-    await assignment.save();
+    const existingCheckinLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKIN",
+    }).select("id").lean();
+
+    if (existingCheckinLog) {
+      const error = new Error("You have already checked in");
+      error.statusCode = 400;
+      throw error;
+    }
 
     await StaffAttendanceLog.create({
       staff_id: assignment.staff_id,
@@ -347,21 +477,27 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    if (!assignment.checkin_at || assignment.status !== "CHECKED_IN") {
+    const existingCheckinLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKIN",
+    }).select("id").lean();
+
+    if (!existingCheckinLog) {
       const error = new Error("You must check in before check out");
       error.statusCode = 400;
       throw error;
     }
 
-    if (assignment.checkout_at) {
+    const existingCheckoutLog = await StaffAttendanceLog.findOne({
+      shift_assignment_id: assignment.id,
+      action: "CHECKOUT",
+    }).select("id").lean();
+
+    if (existingCheckoutLog) {
       const error = new Error("You have already checked out");
       error.statusCode = 400;
       throw error;
     }
-
-    assignment.checkout_at = new Date();
-    assignment.status = "COMPLETED";
-    await assignment.save();
 
     await StaffAttendanceLog.create({
       staff_id: assignment.staff_id,

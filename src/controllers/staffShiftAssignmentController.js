@@ -23,27 +23,88 @@ const getMyAssignments = async (req, res) => {
   }
 };
 
-const assignManager = async (req, res) => {
+const createAssignment = async (req, res) => {
   try {
-    const result = await staffShiftAssignmentService.assignManager({
-      staff_id: req.body.staff_id,
-      parent_location_id: req.body.parent_location_id,
-      shift_id: req.body.shift_id,
-      work_date: req.body.work_date,
-    });
-
+    const assignment = await staffShiftAssignmentService.createAssignment(req.body);
     res.status(201).json({
       success: true,
-      message: "Manager assigned for location successfully",
-      data: result,
+      message: "Assignment created successfully",
+      data: assignment,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Failed to assign manager",
+      message: error.message || "Failed to create assignment",
     });
   }
 };
+
+const getAssignments = async (req, res) => {
+  try {
+    const assignments = await staffShiftAssignmentService.getAssignments(req.query);
+    res.status(200).json({
+      success: true,
+      count: assignments.length,
+      data: assignments,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve assignments",
+    });
+  }
+};
+
+const getAssignmentById = async (req, res) => {
+  try {
+    const assignment = await staffShiftAssignmentService.getAssignmentById(req.params.id);
+    res.status(200).json({
+      success: true,
+      data: assignment,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve assignment",
+    });
+  }
+};
+
+const updateAssignment = async (req, res) => {
+  try {
+    const assignment = await staffShiftAssignmentService.updateAssignment(
+      req.params.id,
+      req.body
+    );
+    res.status(200).json({
+      success: true,
+      message: "Assignment updated successfully",
+      data: assignment,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message || "Failed to update assignment",
+    });
+  }
+};
+
+const deleteAssignment = async (req, res) => {
+  try {
+    await staffShiftAssignmentService.deleteAssignment(req.params.id);
+    res.status(200).json({
+      success: true,
+      message: "Assignment deleted successfully",
+    });
+  } catch (error) {
+    res.status(error.statusCode || 400).json({
+      success: false,
+      message: error.message || "Failed to delete assignment",
+    });
+  }
+};
+
+
 
 const checkinWork = async (req, res) => {
   try {
@@ -87,7 +148,11 @@ const checkoutWork = async (req, res) => {
 
 module.exports = {
   getMyAssignments,
-  assignManager,
+  createAssignment,
+  getAssignments,
+  getAssignmentById,
+  updateAssignment,
+  deleteAssignment,
   checkinWork,
   checkoutWork,
 };
