@@ -120,12 +120,18 @@ class BookingOrderController {
     async cancelBookingOrder(req, res) {
         try {
             const { id } = req.params;
+            const { booking_id, booking_ids } = req.body || {};
 
-            const order = await bookingOrderService.cancelBookingOrder(id);
+            const order = await bookingOrderService.cancelBookingOrder(id, req.user, {
+                booking_ids: [
+                    ...(Array.isArray(booking_ids) ? booking_ids : []),
+                    ...(booking_id ? [booking_id] : []),
+                ],
+            });
 
             return res.status(200).json({
                 success: true,
-                message: "Booking order cancelled successfully",
+                message: "Booking order cancellation processed successfully",
                 data: order
             });
         } catch (error) {
@@ -133,6 +139,35 @@ class BookingOrderController {
             return res.status(error.statusCode || 500).json({
                 success: false,
                 message: error.message || "Failed to cancel booking order"
+            });
+        }
+    }
+
+    /**
+     * Checkout booking order (all or selected bookings)
+     * @route POST /api/booking-orders/:id/checkout
+     */
+    async checkoutBookingOrder(req, res) {
+        try {
+            const { id } = req.params;
+            const { scope, booking_id, booking_ids } = req.body || {};
+
+            const result = await bookingOrderService.checkoutOrder(id, req.user, {
+                scope,
+                booking_id,
+                booking_ids,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Booking order checkout processed",
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error checkout booking order:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to checkout booking order",
             });
         }
     }

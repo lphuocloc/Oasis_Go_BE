@@ -16,6 +16,10 @@ connectDB();
 const bookingOrderService = require("./services/bookingOrderService");
 bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 
+// Start booking auto-activation checkin job
+const bookingService = require("./services/bookingService");
+bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");
@@ -39,6 +43,9 @@ const warehouseRouter = require("./routes/warehouse");
 const locationWarehouseRouter = require("./routes/locationWarehouse");
 const inventoryStockRouter = require("./routes/inventoryStock");
 const inventoryCheckoutLogRouter = require("./routes/inventoryCheckoutLog");
+const cleaningTaskRouter = require("./routes/cleaningTask");
+const cleaningPhotoRouter = require("./routes/cleaningPhoto");
+const maintenanceTaskRouter = require("./routes/maintenanceTask");
 const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
 const staffWorkRosterRouter = require("./routes/staffWorkRoster");
@@ -74,6 +81,9 @@ app.use("/api/warehouses", warehouseRouter);
 app.use("/api/location-warehouses", locationWarehouseRouter);
 app.use("/api/inventory-stocks", inventoryStockRouter);
 app.use("/api/inventory-checkout-logs", inventoryCheckoutLogRouter);
+app.use("/api/cleaning-tasks", cleaningTaskRouter);
+app.use("/api/cleaning-photos", cleaningPhotoRouter);
+app.use("/api/maintenance-tasks", maintenanceTaskRouter);
 app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
 app.use("/api/staff-work-rosters", staffWorkRosterRouter);

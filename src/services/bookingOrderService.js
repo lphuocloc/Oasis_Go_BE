@@ -6,6 +6,7 @@ const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const Location = require("../models/Location");
+const Transaction = require("../models/Transaction");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
 
@@ -14,9 +15,50 @@ const DEFAULT_SLOT_DURATION_MINUTES = 30;
 const HOLD_EXPIRATION_MINUTES = 3;
 const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 const PRICE_UNIT_MULTIPLIER = 10000;
+const REFUND_CANCEL_WINDOW_HOURS = 48;
+const REFUND_RATE_BEFORE_48H = 0.8;
 
 
 class BookingOrderService {
+    async _releaseBookingResources(bookingIds, session = null) {
+        if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
+            return;
+        }
+
+        const bookingSlots = await BookingSlot.find({ booking_id: { $in: bookingIds } }).session(session);
+        const timeSlotIds = bookingSlots.map((bookingSlot) => bookingSlot.time_slot_id);
+
+        if (timeSlotIds.length > 0) {
+            await TimeSlot.deleteMany({ id: { $in: timeSlotIds } }).session(session);
+        }
+
+        await BookingSlot.deleteMany({ booking_id: { $in: bookingIds } }).session(session);
+    }
+
+    _calculateRefundForBookings(bookings = [], requestedAt = new Date()) {
+        const requestedAtMs = new Date(requestedAt).getTime();
+        const thresholdMs = REFUND_CANCEL_WINDOW_HOURS * 60 * 60 * 1000;
+
+        const eligibleBookings = bookings.filter((booking) => {
+            const startMs = new Date(booking.start_time).getTime();
+            return Number.isFinite(startMs) && startMs - requestedAtMs >= thresholdMs;
+        });
+
+        const refundableBaseAmount = eligibleBookings.reduce((sum, booking) => {
+            return sum + Number(booking.total_price || 0);
+        }, 0);
+
+        const refundAmount = Number((refundableBaseAmount * REFUND_RATE_BEFORE_48H).toFixed(2));
+
+        return {
+            eligibleBookings,
+            refundableBaseAmount: Number(refundableBaseAmount.toFixed(2)),
+            refundRate: REFUND_RATE_BEFORE_48H,
+            refundAmount,
+            policy: `Refund 80% when cancelled at least ${REFUND_CANCEL_WINDOW_HOURS} hours before check-in`,
+        };
+    }
+
     /**
      * Create a new booking order with multiple pod bookings
      * Uses Mongoose Transaction to ensure data consistency
@@ -526,8 +568,8 @@ class BookingOrderService {
                         { $set: { status: 'CANCELLED' } }
                     );
 
-                    // Update order status to CANCELLED
-                    order.status = 'CANCELLED';
+                    // Update order status to CANCEL (expired unpaid order)
+                    order.status = 'CANCEL';
                     await order.save();
 
                     console.log(`Order ${orderId} cancelled and slots released.`);
@@ -671,7 +713,7 @@ class BookingOrderService {
      * @param {String} orderId - Order ID
      * @returns {Promise<Object>} Cancelled order
      */
-    async cancelBookingOrder(orderId) {
+    async cancelBookingOrder(orderId, actor, options = {}) {
         const session = await mongoose.startSession();
 
         try {
@@ -684,53 +726,275 @@ class BookingOrderService {
                     throw error;
                 }
 
-                if (order.status === 'CANCELLED') {
+                const actorId = String(actor?._id || actor?.id || "");
+                const isOwner = actorId && actorId === String(order.user_id);
+                if (!isOwner) {
+                    const error = new Error("Only order owner can cancel this booking order");
+                    error.statusCode = 403;
+                    throw error;
+                }
+
+                if (["CANCEL", "FULLY_CANCELLED"].includes(order.status)) {
                     const error = new Error("Order is already cancelled");
                     error.statusCode = 400;
                     throw error;
                 }
 
-                if (order.status === 'PAID') {
-                    const error = new Error("Cannot cancel paid order");
+                if (!["PENDING", "PAID", "PARTIAL_CANCEL"].includes(order.status)) {
+                    const error = new Error(`Cannot cancel order with status ${order.status}`);
                     error.statusCode = 400;
                     throw error;
                 }
 
                 // Get all bookings for this order
                 const bookings = await Booking.find({ order_id: orderId }).session(session);
-
-                // Release time slots for each booking
-                for (const booking of bookings) {
-                    // Get all booking slots
-                    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).session(session);
-                    const timeSlotIds = bookingSlots.map(bs => bs.time_slot_id);
-
-                    // Delete time slots (release them)
-                    if (timeSlotIds.length > 0) {
-                        await TimeSlot.deleteMany({ id: { $in: timeSlotIds } }).session(session);
-                    }
-
-                    // Delete booking slots
-                    await BookingSlot.deleteMany({ booking_id: booking.id }).session(session);
+                if (bookings.length === 0) {
+                    const error = new Error("No bookings found for this order");
+                    error.statusCode = 404;
+                    throw error;
                 }
 
-                // Cancel all bookings in this order within transaction
+                const requestedBookingIds = Array.isArray(options.booking_ids)
+                    ? [...new Set(options.booking_ids.map((id) => String(id).trim()).filter(Boolean))]
+                    : [];
+
+                let targetBookings = [];
+                if (requestedBookingIds.length > 0) {
+                    const bookingMap = new Map(bookings.map((booking) => [String(booking.id), booking]));
+                    const missingIds = requestedBookingIds.filter((id) => !bookingMap.has(id));
+                    if (missingIds.length > 0) {
+                        const error = new Error(`Invalid booking_ids: ${missingIds.join(", ")}`);
+                        error.statusCode = 400;
+                        throw error;
+                    }
+
+                    targetBookings = requestedBookingIds.map((id) => bookingMap.get(id));
+                } else {
+                    targetBookings = bookings.filter((booking) => booking.status !== "CANCELLED");
+                }
+
+                if (targetBookings.length === 0) {
+                    const error = new Error("No active bookings available for cancellation");
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                const hasStartedOrCompletedBooking = bookings.some(
+                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED"
+                );
+
+                const targetHasStartedOrCompleted = targetBookings.some(
+                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED"
+                );
+
+                if (targetHasStartedOrCompleted) {
+                    const error = new Error("Cannot cancel booking that is already in use or completed");
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                const targetBookedBookings = targetBookings.filter((booking) => booking.status === "BOOKED");
+                const targetBookingIds = targetBookedBookings.map((booking) => booking.id);
+
+                if (targetBookingIds.length === 0) {
+                    const error = new Error("Selected bookings are already cancelled");
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                // PENDING order can only be fully cancelled.
+                if (order.status === "PENDING" && requestedBookingIds.length > 0) {
+                    const error = new Error("PENDING order only supports full cancellation");
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                if (order.status === "PENDING" && hasStartedOrCompletedBooking) {
+                    const error = new Error("Cannot cancel order because one or more bookings are already in use or completed");
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                await this._releaseBookingResources(targetBookingIds, session);
+
                 await Booking.updateMany(
-                    { order_id: orderId, status: 'BOOKED' },
+                    { id: { $in: targetBookingIds } },
                     { $set: { status: 'CANCELLED' } }
                 ).session(session);
 
-                // Cancel the order within transaction
-                order.status = 'CANCELLED';
+                if (order.status === "PENDING") {
+                    order.status = "CANCEL";
+                    await order.save({ session });
+
+                    return {
+                        order,
+                        cancellation_type: "FULL_CANCEL",
+                        cancelled_booking_ids: targetBookingIds,
+                        refund: {
+                            applicable: false,
+                            amount: 0,
+                            reason: "Order is unpaid (PENDING)",
+                        },
+                    };
+                }
+
+                const updatedBookings = await Booking.find({ order_id: orderId }).session(session);
+                const allCancelled = updatedBookings.every((booking) => booking.status === "CANCELLED");
+
+                const nextOrderStatus = allCancelled ? "FULLY_CANCELLED" : "PARTIAL_CANCEL";
+                order.status = nextOrderStatus;
                 await order.save({ session });
 
-                return order;
+                const now = new Date();
+                const refundSummary = this._calculateRefundForBookings(targetBookedBookings, now);
+
+                if (refundSummary.refundAmount > 0) {
+                    const latestCharge = await Transaction.findOne({
+                        order_id: orderId,
+                        type: "CHARGE",
+                        status: "SUCCESS",
+                    })
+                        .sort({ created_at: -1 })
+                        .session(session);
+
+                    await Transaction.create([{
+                        order_id: orderId,
+                        amount: refundSummary.refundAmount,
+                        currency: "VND",
+                        type: "REFUND",
+                        method: "VNPAY",
+                        status: "SUCCESS",
+                        provider_reference: latestCharge?.provider_reference || null,
+                    }], { session });
+                }
+
+                return {
+                    order,
+                    cancellation_type: allCancelled ? "FULL_CANCEL" : "PARTIAL_CANCEL",
+                    cancelled_booking_ids: targetBookingIds,
+                    refund: {
+                        applicable: refundSummary.refundAmount > 0,
+                        amount: refundSummary.refundAmount,
+                        refundable_base_amount: refundSummary.refundableBaseAmount,
+                        refund_rate: refundSummary.refundRate,
+                        eligible_booking_ids: refundSummary.eligibleBookings.map((booking) => booking.id),
+                        policy: refundSummary.policy,
+                    },
+                };
             });
         } catch (error) {
             throw error;
         } finally {
             session.endSession();
         }
+    }
+
+    /**
+     * Checkout bookings in an order with partial success handling
+     * @param {String} orderId - Booking order ID
+     * @param {Object} actor - Authenticated user
+     * @param {Object} options - Checkout options
+     * @returns {Promise<Object>} Checkout summary
+     */
+    async checkoutOrder(orderId, actor, options = {}) {
+        const order = await BookingOrder.findOne({ id: orderId });
+        if (!order) {
+            const error = new Error("Booking order not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const actorId = String(actor?._id || actor?.id || "");
+        const isOwner = actorId && actorId === String(order.user_id);
+        if (!isOwner) {
+            const error = new Error("Only order owner can checkout this booking order");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const scope = String(options.scope || "ALL_IN_ORDER").toUpperCase();
+        if (!["ALL_IN_ORDER", "SELECTED_BOOKINGS"].includes(scope)) {
+            const error = new Error("scope must be ALL_IN_ORDER or SELECTED_BOOKINGS");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        let selectedBookingIds = [];
+        if (scope === "SELECTED_BOOKINGS") {
+            const bookingIdsFromList = Array.isArray(options.booking_ids)
+                ? options.booking_ids
+                : [];
+            const bookingIdSingle = options.booking_id ? [options.booking_id] : [];
+
+            const mergedBookingIds = [...bookingIdsFromList, ...bookingIdSingle]
+                .map((id) => String(id).trim())
+                .filter(Boolean);
+
+            if (mergedBookingIds.length === 0) {
+                const error = new Error("booking_ids is required when scope is SELECTED_BOOKINGS");
+                error.statusCode = 400;
+                throw error;
+            }
+
+            selectedBookingIds = [...new Set(mergedBookingIds)];
+        }
+
+        const bookingQuery = { order_id: orderId };
+        if (scope === "SELECTED_BOOKINGS") {
+            bookingQuery.id = { $in: selectedBookingIds };
+        }
+
+        const bookings = await Booking.find(bookingQuery).sort({ createdAt: 1 });
+        if (bookings.length === 0) {
+            const error = new Error("No bookings found for checkout");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const requestedAt = new Date();
+
+        const checked_out = [];
+        const skipped = [];
+
+        for (const booking of bookings) {
+            if (booking.status === "COMPLETED") {
+                skipped.push({ id: booking.id, reason: "ALREADY_COMPLETED" });
+                continue;
+            }
+
+            if (booking.status === "CANCELLED") {
+                skipped.push({ id: booking.id, reason: "CANCELLED" });
+                continue;
+            }
+
+            if (booking.status !== "IN_USE") {
+                skipped.push({ id: booking.id, reason: "NOT_IN_USE" });
+                continue;
+            }
+
+            booking.status = "COMPLETED";
+            booking.actual_end_time = requestedAt;
+            booking.cleaner_access_allowed = true;
+            booking.cleaner_access_updated_at = new Date();
+            await booking.save();
+
+            checked_out.push({
+                id: booking.id,
+                pod_id: booking.pod_id,
+                status: booking.status,
+                actual_end_time: booking.actual_end_time,
+            });
+        }
+
+        return {
+            order_id: order.id,
+            scope,
+            total_bookings: bookings.length,
+            checked_out_count: checked_out.length,
+            skipped_count: skipped.length,
+            checked_out,
+            skipped,
+        };
     }
 
     /**
@@ -779,8 +1043,8 @@ class BookingOrderService {
                         { $set: { status: 'CANCELLED' } }
                     );
 
-                    // Update order status to CANCELLED
-                    order.status = 'CANCELLED';
+                    // Update order status to CANCEL (expired unpaid order)
+                    order.status = 'CANCEL';
                     await order.save();
 
                     cancelledCount++;

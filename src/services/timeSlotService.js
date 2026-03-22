@@ -49,84 +49,6 @@ class TimeSlotService {
      * @param {Number} days - Number of days to generate (default: 7)
      * @returns {Array} Array of created time slots
      */
-    async generateTimeSlotsForPod(podId, days = 7) {
-        try {
-            const pod = await Pod.findOne({ id: podId });
-            if (!pod) {
-                const error = new Error("Pod not found");
-                error.statusCode = 404;
-                throw error;
-            }
-
-            const cluster = await PodCluster.findOne({ id: pod.cluster_id });
-            if (!cluster) {
-                const error = new Error("Pod cluster not found");
-                error.statusCode = 404;
-                throw error;
-            }
-
-            const location = await Location.findOne({ id: cluster.location_id });
-            const operatingHours = await this.getOperatingHours(location);
-
-            const startDate = new Date();
-            startDate.setDate(startDate.getDate() + 1);
-            startDate.setHours(0, 0, 0, 0);
-
-            const endDate = new Date(startDate);
-            endDate.setDate(endDate.getDate() + days);
-
-            const existingSlots = await TimeSlot.find({
-                pod_id: pod.id,
-                start_time: { $gte: startDate, $lt: endDate },
-            })
-                .select("start_time end_time")
-                .lean();
-
-            const existingSlotKeys = new Set(
-                existingSlots.map((s) => `${new Date(s.start_time).toISOString()}|${new Date(s.end_time).toISOString()}`)
-            );
-
-            const slotsToCreate = [];
-
-            for (let day = 0; day < days; day++) {
-                const currentDate = new Date(startDate);
-                currentDate.setDate(currentDate.getDate() + day);
-                currentDate.setHours(operatingHours.start, 0, 0, 0);
-
-                while (currentDate.getHours() < operatingHours.end) {
-                    const startTime = new Date(currentDate);
-                    const endTime = new Date(currentDate);
-                    endTime.setMinutes(endTime.getMinutes() + SLOT_DURATION_MINUTES);
-
-                    const isWithinHours = operatingHours.end === 24 || endTime.getHours() < operatingHours.end ||
-                        (endTime.getHours() === operatingHours.end && endTime.getMinutes() === 0);
-
-                    if (isWithinHours) {
-                        const key = `${startTime.toISOString()}|${endTime.toISOString()}`;
-                        if (!existingSlotKeys.has(key)) {
-                            slotsToCreate.push({
-                                pod_id: pod.id,
-                                start_time: startTime,
-                                end_time: endTime,
-                                status: "AVAILABLE",
-                            });
-                        }
-                    }
-
-                    currentDate.setMinutes(currentDate.getMinutes() + SLOT_DURATION_MINUTES);
-                }
-            }
-
-            if (slotsToCreate.length === 0) {
-                return [];
-            }
-
-            return TimeSlot.insertMany(slotsToCreate);
-        } catch (error) {
-            console.error("Error generating time slots:", error);
-            throw error;
-        }
-    }
 
     /**
      * Create a new time slot
@@ -346,9 +268,7 @@ class TimeSlotService {
      * @param {Number} days - Number of days (default: 7)
      * @returns {Array} Created time slots
      */
-    async generateSlotsForPod(podId, days = 7) {
-        return await this.generateTimeSlotsForPod(podId, days);
-    }
+
 
     /**
      * Reserve time slots
@@ -661,4 +581,3 @@ const timeSlotService = new TimeSlotService();
 
 // Export the method directly for backward compatibility (used in Pod model)
 module.exports = timeSlotService;
-module.exports.generateTimeSlotsForPod = (podId, days) => timeSlotService.generateTimeSlotsForPod(podId, days);

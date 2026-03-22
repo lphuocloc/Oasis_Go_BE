@@ -104,6 +104,38 @@ router
 
 /**
  * @swagger
+ * /api/doors/generate-by-cluster/{clusterId}:
+ *   post:
+ *     summary: Generate doors for all pods in a pod cluster
+ *     tags: [Doors]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: clusterId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Pod cluster ID
+ *     responses:
+ *       201:
+ *         description: Doors generated successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Cluster not found or no pods in cluster
+ */
+router.post(
+  "/generate-by-cluster/:clusterId",
+  protect,
+  authorize("admin", "manager"),
+  doorController.generateDoorsByPodCluster
+);
+
+/**
+ * @swagger
  * /api/doors/{id}:
  *   get:
  *     summary: Get door by ID

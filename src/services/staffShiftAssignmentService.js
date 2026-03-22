@@ -6,6 +6,140 @@ const User = require("../models/User");
 const mongoose = require("mongoose");
 
 class StaffShiftAssignmentService {
+  async getMyAssignments({ user, work_date, from_date, to_date, status }) {
+    if (!user) {
+      const error = new Error("User context is required");
+      error.statusCode = 401;
+      throw error;
+    }
+
+    const staffIds = [
+      user && user.id ? String(user.id) : null,
+      user && user._id ? String(user._id) : null,
+    ].filter(Boolean);
+
+    if (staffIds.length === 0) {
+      const error = new Error("Unable to resolve user id for shift assignments");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const assignmentQuery = {
+      staff_id: { $in: [...new Set(staffIds)] },
+    };
+
+    if (work_date) {
+      const date = new Date(work_date);
+      if (Number.isNaN(date.getTime())) {
+        const error = new Error("work_date must be a valid date (YYYY-MM-DD)");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      const startOfDay = new Date(date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(date);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      assignmentQuery.work_date = { $gte: startOfDay, $lte: endOfDay };
+    } else if (from_date || to_date) {
+      const workDateRange = {};
+
+      if (from_date) {
+        const fromDate = new Date(from_date);
+        if (Number.isNaN(fromDate.getTime())) {
+          const error = new Error("from_date must be a valid date (YYYY-MM-DD)");
+          error.statusCode = 400;
+          throw error;
+        }
+        fromDate.setHours(0, 0, 0, 0);
+        workDateRange.$gte = fromDate;
+      }
+
+      if (to_date) {
+        const toDate = new Date(to_date);
+        if (Number.isNaN(toDate.getTime())) {
+          const error = new Error("to_date must be a valid date (YYYY-MM-DD)");
+          error.statusCode = 400;
+          throw error;
+        }
+        toDate.setHours(23, 59, 59, 999);
+        workDateRange.$lte = toDate;
+      }
+
+      assignmentQuery.work_date = workDateRange;
+    }
+
+    if (status) {
+      const allowedStatuses = ["ASSIGNED", "CHECKED_IN", "COMPLETED", "ABSENT"];
+      const statuses = String(status)
+        .split(",")
+        .map((item) => item.trim().toUpperCase())
+        .filter(Boolean);
+
+      const invalidStatuses = statuses.filter((item) => !allowedStatuses.includes(item));
+      if (invalidStatuses.length > 0) {
+        const error = new Error(
+          `Invalid status value: ${invalidStatuses.join(", ")}. Allowed: ${allowedStatuses.join(", ")}`
+        );
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if (statuses.length > 0) {
+        assignmentQuery.status = { $in: statuses };
+      }
+    }
+
+    const assignments = await StaffShiftAssignment.find(assignmentQuery)
+      .sort({ work_date: 1, created_at: -1 })
+      .lean();
+
+    if (assignments.length === 0) {
+      return {
+        count: 0,
+        data: [],
+      };
+    }
+
+    const locationShiftIds = [...new Set(assignments.map((item) => item.location_shift_id))];
+    const locationShifts = await LocationShift.find({ id: { $in: locationShiftIds } }).lean();
+    const locationShiftMap = new Map(locationShifts.map((item) => [item.id, item]));
+
+    const shiftIds = [...new Set(locationShifts.map((item) => item.shift_id).filter(Boolean))];
+    const locationIds = [...new Set(locationShifts.map((item) => item.location_id).filter(Boolean))];
+
+    const [shifts, locations] = await Promise.all([
+      StaffShift.find({ id: { $in: shiftIds } }).lean(),
+      Location.find({ id: { $in: locationIds } }).select("id name type parent_id").lean(),
+    ]);
+
+    const shiftMap = new Map(shifts.map((item) => [item.id, item]));
+    const locationMap = new Map(locations.map((item) => [item.id, item]));
+
+    const data = assignments.map((assignment) => {
+      const locationShift = locationShiftMap.get(assignment.location_shift_id) || null;
+      const shift = locationShift ? shiftMap.get(locationShift.shift_id) || null : null;
+      const location = locationShift ? locationMap.get(locationShift.location_id) || null : null;
+
+      return {
+        assignment_id: assignment.id,
+        work_date: assignment.work_date,
+        status: assignment.status,
+        checkin_at: assignment.checkin_at,
+        checkout_at: assignment.checkout_at,
+        location_shift_id: assignment.location_shift_id,
+        shift,
+        location,
+      };
+    });
+
+    return {
+      count: data.length,
+      data,
+    };
+  }
+
   buildDateTimeFromDateAndClock(dateValue, clockValue) {
     if (!dateValue || !clockValue) {
       return null;

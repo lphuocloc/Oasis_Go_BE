@@ -1,5 +1,28 @@
 const staffShiftAssignmentService = require("../services/staffShiftAssignmentService");
 
+const getMyAssignments = async (req, res) => {
+  try {
+    const result = await staffShiftAssignmentService.getMyAssignments({
+      user: req.user,
+      work_date: req.query.work_date,
+      from_date: req.query.from_date,
+      to_date: req.query.to_date,
+      status: req.query.status,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "My shift assignments retrieved successfully",
+      ...result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve my shift assignments",
+    });
+  }
+};
+
 const createAssignment = async (req, res) => {
   try {
     const assignment = await staffShiftAssignmentService.createAssignment(req.body);
@@ -124,6 +147,7 @@ const checkoutWork = async (req, res) => {
 };
 
 module.exports = {
+  getMyAssignments,
   createAssignment,
   getAssignments,
   getAssignmentById,

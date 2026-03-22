@@ -96,7 +96,7 @@ router.post("/", protect, bookingOrderController.createBookingOrder);
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, PAID, PARTIALLY_CANCELLED, CANCELLED]
+ *           enum: [PENDING, PAID, PARTIAL_CANCEL, FULLY_CANCELLED, CANCEL]
  *         description: Filter by status
  *       - in: query
  *         name: start_date
@@ -159,6 +159,21 @@ router.get("/:id", protect, bookingOrderController.getBookingOrderById);
  *   put:
  *     summary: Cancel booking order
  *     tags: [BookingOrders]
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               booking_id:
+ *                 type: string
+ *                 description: Cancel one booking inside a PAID order
+ *               booking_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Cancel multiple bookings inside a PAID/PARTIAL_CANCEL order
  *     parameters:
  *       - in: path
  *         name: id
@@ -177,5 +192,51 @@ router.get("/:id", protect, bookingOrderController.getBookingOrderById);
  *       - bearerAuth: []
  */
 router.put("/:id/cancel", protect, bookingOrderController.cancelBookingOrder);
+
+/**
+ * @swagger
+ * /api/booking-orders/{id}/checkout:
+ *   post:
+ *     summary: Checkout bookings in an order (all or selected)
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking order ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               scope:
+ *                 type: string
+ *                 enum: [ALL_IN_ORDER, SELECTED_BOOKINGS]
+ *                 default: ALL_IN_ORDER
+ *               booking_id:
+ *                 type: string
+ *                 description: Single booking ID when checkout one room in SELECTED_BOOKINGS mode
+ *               booking_ids:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Multiple booking IDs in SELECTED_BOOKINGS mode
+ *     responses:
+ *       200:
+ *         description: Checkout processed with summary
+ *       400:
+ *         description: Invalid request
+ *       403:
+ *         description: Not order owner
+ *       404:
+ *         description: Booking order not found
+ */
+router.post("/:id/checkout", protect, bookingOrderController.checkoutBookingOrder);
 
 module.exports = router;

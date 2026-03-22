@@ -170,39 +170,6 @@ router.get("/available/:podId", timeSlotController.getAvailableSlots);
 
 /**
  * @swagger
- * /api/timeslots/generate/{podId}:
- *   post:
- *     summary: Generate time slots for a pod
- *     tags: [TimeSlots]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: podId
- *         required: true
- *         schema:
- *           type: string
- *         description: Pod ID
- *     requestBody:
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               days:
- *                 type: integer
- *                 default: 7
- *                 description: Number of days to generate slots for
- *     responses:
- *       201:
- *         description: Time slots generated successfully
- *       404:
- *         description: Pod not found
- */
-router.post("/generate/:podId", protect, authorize("admin", "manager"), timeSlotController.generateSlotsForPod);
-
-/**
- * @swagger
  * /api/timeslots/reserve:
  *   post:
  *     summary: Reserve time slots
