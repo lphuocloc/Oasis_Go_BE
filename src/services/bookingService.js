@@ -9,6 +9,10 @@ const PodQrCode = require("../models/PodQrCode");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
+const POD_DETAILS_SELECT =
+  "id cluster_id code name description status maintenance_status " +
+  "soundproof_level ventilation_level power_outlets wifi_available " +
+  "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
   async autoActivateOverdueCheckins(graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
@@ -395,8 +399,7 @@ class BookingService {
         "cleaner_access_allowed cleaner_access_updated_at checkin_state checked_in_at checkin_source auto_activated_at no_show_marked_at " +
         "base_price total_price createdAt updatedAt"
       )
-      .populate("user", "id name email phone")
-      .populate("pod", "id name description price_per_hour status")
+      .populate("pod", POD_DETAILS_SELECT)
       .populate("order", "id final_total_price status payment_method");
 
     if (!booking) {
@@ -433,7 +436,9 @@ class BookingService {
    * @returns {Promise<Array>} Order's bookings
    */
   async getBookingsByOrder(orderId, viewerRole = null) {
-    const bookings = await Booking.getByOrder(orderId);
+    const bookings = await Booking.find({ order_id: orderId })
+      .sort({ start_time: 1 })
+      .populate("pod", POD_DETAILS_SELECT);
     return await this._attachOnlineKeys(bookings, viewerRole);
   }
 
