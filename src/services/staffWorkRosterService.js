@@ -54,7 +54,9 @@ class StaffWorkRosterService {
   async createRoster(data) {
     const { staff_id, location_shift_id } = data;
     if (!staff_id || !location_shift_id || data.day_of_week === undefined) {
-      const error = new Error("staff_id, location_shift_id and day_of_week are required");
+      const error = new Error(
+        "staff_id, location_shift_id and day_of_week are required"
+      );
       error.statusCode = 400;
       throw error;
     }

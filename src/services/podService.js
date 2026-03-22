@@ -192,12 +192,20 @@ class PodService {
     /**
      * Lấy tất cả pods với filters
      */
-    async getAllPods({ cluster_id, status, code }) {
+    async getAllPods({ cluster_id, status, code, pod_ids }) {
         const filter = {};
 
         if (cluster_id) filter.cluster_id = cluster_id;
         if (status) filter.status = status;
         if (code) filter.code = new RegExp(code, "i");
+        
+        // If pod_ids is provided (from manager scope), filter by those IDs
+        if (pod_ids) {
+            const podIdArray = pod_ids.split(",").filter(Boolean);
+            if (podIdArray.length > 0) {
+                filter.id = { $in: podIdArray };
+            }
+        }
 
         const pods = await Pod.find(filter)
             .populate("cluster")
@@ -224,16 +232,34 @@ class PodService {
     /**
      * Lấy pods theo cluster
      */
-    async getPodsByCluster(clusterId) {
+    async getPodsByCluster(clusterId, pod_ids) {
         const pods = await Pod.getByCluster(clusterId);
+        
+        // If pod_ids is provided (from manager scope), filter by those IDs
+        if (pod_ids) {
+            const podIdArray = pod_ids.split(",").filter(Boolean);
+            if (podIdArray.length > 0) {
+                return pods.filter(pod => podIdArray.includes(String(pod.id)));
+            }
+        }
+        
         return pods;
     }
 
     /**
      * Lấy pods available theo cluster
      */
-    async getAvailablePodsByCluster(clusterId) {
+    async getAvailablePodsByCluster(clusterId, pod_ids) {
         const pods = await Pod.getAvailable(clusterId || null);
+        
+        // If pod_ids is provided (from manager scope), filter by those IDs
+        if (pod_ids) {
+            const podIdArray = pod_ids.split(",").filter(Boolean);
+            if (podIdArray.length > 0) {
+                return pods.filter(pod => podIdArray.includes(String(pod.id)));
+            }
+        }
+        
         return pods;
     }
 

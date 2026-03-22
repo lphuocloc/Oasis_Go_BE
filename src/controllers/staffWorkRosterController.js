@@ -2,11 +2,11 @@ const staffWorkRosterService = require("../services/staffWorkRosterService");
 
 const createRoster = async (req, res) => {
   try {
-    const roster = await staffWorkRosterService.createRoster(req.body);
+    const result = await staffWorkRosterService.createRoster(req.body);
     res.status(201).json({
       success: true,
       message: "Staff roster created successfully",
-      data: roster,
+      data: result,
     });
   } catch (error) {
     res.status(error.statusCode || 400).json({

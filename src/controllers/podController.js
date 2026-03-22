@@ -25,12 +25,12 @@ exports.createPods = async (req, res) => {
 
 // @desc    Get all pods
 // @route   GET /api/pods
-// @access  Public
+// @access  Private (Admin/Manager/User)
 exports.getAllPods = async (req, res) => {
   try {
-    const { cluster_id, status, code } = req.query;
+    const { cluster_id, status, code, pod_ids } = req.query;
     
-    const pods = await podService.getAllPods({ cluster_id, status, code });
+    const pods = await podService.getAllPods({ cluster_id, status, code, pod_ids });
     
     res.status(200).json({
       success: true,
@@ -68,10 +68,11 @@ exports.getPodById = async (req, res) => {
 
 // @desc    Get pods by cluster
 // @route   GET /api/pods/cluster/:clusterId
-// @access  Public
+// @access  Private (Admin/Manager/User)
 exports.getPodsByCluster = async (req, res) => {
   try {
-    const pods = await podService.getPodsByCluster(req.params.clusterId);
+    const { pod_ids } = req.query;
+    const pods = await podService.getPodsByCluster(req.params.clusterId, pod_ids);
     
     res.status(200).json({
       success: true,
@@ -89,12 +90,13 @@ exports.getPodsByCluster = async (req, res) => {
 
 // @desc    Get available pods
 // @route   GET /api/pods/available?clusterId=...
-// @access  Public
+// @access  Private (Admin/Manager/User)
 exports.getAvailablePods = async (req, res) => {
   try {
     // Accept camelCase query param and keep backward compatibility.
     const clusterId = req.query.clusterId || req.query.cluster_id || req.params.clusterId;
-    const pods = await podService.getAvailablePodsByCluster(clusterId);
+    const { pod_ids } = req.query;
+    const pods = await podService.getAvailablePodsByCluster(clusterId, pod_ids);
     
     res.status(200).json({
       success: true,

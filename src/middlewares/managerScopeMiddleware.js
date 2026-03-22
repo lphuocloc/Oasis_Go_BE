@@ -34,7 +34,8 @@ const loadManagerScope = async (req, res, next) => {
     const assignments = await StaffShiftAssignment.find({
       staff_id: { $in: staffIds },
       status: { $in: ACTIVE_SCOPE_STATUSES },
-      work_date: { $gte: todayStart, $lte: todayEnd },
+      start_date: { $lte: todayEnd },
+      end_date: { $gte: todayStart },
     })
       .select("location_shift_id")
       .lean();
@@ -179,6 +180,16 @@ const applyManagerLocationScope = (req, res, next) => {
   next();
 };
 
+const applyManagerPodScope = (req, res, next) => {
+  if (!req.user || req.user.role !== "manager") {
+    return next();
+  }
+
+  const scopedPodIds = (req.managerScope && req.managerScope.podIds) || [];
+  req.query.pod_ids = scopedPodIds.join(",");
+  next();
+};
+
 module.exports = {
   loadManagerScope,
   requireManagerLocationAccess,
@@ -186,4 +197,5 @@ module.exports = {
   requireManagerPodAccess,
   applyManagerBookingScope,
   applyManagerLocationScope,
+  applyManagerPodScope,
 };
