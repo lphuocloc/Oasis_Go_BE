@@ -9,6 +9,7 @@ const Location = require("../models/Location");
 const Transaction = require("../models/Transaction");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
+const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
@@ -84,7 +85,7 @@ class BookingOrderService {
 
         try {
             // Start transaction
-            return await session.withTransaction(async () => {
+            const txResult = await session.withTransaction(async () => {
                 // Validate required fields
                 if (!user_id || !cluster_id || !start_time || !end_time) {
                     const error = new Error("Missing required fields: user_id, cluster_id, start_time, end_time");
@@ -302,6 +303,21 @@ class BookingOrderService {
                     }
                 };
             }); // End of withTransaction
+
+            if (txResult && Array.isArray(txResult.bookings)) {
+                for (const booking of txResult.bookings) {
+                    try {
+                        await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CREATED" });
+                    } catch (error) {
+                        console.error(
+                            `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CREATED, booking_id=${booking.id || "unknown"}):`,
+                            error.message || error
+                        );
+                    }
+                }
+            }
+
+            return txResult;
         } catch (error) {
             throw error;
         } finally {
@@ -977,6 +993,15 @@ class BookingOrderService {
             booking.cleaner_access_allowed = true;
             booking.cleaner_access_updated_at = new Date();
             await booking.save();
+
+            try {
+                await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CHECKOUT" });
+            } catch (error) {
+                console.error(
+                    `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CHECKOUT, booking_id=${booking.id || "unknown"}):`,
+                    error.message || error
+                );
+            }
 
             checked_out.push({
                 id: booking.id,

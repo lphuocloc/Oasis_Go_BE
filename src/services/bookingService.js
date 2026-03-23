@@ -6,6 +6,7 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
+const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
@@ -15,6 +16,19 @@ const POD_DETAILS_SELECT =
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  async _tryAutoAssignCleaningTask(booking, trigger = "UNKNOWN") {
+    if (!booking) return;
+
+    try {
+      await autoAssignTaskForBooking(booking, { trigger });
+    } catch (error) {
+      console.error(
+        `Auto assign cleaning task failed (trigger=${trigger}, booking_id=${booking.id || "unknown"}):`,
+        error.message || error
+      );
+    }
+  }
+
   async autoActivateOverdueCheckins(graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const graceMs = Math.max(1, Number(graceMinutes) || AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) * 60 * 1000;
     const now = Date.now();
@@ -307,6 +321,7 @@ class BookingService {
     });
 
     await booking.save();
+    await this._tryAutoAssignCleaningTask(booking, "BOOKING_CREATED");
     return booking;
   }
 
@@ -454,6 +469,41 @@ class BookingService {
       throw new Error("Booking not found");
     }
 
+    if (
+      updateData.cleaner_access_allowed !== undefined &&
+      typeof updateData.cleaner_access_allowed !== "boolean"
+    ) {
+      const error = new Error("cleaner_access_allowed must be boolean");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const nextCheckinStateRaw =
+      updateData.checkin_state !== undefined ? updateData.checkin_state : booking.checkin_state;
+    const nextCheckinState = String(nextCheckinStateRaw || "").toUpperCase();
+    const nextCleanerAccessAllowed =
+      updateData.cleaner_access_allowed !== undefined
+        ? updateData.cleaner_access_allowed
+        : booking.cleaner_access_allowed;
+
+    if (nextCheckinState === "NO_SHOW" && nextCleanerAccessAllowed === true) {
+      const error = new Error("Cannot enable cleaner access for NO_SHOW booking");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (nextCheckinState === "NO_SHOW") {
+      updateData.cleaner_access_allowed = false;
+      if (updateData.cleaner_access_updated_at === undefined) {
+        updateData.cleaner_access_updated_at = new Date();
+      }
+      if (updateData.no_show_marked_at === undefined) {
+        updateData.no_show_marked_at = new Date();
+      }
+    }
+
+    const previousCleanerAccessAllowed = booking.cleaner_access_allowed;
+
     // Don't allow updating certain fields if booking is completed or cancelled
     if (["COMPLETED", "CANCELLED"].includes(booking.status)) {
       throw new Error(
@@ -486,6 +536,11 @@ class BookingService {
     });
 
     await booking.save();
+
+    if (!previousCleanerAccessAllowed && booking.cleaner_access_allowed === true) {
+      await this._tryAutoAssignCleaningTask(booking, "BOOKING_UPDATED_CLEANER_ACCESS_TRUE");
+    }
+
     return booking;
   }
 
@@ -661,9 +716,19 @@ class BookingService {
       throw error;
     }
 
+    if (allowed === true && booking.checkin_state === "NO_SHOW") {
+      const error = new Error("Cannot enable cleaner access for NO_SHOW booking");
+      error.statusCode = 400;
+      throw error;
+    }
+
     booking.cleaner_access_allowed = allowed;
     booking.cleaner_access_updated_at = new Date();
     await booking.save();
+
+    if (allowed) {
+      await this._tryAutoAssignCleaningTask(booking, "SET_CLEANER_ACCESS_TRUE");
+    }
 
     return booking;
   }

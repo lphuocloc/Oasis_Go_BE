@@ -59,3 +59,20 @@ exports.deleteCleaningTask = async (req, res) => {
     res.status(statusCode).json({ success: false, message: error.message || "Error deleting cleaning task" });
   }
 };
+
+exports.backfillCleaningTasks = async (req, res) => {
+  try {
+    const result = await cleaningTaskService.backfillMissingCleaningTasks(req.body || {});
+    res.status(200).json({
+      success: true,
+      message: "Cleaning task backfill completed",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error running cleaning task backfill",
+    });
+  }
+};
