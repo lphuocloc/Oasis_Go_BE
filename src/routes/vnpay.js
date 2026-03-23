@@ -7,8 +7,8 @@ const { protect } = require('../middlewares/authMiddleware');
  * @swagger
  * /api/vnpay/create-payment:
  *   post:
- *     summary: Create VNPay payment URL
- *     description: Create a transaction record and generate a VNPay payment URL. The orderId is taken directly from bookingOrderId.
+ *     summary: Create VNPay payment URL for pending order
+ *     description: Create a transaction record and generate a VNPay payment URL. Amount is automatically taken from BookingOrder.final_total_price (server-side security measure).
  *     tags: [VNPay Payment]
  *     requestBody:
  *       required: true
@@ -18,21 +18,16 @@ const { protect } = require('../middlewares/authMiddleware');
  *             type: object
  *             required:
  *               - bookingOrderId
- *               - amount
  *               - orderInfo
  *             properties:
  *               bookingOrderId:
  *                 type: string
  *                 description: BookingOrder ID (used as VNPay orderId)
  *                 example: "b157661c-c9c1-4da5-9baf-4ec859f4f1ba"
- *               amount:
- *                 type: number
- *                 description: Payment amount (VND)
- *                 example: 250000
  *               orderInfo:
  *                 type: string
- *                 description: Order description
- *                 example: "Thanh toan dat phong Ocean View"
+ *                 description: Order description / payment info
+ *                 example: "Thanh toan dat phong Ocean View pod"
  *     responses:
  *       200:
  *         description: Payment URL created successfully
@@ -46,7 +41,7 @@ const { protect } = require('../middlewares/authMiddleware');
  *                   example: true
  *                 message:
  *                   type: string
- *                   example: "Create payment URL successfully"
+ *                   example: "Payment URL created successfully"
  *                 data:
  *                   type: object
  *                   properties:
@@ -56,9 +51,10 @@ const { protect } = require('../middlewares/authMiddleware');
  *                     orderId:
  *                       type: string
  *                       example: "b157661c-c9c1-4da5-9baf-4ec859f4f1ba"
- *                       description: "Same value as bookingOrderId"
+ *                       description: "Same as bookingOrderId"
  *                     amount:
  *                       type: number
+ *                       description: "Amount from BookingOrder.final_total_price"
  *                       example: 250000
  *                     status:
  *                       type: string
@@ -67,7 +63,7 @@ const { protect } = require('../middlewares/authMiddleware');
  *                       type: string
  *                       example: "https://sandbox.vnpayment.vn/paymentv2/vpcpay.html?vnp_Amount=25000000&..."
  *       400:
- *         description: Bad request - missing required fields or invalid data
+ *         description: Bad request - missing required fields or invalid order status
  *         content:
  *           application/json:
  *             schema:
@@ -78,7 +74,9 @@ const { protect } = require('../middlewares/authMiddleware');
  *                   example: false
  *                 message:
  *                   type: string
- *                   example: "Missing required fields: bookingOrderId, amount, orderInfo"
+ *                   example: "Missing required fields: bookingOrderId, orderInfo"
+ *       404:
+ *         description: Booking order not found
  *       500:
  *         description: Internal server error
  *         content:
@@ -91,7 +89,7 @@ const { protect } = require('../middlewares/authMiddleware');
  *                   example: false
  *                 message:
  *                   type: string
- *                   example: "Internal server error"
+ *                   example: "Error creating payment"
  */
 router.post('/create-payment', vnpayController.createPayment);
 

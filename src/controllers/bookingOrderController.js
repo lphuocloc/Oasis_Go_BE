@@ -171,6 +171,32 @@ class BookingOrderController {
             });
         }
     }
+
+    /**
+     * Initiate repayment for PENDING order
+     * @route POST /api/booking-orders/:id/repay
+     */
+    async initiateRepayment(req, res) {
+        try {
+            const { id } = req.params;
+            const paymentService = require("../services/paymentService");
+            const ipAddr = req.ip || req.connection.remoteAddress;
+
+            const result = await paymentService.initiateRepayment(id, req.user, ipAddr);
+
+            return res.status(201).json({
+                success: true,
+                message: result.message,
+                data: result
+            });
+        } catch (error) {
+            console.error("Error initiating repayment:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to initiate repayment"
+            });
+        }
+    }
 }
 
 module.exports = new BookingOrderController();

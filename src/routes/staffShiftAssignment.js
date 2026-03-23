@@ -49,10 +49,10 @@ const router = express.Router();
  *         description: Unauthorized
  */
 router.get(
-  "/me",
-  protect,
-  authorize("manager", "cleaner"),
-  staffShiftAssignmentController.getMyAssignments
+	"/me",
+	authMiddleware.protect,
+	authMiddleware.authorize("manager", "cleaner"),
+	staffShiftAssignmentController.getMyAssignments
 );
 
 /**

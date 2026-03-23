@@ -98,17 +98,12 @@ class PaymentService {
     /**
      * Tạo payment và generate VNPay URL
      */
-    async createPayment({ bookingOrderId, amount, orderInfo, ipAddr }) {
+    async createPayment({ bookingOrderId, orderInfo, ipAddr }) {
         const resolvedBookingOrderId = bookingOrderId;
 
         // Validate input
-        if (!resolvedBookingOrderId || !amount || !orderInfo) {
-            throw new Error("Missing required fields: bookingOrderId, amount, orderInfo");
-        }
-
-        // Validate amount
-        if (isNaN(amount) || amount <= 0) {
-            throw new Error("Invalid amount");
+        if (!resolvedBookingOrderId || !orderInfo) {
+            throw new Error("Missing required fields: bookingOrderId, orderInfo");
         }
 
         // Use BookingOrder ID as VNPay orderId
@@ -126,6 +121,9 @@ class PaymentService {
             error.statusCode = 400;
             throw error;
         }
+
+        // ✅ SECURITY: Lấy amount từ BookingOrder, không từ request
+        const amount = bookingOrder.final_total_price;
 
         const existingCharge = await Transaction.findOne({
             order_id: orderId,
@@ -402,6 +400,135 @@ class PaymentService {
                 transactionDate,
                 ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
             },
+        };
+    }
+
+    /**
+     * Initiate repayment for PENDING order
+     * Tạo payment URL mới với vnp_TxnRef và vnp_ExpireDate tính toán lại
+     * @param {String} orderId - Booking order ID
+     * @param {Object} actor - Authenticated user
+     * @param {String} ipAddr - Client IP address
+     * @returns {Promise<Object>} Payment URL và transaction info
+     */
+    async initiateRepayment(orderId, actor, ipAddr) {
+        const bookingOrder = await BookingOrder.findOne({ id: orderId });
+        if (!bookingOrder) {
+            const error = new Error("Booking order not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        // Validate user is order owner
+        const actorId = String(actor?._id || actor?.id || "");
+        const isOwner = actorId && actorId === String(bookingOrder.user_id);
+        if (!isOwner) {
+            const error = new Error("Only order owner can repay this order");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        // Validate order status
+        if (bookingOrder.status !== "PENDING") {
+            const error = new Error(`Cannot repay order with status: ${bookingOrder.status}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Calculate remaining time
+        const now = new Date();
+        const TEN_MINUTES_MS = 10 * 60 * 1000;
+        const orderDeadline = new Date(bookingOrder.createdAt.getTime() + TEN_MINUTES_MS);
+        const remainingMs = orderDeadline.getTime() - now.getTime();
+        const remainingMinutes = remainingMs / 60000;
+        const remainingSeconds = Math.ceil(remainingMs / 1000);
+
+        // GUARD 1: Order fully expired
+        if (remainingMinutes <= 0) {
+            const error = new Error(
+                `Order has expired (deadline was ${orderDeadline.toISOString()})`
+            );
+            error.statusCode = 410;  // HTTP 410 Gone
+            throw error;
+        }
+
+        // GUARD 2: Order too close to expiration (less than 1 minute remaining)
+        if (remainingMinutes < 1) {
+            const error = new Error(
+                `Order is expiring soon (${remainingSeconds} seconds remaining). ` +
+                `Please proceed immediately or create a new order.`
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // Get all CHARGE transactions to calculate attemptNumber
+        const allChargeTransactions = await Transaction.find({
+            order_id: orderId,
+            type: "CHARGE"
+        }).sort({ createdAt: -1 });
+
+        // Calculate attemptNumber: số lượng attempts đã có + 1
+        // Cách này đơn giản: 0 transactions → attempt 1, 1 transaction → attempt 2, etc.
+        const attemptNumber = allChargeTransactions.length + 1;
+
+        // Create new transaction reference
+        const newTxnRef = `${orderId}_${attemptNumber}`;
+
+        // Calculate vnp_ExpireDate: min(4 minutes, remainingTime - 1 minute)
+        const fourMinutesMs = 4 * 60 * 1000;
+        const oneMinuteMs = 1 * 60 * 1000;
+        const safeRemainingMs = remainingMs - oneMinuteMs;  // Leave 1 minute buffer
+        const paymentExpireMs = Math.min(fourMinutesMs, safeRemainingMs);
+        const vnpExpireDate = new Date(now.getTime() + paymentExpireMs);
+
+        // Create new Payment URL with custom parameters
+        const paymentUrl = vnpayService.createPaymentUrl({
+            orderId,
+            amount: bookingOrder.final_total_price,
+            orderInfo: `Repay Order #${orderId} - Attempt ${attemptNumber}`,
+            orderType: "billpayment",
+            ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+            locale: "vn",
+            bankCode: "NCB",
+            txnRef: newTxnRef,  // ← Custom transaction reference
+            expireDate: vnpExpireDate  // ← Custom expire date
+        });
+
+        // Create new Transaction record (PENDING status)
+        const transaction = await Transaction.create({
+            order_id: orderId,
+            amount: bookingOrder.final_total_price,
+            currency: "VND",
+            type: "CHARGE",
+            method: "VNPAY",
+            status: "PENDING",
+            provider_reference: newTxnRef
+        });
+
+        console.log("Repayment initiated:", {
+            transactionId: transaction.id,
+            orderId,
+            attemptNumber,
+            txnRef: newTxnRef,
+            amount: bookingOrder.final_total_price,
+            orderExpireAt: orderDeadline.toISOString(),
+            paymentExpireAt: vnpExpireDate.toISOString(),
+            remainingSeconds,
+            timestamp: new Date().toISOString(),
+        });
+
+        return {
+            success: true,
+            transactionId: transaction.id,
+            orderId,
+            amount: transaction.amount,
+            paymentUrl,
+            attemptNumber,
+            orderExpireAt: orderDeadline,
+            paymentExpireAt: vnpExpireDate,
+            remainingSeconds,
+            message: `Repayment link created (Attempt #${attemptNumber})`
         };
     }
 
