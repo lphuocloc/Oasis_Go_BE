@@ -9,7 +9,7 @@ const router = express.Router();
  * /api/staff-shift-assignments/me:
  *   get:
  *     summary: Get my shift assignments (for manager/cleaner)
- *     tags: [Staff Shift Assignments]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -50,8 +50,8 @@ const router = express.Router();
  */
 router.get(
   "/me",
-  protect,
-  authorize("manager", "cleaner"),
+  authMiddleware.protect,
+  authMiddleware.authorize("manager", "cleaner"),
   staffShiftAssignmentController.getMyAssignments
 );
 
@@ -63,7 +63,7 @@ router.get(
  *     description: >
  *       Create a shift assignment for a staff member covering a specific date range.
  *       The assignment defines when a staff member will work a particular shift at a location.
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -179,7 +179,7 @@ router.post(
  *   get:
  *     summary: Get all shift assignments
  *     description: Retrieve all shift assignments with optional filtering
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -221,7 +221,7 @@ router.get(
  * /api/staff-shift-assignments/{id}:
  *   get:
  *     summary: Get an assignment by ID
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -248,7 +248,7 @@ router.get(
  * /api/staff-shift-assignments/{id}:
  *   put:
  *     summary: Update an assignment
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -293,7 +293,7 @@ router.put(
  * /api/staff-shift-assignments/{id}:
  *   delete:
  *     summary: Delete an assignment
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
