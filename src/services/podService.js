@@ -5,7 +5,9 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingAccessSession = require("../models/BookingAccessSession");
 const OnlineKey = require("../models/OnlineKey");
 const Door = require("../models/Door");
+const PodDevice = require("../models/PodDevice");
 const Incident = require("../models/Incidents");
+const podQrCodeService = require("../services/podQrCodeService");
 
 /**
  * Helper function to generate row letter from index
@@ -186,6 +188,34 @@ class PodService {
             await Door.insertMany(doorsToCreate);
         }
 
+        // Provision PodDevices for newly created pods
+        const devicesToCreate = createdPods.map((pod) => ({
+            pod_id: pod.id,
+            device_name: `Pod Device ${pod.code}`,
+            device_id: `PODDEV-${pod.code}-${pod.id.slice(0, 8)}`.toUpperCase(),
+            auth_token: null,
+            is_online: false,
+            last_ping: null,
+        }));
+
+        if (devicesToCreate.length > 0) {
+            await PodDevice.insertMany(devicesToCreate);
+        }
+
+        // Provision QR codes for newly created pods
+        for (const pod of createdPods) {
+            try {
+                await podQrCodeService.createQrCode({
+                    pod_id: pod.id,
+                    qr_token: null, // Generate token internally if null
+                    expires_at: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000), // 1 year expiry
+                    is_active: true,
+                });
+            } catch (error) {
+                console.error(`Failed to create QR code for pod ${pod.id}:`, error.message);
+            }
+        }
+
         return createdPods;
     }
 
@@ -198,7 +228,7 @@ class PodService {
         if (cluster_id) filter.cluster_id = cluster_id;
         if (status) filter.status = status;
         if (code) filter.code = new RegExp(code, "i");
-        
+
         // If pod_ids is provided (from manager scope), filter by those IDs
         if (pod_ids) {
             const podIdArray = pod_ids.split(",").filter(Boolean);
@@ -234,7 +264,7 @@ class PodService {
      */
     async getPodsByCluster(clusterId, pod_ids) {
         const pods = await Pod.getByCluster(clusterId);
-        
+
         // If pod_ids is provided (from manager scope), filter by those IDs
         if (pod_ids) {
             const podIdArray = pod_ids.split(",").filter(Boolean);
@@ -242,7 +272,7 @@ class PodService {
                 return pods.filter(pod => podIdArray.includes(String(pod.id)));
             }
         }
-        
+
         return pods;
     }
 
@@ -251,7 +281,7 @@ class PodService {
      */
     async getAvailablePodsByCluster(clusterId, pod_ids) {
         const pods = await Pod.getAvailable(clusterId || null);
-        
+
         // If pod_ids is provided (from manager scope), filter by those IDs
         if (pod_ids) {
             const podIdArray = pod_ids.split(",").filter(Boolean);
@@ -259,7 +289,7 @@ class PodService {
                 return pods.filter(pod => podIdArray.includes(String(pod.id)));
             }
         }
-        
+
         return pods;
     }
 
