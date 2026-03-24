@@ -202,7 +202,7 @@ router.post("/", protect, authorize("admin", "manager"), createCleaningTask);
  *       200:
  *         description: Cleaning task updated successfully
  */
-router.put("/:id", protect, authorize("admin", "manager"), updateCleaningTask);
+router.put("/:id", protect, authorize("admin", "manager", "cleaner"), updateCleaningTask);
 
 /**
  * @swagger

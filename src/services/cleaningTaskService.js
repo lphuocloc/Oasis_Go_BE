@@ -510,9 +510,26 @@ exports.getCleaningTaskById = async (id) => {
   return task;
 };
 
-exports.updateCleaningTask = async (id, data) => {
+exports.updateCleaningTask = async (id, data, actor = null) => {
   const task = await CleaningTask.findOne({ id });
   if (!task) throw createError("Cleaning task not found", 404);
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "cleaner") {
+    const actorCleanerIds = [
+      actor && actor.id ? String(actor.id) : null,
+      actor && actor._id ? String(actor._id) : null,
+    ].filter(Boolean);
+
+    if (actorCleanerIds.length === 0) {
+      throw createError("Unable to resolve cleaner id", 400);
+    }
+
+    const isOwner = actorCleanerIds.includes(String(task.cleaner_id));
+    if (!isOwner) {
+      throw createError("You are not allowed to update this cleaning task", 403);
+    }
+  }
 
   const nextPodId = data.pod_id !== undefined ? data.pod_id : task.pod_id;
   const nextBookingId = data.booking_id !== undefined ? data.booking_id : task.booking_id;
