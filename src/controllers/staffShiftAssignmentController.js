@@ -7,6 +7,8 @@ const getMyAssignments = async (req, res) => {
       work_date: req.query.work_date,
       from_date: req.query.from_date,
       to_date: req.query.to_date,
+      start_date: req.query.start_date,
+      end_date: req.query.end_date,
       status: req.query.status,
     });
 

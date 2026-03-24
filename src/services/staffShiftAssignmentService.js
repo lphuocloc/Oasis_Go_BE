@@ -1,12 +1,13 @@
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const LocationShift = require("../models/LocationShift");
+const Location = require("../models/Location");
 const StaffShift = require("../models/StaffShift");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
 class StaffShiftAssignmentService {
-  async getMyAssignments({ user, work_date, from_date, to_date, status }) {
+  async getMyAssignments({ user, work_date, from_date, to_date, start_date, end_date, status }) {
     if (!user) {
       const error = new Error("User context is required");
       error.statusCode = 401;
@@ -28,10 +29,11 @@ class StaffShiftAssignmentService {
       staff_id: { $in: [...new Set(staffIds)] },
     };
 
-    if (work_date) {
-      const date = new Date(work_date);
+    const singleDate = work_date || start_date;
+    if (singleDate && !end_date && !to_date && !from_date) {
+      const date = new Date(singleDate);
       if (Number.isNaN(date.getTime())) {
-        const error = new Error("work_date must be a valid date (YYYY-MM-DD)");
+        const error = new Error("work_date/start_date must be a valid date (YYYY-MM-DD)");
         error.statusCode = 400;
         throw error;
       }
@@ -41,37 +43,45 @@ class StaffShiftAssignmentService {
       const endOfDay = new Date(date);
       endOfDay.setHours(23, 59, 59, 999);
 
-      assignmentQuery.work_date = { $gte: startOfDay, $lte: endOfDay };
-    } else if (from_date || to_date) {
-      const workDateRange = {};
+      assignmentQuery.$and = [
+        { end_date: { $gte: startOfDay } },
+        { start_date: { $lte: endOfDay } },
+      ];
+    } else if (from_date || to_date || start_date || end_date) {
+      const rangeStartInput = from_date || start_date;
+      const rangeEndInput = to_date || end_date;
 
-      if (from_date) {
-        const fromDate = new Date(from_date);
+      assignmentQuery.$and = [];
+
+      if (rangeStartInput) {
+        const fromDate = new Date(rangeStartInput);
         if (Number.isNaN(fromDate.getTime())) {
-          const error = new Error("from_date must be a valid date (YYYY-MM-DD)");
+          const error = new Error("from_date/start_date must be a valid date (YYYY-MM-DD)");
           error.statusCode = 400;
           throw error;
         }
         fromDate.setHours(0, 0, 0, 0);
-        workDateRange.$gte = fromDate;
+        assignmentQuery.$and.push({ end_date: { $gte: fromDate } });
       }
 
-      if (to_date) {
-        const toDate = new Date(to_date);
+      if (rangeEndInput) {
+        const toDate = new Date(rangeEndInput);
         if (Number.isNaN(toDate.getTime())) {
-          const error = new Error("to_date must be a valid date (YYYY-MM-DD)");
+          const error = new Error("to_date/end_date must be a valid date (YYYY-MM-DD)");
           error.statusCode = 400;
           throw error;
         }
         toDate.setHours(23, 59, 59, 999);
-        workDateRange.$lte = toDate;
+        assignmentQuery.$and.push({ start_date: { $lte: toDate } });
       }
 
-      assignmentQuery.work_date = workDateRange;
+      if (assignmentQuery.$and.length === 0) {
+        delete assignmentQuery.$and;
+      }
     }
 
     if (status) {
-      const allowedStatuses = ["ASSIGNED", "CHECKED_IN", "COMPLETED", "ABSENT"];
+      const allowedStatuses = ["ASSIGNED", "COMPLETED", "ABSENT"];
       const statuses = String(status)
         .split(",")
         .map((item) => item.trim().toUpperCase())
@@ -92,7 +102,7 @@ class StaffShiftAssignmentService {
     }
 
     const assignments = await StaffShiftAssignment.find(assignmentQuery)
-      .sort({ work_date: 1, created_at: -1 })
+      .sort({ start_date: 1, created_at: -1 })
       .lean();
 
     if (assignments.length === 0) {
@@ -124,7 +134,8 @@ class StaffShiftAssignmentService {
 
       return {
         assignment_id: assignment.id,
-        work_date: assignment.work_date,
+        start_date: assignment.start_date,
+        end_date: assignment.end_date,
         status: assignment.status,
         checkin_at: assignment.checkin_at,
         checkout_at: assignment.checkout_at,
@@ -138,35 +149,6 @@ class StaffShiftAssignmentService {
       count: data.length,
       data,
     };
-  }
-
-  buildDateTimeFromDateAndClock(dateValue, clockValue) {
-    if (!dateValue || !clockValue) {
-      return null;
-    }
-
-    const [hourStr, minuteStr, secondStr = "00"] = String(clockValue).split(":");
-    const hour = Number(hourStr);
-    const minute = Number(minuteStr);
-    const second = Number(secondStr);
-
-    if (
-      !Number.isInteger(hour) ||
-      !Number.isInteger(minute) ||
-      !Number.isInteger(second) ||
-      hour < 0 ||
-      hour > 23 ||
-      minute < 0 ||
-      minute > 59 ||
-      second < 0 ||
-      second > 59
-    ) {
-      return null;
-    }
-
-    const datetime = new Date(dateValue);
-    datetime.setHours(hour, minute, second, 0);
-    return datetime;
   }
 
   normalizeDateRange(startDateInput, endDateInput) {
@@ -232,14 +214,6 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
-    // Get the shift to calculate checkin_at and checkout_at
-    const shift = await StaffShift.findOne({ id: locationShift.shift_id }).lean();
-    if (!shift) {
-      const error = new Error("Shift template not found for this location shift");
-      error.statusCode = 404;
-      throw error;
-    }
-
     // Check for duplicate assignment with same date range
     const existing = await StaffShiftAssignment.findOne({
       staff_id,
@@ -260,8 +234,6 @@ class StaffShiftAssignmentService {
         location_shift_id,
         start_date: startDate,
         end_date: endDate,
-        checkin_at: this.buildDateTimeFromDateAndClock(startDate, shift.start_time),
-        checkout_at: this.buildDateTimeFromDateAndClock(endDate, shift.end_time),
         status: "ASSIGNED",
       });
 
@@ -360,18 +332,12 @@ class StaffShiftAssignmentService {
       startDate = newStart;
       endDate = newEnd;
 
-      // Recalculate times based on shift
-      const locationShift = await LocationShift.findOne({ id: assignment.location_shift_id }).lean();
-      const shift = await StaffShift.findOne({ id: locationShift.shift_id }).lean();
-
-      assignment.checkin_at = this.buildDateTimeFromDateAndClock(startDate, shift.start_time);
-      assignment.checkout_at = this.buildDateTimeFromDateAndClock(endDate, shift.end_time);
       assignment.start_date = startDate;
       assignment.end_date = endDate;
     }
 
     if (data.status !== undefined) {
-      const validStatuses = ["ASSIGNED", "CHECKED_IN", "COMPLETED", "ABSENT"];
+      const validStatuses = ["ASSIGNED", "COMPLETED", "ABSENT"];
       if (!validStatuses.includes(data.status)) {
         const error = new Error(`Invalid status. Must be one of: ${validStatuses.join(", ")}`);
         error.statusCode = 400;
@@ -449,6 +415,9 @@ class StaffShiftAssignmentService {
       action: "CHECKIN",
     });
 
+    assignment.checkin_at = new Date();
+    await assignment.save();
+
     return assignment;
   }
 
@@ -504,6 +473,10 @@ class StaffShiftAssignmentService {
       shift_assignment_id: assignment.id,
       action: "CHECKOUT",
     });
+
+    assignment.checkout_at = new Date();
+    assignment.status = "COMPLETED";
+    await assignment.save();
 
     return assignment;
   }
