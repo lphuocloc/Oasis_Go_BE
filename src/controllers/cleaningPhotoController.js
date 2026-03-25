@@ -2,7 +2,13 @@ const cleaningPhotoService = require("../services/cleaningPhotoService");
 
 exports.createCleaningPhoto = async (req, res) => {
   try {
-    const photo = await cleaningPhotoService.createCleaningPhoto(req.body);
+    const payload = {
+      ...req.body,
+      photo_url: req.file ? req.file.path : req.body.photo_url,
+      photo_public_id: req.file ? req.file.filename : req.body.photo_public_id,
+    };
+
+    const photo = await cleaningPhotoService.createCleaningPhoto(payload);
     res.status(201).json({ success: true, message: "Cleaning photo created successfully", data: photo });
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -32,7 +38,13 @@ exports.getCleaningPhotoById = async (req, res) => {
 
 exports.updateCleaningPhoto = async (req, res) => {
   try {
-    const photo = await cleaningPhotoService.updateCleaningPhoto(req.params.id, req.body);
+    const payload = {
+      ...req.body,
+      photo_url: req.file ? req.file.path : req.body.photo_url,
+      photo_public_id: req.file ? req.file.filename : req.body.photo_public_id,
+    };
+
+    const photo = await cleaningPhotoService.updateCleaningPhoto(req.params.id, payload);
     res.status(200).json({ success: true, message: "Cleaning photo updated successfully", data: photo });
   } catch (error) {
     const statusCode = error.statusCode || 500;

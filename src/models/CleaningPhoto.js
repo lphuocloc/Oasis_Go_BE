@@ -20,6 +20,12 @@ const cleaningPhotoSchema = new mongoose.Schema(
       required: [true, "photo_url is required"],
       trim: true,
     },
+    photo_public_id: {
+      type: String,
+      default: null,
+      trim: true,
+      index: true,
+    },
     type: {
       type: String,
       required: true,
