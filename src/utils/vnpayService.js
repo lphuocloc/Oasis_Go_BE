@@ -40,6 +40,8 @@ function createSecureHash(data, secretKey, algorithm = 'sha512') {
  * @param {string} params.ipAddr - IP của khách hàng
  * @param {string} params.locale - Ngôn ngữ (vn/en)
  * @param {string} params.bankCode - Mã ngân hàng (optional, để trống = hiển thị tất cả)
+ * @param {string} params.txnRef - Custom transaction reference (optional, mặc định = orderId)
+ * @param {Date|string} params.expireDate - Custom expire date (optional, ISO string or Date object)
  * @returns {string} Payment URL
  */
 function createPaymentUrl(params) {
@@ -50,7 +52,9 @@ function createPaymentUrl(params) {
         orderType = 'billpayment',
         ipAddr = '127.0.0.1',
         locale = 'vn',
-        bankCode = ''
+        bankCode = '',
+        txnRef = null,
+        expireDate: customExpireDate = null
     } = params;
 
     // Tạo date theo format yyyyMMddHHmmss (Giờ Việt Nam - UTC+7)
@@ -60,9 +64,20 @@ function createPaymentUrl(params) {
     const vnDate = new Date(date.getTime() + (7 * 60 * 60 * 1000));
     const createDate = vnDate.toISOString().slice(0, 19).replace(/[-:T]/g, '').slice(0, 14);
 
-    // Expire time (15 phút sau, giờ Việt Nam)
-    const expireDate = new Date(vnDate.getTime() + 15 * 60000);
-    const expireDateStr = expireDate.toISOString().slice(0, 19).replace(/[-:T]/g, '').slice(0, 14);
+    // Expire time: sử dụng custom expireDate hoặc mặc định 9 phút sau
+    let expireDateFormatting;
+    if (customExpireDate) {
+        // customExpireDate là UTC time, cần convert sang UTC+7 để format
+        if (typeof customExpireDate === 'string') {
+            expireDateFormatting = new Date(new Date(customExpireDate).getTime() + (7 * 60 * 60 * 1000));
+        } else {
+            expireDateFormatting = new Date(customExpireDate.getTime() + (7 * 60 * 60 * 1000));
+        }
+    } else {
+        // Default: 9 phút sau (đã adjust cho UTC+7)
+        expireDateFormatting = new Date(vnDate.getTime() + 9 * 60000);
+    }
+    const expireDateStr = expireDateFormatting.toISOString().slice(0, 19).replace(/[-:T]/g, '').slice(0, 14);
 
     // Tạo vnp_Params
     let vnp_Params = {
@@ -71,7 +86,7 @@ function createPaymentUrl(params) {
         vnp_TmnCode: vnpayConfig.vnp_TmnCode,
         vnp_Locale: locale,
         vnp_CurrCode: vnpayConfig.vnp_CurrCode,
-        vnp_TxnRef: orderId,
+        vnp_TxnRef: txnRef || orderId,
         vnp_OrderInfo: orderInfo,
         vnp_OrderType: orderType,
         vnp_Amount: amount * 100,

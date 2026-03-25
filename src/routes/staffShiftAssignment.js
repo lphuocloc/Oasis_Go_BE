@@ -1,14 +1,8 @@
 const express = require("express");
-const router = express.Router();
-const { protect, authorize } = require("../middlewares/authMiddleware");
 const staffShiftAssignmentController = require("../controllers/staffShiftAssignmentController");
+const authMiddleware = require("../middlewares/authMiddleware");
 
-/**
- * @swagger
- * tags:
- *   name: Staff Shift Assignments
- *   description: Assignment operation endpoints
- */
+const router = express.Router();
 
 /**
  * @swagger
@@ -55,32 +49,21 @@ const staffShiftAssignmentController = require("../controllers/staffShiftAssignm
  *         description: Unauthorized
  */
 router.get(
-  "/me",
-  protect,
-  authorize("manager", "cleaner"),
-  staffShiftAssignmentController.getMyAssignments
+	"/me",
+	authMiddleware.protect,
+	authMiddleware.authorize("manager", "cleaner"),
+	staffShiftAssignmentController.getMyAssignments
 );
 
 /**
  * @swagger
- * components:
- *   schemas:
- *     StaffShiftActionRequest:
- *       type: object
- *       required:
- *         - shift_assignment_id
- *       properties:
- *         shift_assignment_id:
- *           type: string
- *           example: 33c9a292-67b7-4a4b-944e-0f57f9a7d09d
- */
-
-/**
- * @swagger
- * /api/staff-shift-assignments/admin/assign-manager:
+ * /api/staff-shift-assignments:
  *   post:
- *     summary: Admin assigns manager to shifts configured on the parent location
- *     tags: [Staff Shift Assignments]
+ *     summary: Create a shift assignment
+ *     description: >
+ *       Create a shift assignment for a staff member covering a specific date range.
+ *       The assignment defines when a staff member will work a particular shift at a location.
+ *     tags: [Staff Assignment]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -89,48 +72,48 @@ router.get(
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - staff_id
- *               - parent_location_id
- *               - work_date
  *             properties:
  *               staff_id:
  *                 type: string
- *                 description: Manager user id
- *               parent_location_id:
+ *                 description: Staff member ID
+ *                 example: "123e4567-e89b-12d3-a456-426614174000"
+ *               location_shift_id:
  *                 type: string
- *                 description: Parent location id to assign manager directly
- *               shift_id:
- *                 type: string
- *                 description: Optional filter for a specific staff shift id
- *               work_date:
+ *                 description: Location Shift ID (links location + shift template)
+ *                 example: "123e4567-e89b-12d3-a456-426614174001"
+ *               start_date:
  *                 type: string
  *                 format: date
- *           example:
- *             staff_id: 3128f3f2-6c4f-4f3d-a6c8-df1b2d6ef734
- *             parent_location_id: 8f2ce391-f69c-4f5f-a65e-fd35f0c4ef10
- *             work_date: 2026-03-17
+ *                 description: Assignment start date (YYYY-MM-DD)
+ *                 example: "2026-03-22"
+ *               end_date:
+ *                 type: string
+ *                 format: date
+ *                 description: Assignment end date (YYYY-MM-DD)
+ *                 example: "2026-03-29"
+ *             required:
+ *               - staff_id
+ *               - location_shift_id
+ *               - start_date
+ *               - end_date
  *     responses:
  *       201:
  *         description: Assignment created successfully
- *       400:
- *         description: Invalid input or no location_shift available on parent location
- *       404:
- *         description: Staff, shift, or parent location not found
  */
 router.post(
-  "/admin/assign-manager",
-  protect,
-  authorize("admin"),
-  staffShiftAssignmentController.assignManager
+	"/",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.createAssignment
 );
 
 /**
  * @swagger
  * /api/staff-shift-assignments/checkin:
  *   post:
- *     summary: Staff/Cleaner check in for assigned shift assignment
- *     tags: [Staff Shift Assignments]
+ *     summary: Check in for a shift
+ *     description: Record a staff member checking in to start their shift
+ *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -139,34 +122,31 @@ router.post(
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - shift_assignment_id
  *             properties:
  *               shift_assignment_id:
  *                 type: string
+ *                 description: Assignment ID
+ *                 example: "123e4567-e89b-12d3-a456-426614174002"
+ *             required:
+ *               - shift_assignment_id
  *     responses:
  *       200:
  *         description: Check-in successful
- *       400:
- *         description: Invalid check-in request
- *       403:
- *         description: Not allowed to check in this assignment
- *       404:
- *         description: Shift assignment not found
  */
 router.post(
-  "/checkin",
-  protect,
-  authorize("manager", "cleaner"),
-  staffShiftAssignmentController.checkinWork
+	"/checkin",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.checkinWork
 );
 
 /**
  * @swagger
  * /api/staff-shift-assignments/checkout:
  *   post:
- *     summary: Staff/Cleaner check out for assigned shift assignment
- *     tags: [Staff Shift Assignments]
+ *     summary: Check out from a shift
+ *     description: Record a staff member checking out to end their shift
+ *     tags: [Attendance]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -174,22 +154,163 @@ router.post(
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/StaffShiftActionRequest'
+ *             type: object
+ *             properties:
+ *               shift_assignment_id:
+ *                 type: string
+ *                 description: Assignment ID
+ *                 example: "123e4567-e89b-12d3-a456-426614174002"
+ *             required:
+ *               - shift_assignment_id
  *     responses:
  *       200:
  *         description: Check-out successful
- *       400:
- *         description: Invalid check-out request
- *       403:
- *         description: Not allowed to check out this assignment
- *       404:
- *         description: Shift assignment not found
  */
 router.post(
-  "/checkout",
-  protect,
-  authorize("manager", "cleaner"),
-  staffShiftAssignmentController.checkoutWork
+	"/checkout",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.checkoutWork
+);
+
+/**
+ * @swagger
+ * /api/staff-shift-assignments:
+ *   get:
+ *     summary: Get all shift assignments
+ *     description: Retrieve all shift assignments with optional filtering
+ *     tags: [Staff Assignment]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: staff_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: location_shift_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: start_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: end_date
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: List of assignments retrieved successfully
+ */
+router.get(
+	"/",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.getAssignments
+);
+
+/**
+ * @swagger
+ * /api/staff-shift-assignments/{id}:
+ *   get:
+ *     summary: Get an assignment by ID
+ *     tags: [Staff Assignment]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Assignment retrieved successfully
+ *       404:
+ *         description: Assignment not found
+ */
+router.get(
+	"/:id",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.getAssignmentById
+);
+
+/**
+ * @swagger
+ * /api/staff-shift-assignments/{id}:
+ *   put:
+ *     summary: Update an assignment
+ *     tags: [Staff Assignment]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               start_date:
+ *                 type: string
+ *                 format: date
+ *               end_date:
+ *                 type: string
+ *                 format: date
+ *               status:
+ *                 type: string
+ *                 enum:
+ *                   - ASSIGNED
+ *                   - CHECKED_IN
+ *                   - COMPLETED
+ *                   - ABSENT
+ *     responses:
+ *       200:
+ *         description: Assignment updated successfully
+ */
+router.put(
+	"/:id",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.updateAssignment
+);
+
+/**
+ * @swagger
+ * /api/staff-shift-assignments/{id}:
+ *   delete:
+ *     summary: Delete an assignment
+ *     tags: [Staff Assignment]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Assignment deleted successfully
+ */
+router.delete(
+	"/:id",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin"),
+	staffShiftAssignmentController.deleteAssignment
 );
 
 module.exports = router;

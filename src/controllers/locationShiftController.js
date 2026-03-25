@@ -20,7 +20,7 @@ const createLocationShift = async (req, res) => {
 const getWorkingStaffByLocation = async (req, res) => {
   try {
     const result = await locationShiftService.getWorkingStaffByLocation(req.params.locationId, {
-      work_date: req.query.work_date,
+      target_date: req.query.target_date || req.query.work_date,
       role: req.query.role,
       include_assigned: req.query.include_assigned,
     });

@@ -5,22 +5,29 @@ const paymentService = require("../services/paymentService");
 // @access  Public
 exports.createPayment = async (req, res) => {
   try {
-    const { bookingOrderId, amount, orderInfo } = req.body;
-    
+    const { bookingOrderId, orderInfo } = req.body;
+
+    // Validate required fields
+    if (!bookingOrderId || !orderInfo) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: bookingOrderId, orderInfo"
+      });
+    }
+
     // Lấy IP của client
     const ipAddr = req.headers["x-forwarded-for"] ||
       req.connection.remoteAddress ||
       req.socket.remoteAddress ||
       req.connection.socket.remoteAddress ||
       "127.0.0.1";
-    
+
     const result = await paymentService.createPayment({
       bookingOrderId,
-      amount,
       orderInfo,
       ipAddr,
     });
-    
+
     res.status(200).json({
       success: true,
       message: "Payment URL created successfully",
@@ -42,7 +49,7 @@ exports.createPayment = async (req, res) => {
 exports.vnpayReturn = async (req, res) => {
   try {
     const result = await paymentService.handleVnpayReturn(req.query);
-    
+
     res.status(200).json({
       success: true,
       message: result.message,
@@ -64,7 +71,7 @@ exports.vnpayReturn = async (req, res) => {
 exports.vnpayIpn = async (req, res) => {
   try {
     const result = await paymentService.handleVnpayReturn(req.query);
-    
+
     // IPN requires specific response format
     if (result.code === "00") {
       return res.status(200).json({ RspCode: "00", Message: "success" });
@@ -83,9 +90,9 @@ exports.vnpayIpn = async (req, res) => {
 exports.queryPaymentStatus = async (req, res) => {
   try {
     const { orderId, transactionDate } = req.body;
-    
+
     const result = await paymentService.queryPaymentStatus({ orderId, transactionDate });
-    
+
     res.status(200).json({
       success: true,
       data: result,
@@ -106,11 +113,11 @@ exports.queryPaymentStatus = async (req, res) => {
 exports.refundPayment = async (req, res) => {
   try {
     const { orderId, transactionDate, amount, reason } = req.body;
-    
+
     const ipAddr = req.headers["x-forwarded-for"] ||
       req.connection.remoteAddress ||
       "127.0.0.1";
-    
+
     const result = await paymentService.refundPayment({
       orderId,
       transactionDate,
@@ -118,7 +125,7 @@ exports.refundPayment = async (req, res) => {
       reason,
       ipAddr,
     });
-    
+
     res.status(200).json({
       success: true,
       message: "Refund request processed",
@@ -140,7 +147,7 @@ exports.refundPayment = async (req, res) => {
 exports.getPaymentByOrderId = async (req, res) => {
   try {
     const payment = await paymentService.getPaymentByOrderId(req.params.orderId);
-    
+
     res.status(200).json({
       success: true,
       data: payment,
@@ -162,7 +169,7 @@ exports.getPaymentsByBookingId = async (req, res) => {
     const payments = await paymentService.getAllPayments({
       bookingId: req.params.bookingId,
     });
-    
+
     res.status(200).json({
       success: true,
       count: payments.length,
