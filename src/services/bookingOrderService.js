@@ -12,7 +12,7 @@ const timeSlotService = require("./timeSlotService");
 
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
-const HOLD_EXPIRATION_MINUTES = 3;
+const HOLD_EXPIRATION_MINUTES = 10;
 const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 const PRICE_UNIT_MULTIPLIER = 10000;
 const REFUND_CANCEL_WINDOW_HOURS = 48;
@@ -1066,10 +1066,10 @@ class BookingOrderService {
 
     /**
      * Start periodic cleanup job
-     * Runs every 5 minutes to clean up expired PENDING orders
-     * @param {Number} intervalMinutes - Interval in minutes (default: 5)
+     * Runs every 10 minutes to clean up expired PENDING orders
+     * @param {Number} intervalMinutes - Interval in minutes (default: 10)
      */
-    startCleanupJob(intervalMinutes = 5) {
+    startCleanupJob(intervalMinutes = 10) {
         console.log(`Starting order cleanup job (interval: ${intervalMinutes} minute(s))`);
 
         // Run immediately on startup

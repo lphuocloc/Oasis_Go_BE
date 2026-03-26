@@ -239,4 +239,65 @@ router.put("/:id/cancel", protect, bookingOrderController.cancelBookingOrder);
  */
 router.post("/:id/checkout", protect, bookingOrderController.checkoutBookingOrder);
 
+/**
+ * @swagger
+ * /api/booking-orders/{id}/repay:
+ *   post:
+ *     summary: Initiate repayment for PENDING order
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking order ID
+ *     responses:
+ *       201:
+ *         description: Repayment link created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: "Repayment link created (Attempt #2)"
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     transactionId:
+ *                       type: string
+ *                     orderId:
+ *                       type: string
+ *                     amount:
+ *                       type: number
+ *                     attemptNumber:
+ *                       type: integer
+ *                     paymentUrl:
+ *                       type: string
+ *                     orderExpireAt:
+ *                       type: string
+ *                       format: date-time
+ *                     paymentExpireAt:
+ *                       type: string
+ *                       format: date-time
+ *                     remainingSeconds:
+ *                       type: integer
+ *       400:
+ *         description: Bad request (Order not PENDING or too close to expiration)
+ *       403:
+ *         description: Forbidden (Not order owner)
+ *       404:
+ *         description: Order not found
+ *       410:
+ *         description: Gone (Order expired)
+ */
+router.post("/:id/repay", protect, bookingOrderController.initiateRepayment);
+
 module.exports = router;
