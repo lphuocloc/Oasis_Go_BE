@@ -1,10 +1,25 @@
 const CleaningPhoto = require("../models/CleaningPhoto");
 const CleaningTask = require("../models/CleaningTask");
+const { cloudinary } = require("../config/cloudinary");
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+};
+
+const serializeCleaningPhoto = (photo) => {
+  if (!photo) return photo;
+
+  const raw = typeof photo.toObject === "function" ? photo.toObject() : { ...photo };
+
+  return {
+    ...raw,
+    image: {
+      url: raw.photo_url || null,
+      public_id: raw.photo_public_id || null,
+    },
+  };
 };
 
 const normalizeType = (value) => {
@@ -20,7 +35,7 @@ const validateType = (value) => {
 };
 
 exports.createCleaningPhoto = async (data) => {
-  const { cleaning_task_id, photo_url, type } = data;
+  const { cleaning_task_id, photo_url, photo_public_id, type } = data;
 
   if (!cleaning_task_id || !photo_url || !type) {
     throw createError("cleaning_task_id, photo_url and type are required", 400);
@@ -32,11 +47,14 @@ exports.createCleaningPhoto = async (data) => {
   const task = await CleaningTask.findOne({ id: cleaning_task_id }).select("id").lean();
   if (!task) throw createError("Cleaning task not found", 404);
 
-  return CleaningPhoto.create({
+  const created = await CleaningPhoto.create({
     cleaning_task_id,
     photo_url,
+    photo_public_id: photo_public_id || null,
     type: normalizedType,
   });
+
+  return serializeCleaningPhoto(created);
 };
 
 exports.getAllCleaningPhotos = async (query = {}) => {
@@ -49,13 +67,14 @@ exports.getAllCleaningPhotos = async (query = {}) => {
     filter.type = normalizedType;
   }
 
-  return CleaningPhoto.find(filter).sort({ created_at: -1 });
+  const photos = await CleaningPhoto.find(filter).sort({ created_at: -1 });
+  return photos.map(serializeCleaningPhoto);
 };
 
 exports.getCleaningPhotoById = async (id) => {
   const photo = await CleaningPhoto.findOne({ id });
   if (!photo) throw createError("Cleaning photo not found", 404);
-  return photo;
+  return serializeCleaningPhoto(photo);
 };
 
 exports.updateCleaningPhoto = async (id, data) => {
@@ -70,16 +89,33 @@ exports.updateCleaningPhoto = async (id, data) => {
   if (!task) throw createError("Cleaning task not found", 404);
 
   photo.cleaning_task_id = nextTaskId;
+  const previousPublicId = photo.photo_public_id;
+  const isReplacingCloudinaryAsset =
+    data.photo_public_id !== undefined &&
+    data.photo_public_id &&
+    previousPublicId &&
+    data.photo_public_id !== previousPublicId;
+
   photo.photo_url = data.photo_url !== undefined ? data.photo_url : photo.photo_url;
+  photo.photo_public_id = data.photo_public_id !== undefined ? data.photo_public_id : photo.photo_public_id;
   photo.type = nextType;
 
   await photo.save();
-  return photo;
+
+  if (isReplacingCloudinaryAsset) {
+    await cloudinary.uploader.destroy(previousPublicId).catch(() => null);
+  }
+
+  return serializeCleaningPhoto(photo);
 };
 
 exports.deleteCleaningPhoto = async (id) => {
   const photo = await CleaningPhoto.findOne({ id });
   if (!photo) throw createError("Cleaning photo not found", 404);
+
+  if (photo.photo_public_id) {
+    await cloudinary.uploader.destroy(photo.photo_public_id).catch(() => null);
+  }
 
   await CleaningPhoto.deleteOne({ id });
   return { message: "Cleaning photo deleted successfully" };

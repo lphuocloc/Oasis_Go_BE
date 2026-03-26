@@ -27,7 +27,24 @@ const uploadPodClusterImage = multer({
   },
 });
 
+const cleaningTaskPhotoStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: "oasisgo/cleaning-tasks",
+    allowed_formats: ["jpg", "jpeg", "png", "webp"],
+    transformation: [{ width: 1600, height: 1600, crop: "limit" }],
+  },
+});
+
+const uploadCleaningTaskPhoto = multer({
+  storage: cleaningTaskPhotoStorage,
+  limits: {
+    fileSize: 8 * 1024 * 1024, // 8MB
+  },
+});
+
 module.exports = {
   cloudinary,
   uploadPodClusterImage,
+  uploadCleaningTaskPhoto,
 };
