@@ -3,10 +3,10 @@ const router = express.Router();
 const podClusterController = require("../controllers/podClusterController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
-	loadManagerScope,
-	applyManagerLocationScope,
-	requireManagerLocationAccess,
-	requireManagerClusterAccess,
+  loadManagerScope,
+  applyManagerLocationScope,
+  requireManagerLocationAccess,
+  requireManagerClusterAccess,
 } = require("../middlewares/managerScopeMiddleware");
 const { uploadPodClusterImage } = require("../config/cloudinary");
 
@@ -93,10 +93,9 @@ const { uploadPodClusterImage } = require("../config/cloudinary");
  *         description: Server error
  */
 router.get(
-	"/",
-	loadManagerScope,
-	applyManagerLocationScope,
-	podClusterController.getAllPodClusters
+  "/",
+
+  podClusterController.getAllPodClusters,
 );
 
 /**
@@ -132,12 +131,9 @@ router.get(
  *         description: Server error
  */
 router.get(
-	"/location/:locationId",
-	protect,
-	authorize("admin", "manager", "user"),
-	loadManagerScope,
-	requireManagerLocationAccess({ source: "params", key: "locationId" }),
-	podClusterController.getPodClustersByLocation
+  "/location/:locationId",
+
+  podClusterController.getPodClustersByLocation,
 );
 
 /**
@@ -171,12 +167,9 @@ router.get(
  *         description: Server error
  */
 router.get(
-	"/:id",
-	protect,
-	authorize("admin", "manager", "user"),
-	loadManagerScope,
-	requireManagerClusterAccess({ source: "params", key: "id" }),
-	podClusterController.getPodClusterById
+  "/:id",
+
+  podClusterController.getPodClusterById,
 );
 
 /**
@@ -256,10 +249,10 @@ router.get("/:id/images", podClusterController.getPodClusterImages);
  *         description: Server error
  */
 router.delete(
-	"/:id/images/:imageId",
-	protect,
-	authorize("admin"),
-	podClusterController.deletePodClusterImage
+  "/:id/images/:imageId",
+  protect,
+  authorize("admin"),
+  podClusterController.deletePodClusterImage,
 );
 
 /**
@@ -326,11 +319,11 @@ router.delete(
  *         description: Server error
  */
 router.post(
-	"/",
-	protect,
-	authorize("admin"),
-	uploadPodClusterImage.array("images", 10),
-	podClusterController.createPodCluster
+  "/",
+  protect,
+  authorize("admin"),
+  uploadPodClusterImage.array("images", 10),
+  podClusterController.createPodCluster,
 );
 
 /**
@@ -385,11 +378,11 @@ router.post(
  *         description: Server error
  */
 router.put(
-	"/:id",
-	protect,
-	authorize("admin"),
-	uploadPodClusterImage.array("images", 10),
-	podClusterController.updatePodCluster
+  "/:id",
+  protect,
+  authorize("admin"),
+  uploadPodClusterImage.array("images", 10),
+  podClusterController.updatePodCluster,
 );
 
 /**
@@ -418,10 +411,10 @@ router.put(
  *         description: Server error
  */
 router.delete(
-	"/:id",
-	protect,
-	authorize("admin"),
-	podClusterController.deletePodCluster
+  "/:id",
+  protect,
+  authorize("admin"),
+  podClusterController.deletePodCluster,
 );
 
 module.exports = router;
