@@ -282,3 +282,47 @@ exports.handleLogout = async (req, res) => {
     });
   }
 };
+
+// @desc    Lấy danh sách tất cả users/cleaners
+// @route   GET /api/auth/users
+// @access  Private
+exports.getAllUsers = async (req, res) => {
+  try {
+    const User = require("../models/User");
+    const { role } = req.query;
+
+    let query = { isActive: true };
+    
+    // Filter by role if provided, otherwise return cleaners by default
+    if (role) {
+      query.role = role;
+    } else {
+      query.role = "cleaner";
+    }
+
+    const users = await User.find(query, {
+      _id: 1,
+      id: 1,
+      name: 1,
+      email: 1,
+      phone: 1,
+      avatar: 1,
+      role: 1,
+      isActive: 1,
+      createdAt: 1,
+    }).lean();
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      data: users,
+    });
+  } catch (error) {
+    console.error("Get all users error:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
