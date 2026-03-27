@@ -735,21 +735,21 @@ class BookingService {
   }
 
   /**
-   * Admin change pod for booking
+   * Manager change pod for booking
    * @param {String} bookingId - Booking ID
    * @param {String} newPodId - New Pod ID
    * @param {Object} actor - Authenticated actor
    * @returns {Promise<Object>} Updated booking
    */
-  async adminChangePod(bookingId, newPodId, actor) {
+  async managerChangePod(bookingId, newPodId, actor, managerScope = null) {
     if (!newPodId) {
       const error = new Error("pod_id is required");
       error.statusCode = 400;
       throw error;
     }
 
-    if (String(actor?.role || "") !== "admin") {
-      const error = new Error("Only admin can change booking pod");
+    if (String(actor?.role || "") !== "manager") {
+      const error = new Error("Only manager with accessibility can change booking pod");
       error.statusCode = 403;
       throw error;
     }
@@ -758,6 +758,25 @@ class BookingService {
     if (!booking) {
       const error = new Error("Booking not found");
       error.statusCode = 404;
+      throw error;
+    }
+
+    const scopedPodIds = new Set((managerScope?.podIds || []).map((podId) => String(podId)));
+    if (scopedPodIds.size === 0) {
+      const error = new Error("Manager has no assigned pod scope");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(booking.pod_id))) {
+      const error = new Error("You are not allowed to manage this booking pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(newPodId))) {
+      const error = new Error("You are not allowed to move booking to this pod");
+      error.statusCode = 403;
       throw error;
     }
 

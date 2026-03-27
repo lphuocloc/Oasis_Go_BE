@@ -435,7 +435,8 @@ router.patch(
 	protect,
 	authorize("manager"),
 	loadManagerScope,
-	bookingController.adminChangePod
+	requireManagerPodAccess({ source: "body", key: "pod_id" }),
+	bookingController.managerChangePod
 );
 
 /**

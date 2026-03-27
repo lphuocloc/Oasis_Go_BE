@@ -1,7 +1,11 @@
 const express = require("express");
 const router = express.Router();
 const bookingOrderController = require("../controllers/bookingOrderController");
-const { protect } = require("../middlewares/authMiddleware");
+const { protect, authorize } = require("../middlewares/authMiddleware");
+const {
+	loadManagerScope,
+	applyManagerPodScope,
+} = require("../middlewares/managerScopeMiddleware");
 
 /**
  * @swagger
@@ -128,7 +132,196 @@ router.post("/", protect, bookingOrderController.createBookingOrder);
  *     security:
  *       - bearerAuth: []
  */
-router.get("/", protect, bookingOrderController.getAllBookingOrders);
+router.get(
+	"/",
+	protect,
+	loadManagerScope,
+	applyManagerPodScope,
+	bookingOrderController.getAllBookingOrders
+);
+
+/**
+ * @swagger
+ * /api/booking-orders/refunds/pending:
+ *   get:
+ *     summary: Get pending refund requests in manager scope
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: order_id
+ *         schema:
+ *           type: string
+ *         description: Filter by booking order ID (must be in manager scope)
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *         description: Page number
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *         description: Items per page
+ *     responses:
+ *       200:
+ *         description: Pending refund requests retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     refunds:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                           order_id:
+ *                             type: string
+ *                           amount:
+ *                             type: number
+ *                           currency:
+ *                             type: string
+ *                           type:
+ *                             type: string
+ *                             example: REFUND
+ *                           status:
+ *                             type: string
+ *                             example: PENDING
+ *                           provider_reference:
+ *                             type: string
+ *                             nullable: true
+ *                           created_at:
+ *                             type: string
+ *                             format: date-time
+ *                           order:
+ *                             type: object
+ *                             nullable: true
+ *                             properties:
+ *                               id:
+ *                                 type: string
+ *                               user_id:
+ *                                 type: string
+ *                               status:
+ *                                 type: string
+ *                               final_total_price:
+ *                                 type: number
+ *                     pagination:
+ *                       type: object
+ *                       properties:
+ *                         total:
+ *                           type: integer
+ *                         page:
+ *                           type: integer
+ *                         limit:
+ *                           type: integer
+ *                         pages:
+ *                           type: integer
+ *       403:
+ *         description: Forbidden (Only manager can access)
+ */
+router.get(
+	"/refunds/pending",
+	protect,
+	authorize("manager"),
+	loadManagerScope,
+	applyManagerPodScope,
+	bookingOrderController.getPendingRefundRequests
+);
+
+/**
+ * @swagger
+ * /api/booking-orders/refunds/{refundId}/process:
+ *   post:
+ *     summary: Process a pending refund request (manager only)
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: refundId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Refund transaction ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - action
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 enum: [APPROVE, REJECT]
+ *                 description: Approve or reject this refund request
+ *               note:
+ *                 type: string
+ *                 description: Optional manager note for audit trail
+ *     responses:
+ *       200:
+ *         description: Refund request processed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Refund request processed successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     decision:
+ *                       type: string
+ *                       enum: [APPROVE, REJECT]
+ *                     refund:
+ *                       type: object
+ *                       properties:
+ *                         id:
+ *                           type: string
+ *                         order_id:
+ *                           type: string
+ *                         amount:
+ *                           type: number
+ *                         type:
+ *                           type: string
+ *                           example: REFUND
+ *                         status:
+ *                           type: string
+ *                           description: SUCCESS when APPROVE, VOIDED when REJECT
+ *                         provider_reference:
+ *                           type: string
+ *       400:
+ *         description: Invalid action or refund already processed
+ *       403:
+ *         description: Forbidden (Manager has no access to this refund)
+ *       404:
+ *         description: Refund request not found
+ */
+router.post(
+	"/refunds/:refundId/process",
+	protect,
+	authorize("manager"),
+	loadManagerScope,
+	bookingOrderController.processRefundRequest
+);
 
 /**
  * @swagger
@@ -151,7 +344,7 @@ router.get("/", protect, bookingOrderController.getAllBookingOrders);
  *     security:
  *       - bearerAuth: []
  */
-router.get("/:id", protect, bookingOrderController.getBookingOrderById);
+router.get("/:id", protect, loadManagerScope, bookingOrderController.getBookingOrderById);
 
 /**
  * @swagger

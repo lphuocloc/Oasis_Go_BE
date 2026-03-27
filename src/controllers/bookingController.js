@@ -286,15 +286,16 @@ const setCleanerAccessFlag = async (req, res) => {
 /**
  * Admin change pod for booking
  * @route PATCH /api/bookings/:id/change-pod
- * @access Private (Admin)
+ * @access Private (Manager)
  */
-const adminChangePod = async (req, res) => {
+const managerChangePod = async (req, res) => {
     try {
         const { pod_id } = req.body;
-        const booking = await bookingService.adminChangePod(
+        const booking = await bookingService.managerChangePod(
             req.params.id,
             pod_id,
-            req.user
+            req.user,
+            req.managerScope
         );
 
         res.status(200).json({
@@ -322,5 +323,5 @@ module.exports = {
     cancelBooking,
     checkAvailability,
     setCleanerAccessFlag,
-    adminChangePod,
+    managerChangePod,
 };
