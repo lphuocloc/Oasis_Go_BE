@@ -1,5 +1,6 @@
 const Booking = require("../models/Bookings");
 const BookingOrder = require("../models/BookingOrder");
+const BookingAccessSession = require("../models/BookingAccessSession");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const User = require("../models/User");
@@ -86,11 +87,26 @@ class BookingService {
 
       autoActivatedCount += 1;
 
+      // Create booking access session for auto check-in
+      const autoActivatedAt = new Date();
+      await BookingAccessSession.create({
+        booking_id: booking.id,
+        pod_id: booking.pod_id,
+        user_id: booking.user_id,
+        checkin_at: autoActivatedAt,
+        checkin_source: "AUTO",
+        access_reason: "BOOKING",
+        key_type: "SYSTEM",
+      });
+
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng đã tự động kích hoạt",
-        body: "Bạn chưa check-in đúng giờ, hệ thống đã tự động kích hoạt phiên sử dụng của bạn.",
+        message: "Bạn chưa check-in đúng giờ, hệ thống đã tự động kích hoạt phiên sử dụng của bạn.",
+        type: "BOOKING",
+        event_code: "BOOKING_AUTO_CHECKIN",
+        dedupe_key: `BOOKING_AUTO_CHECKIN:${booking.id}`,
         data: {
-          type: "BOOKING_AUTO_ACTIVATED",
+          type: "BOOKING_AUTO_CHECKIN",
           booking_id: booking.id,
           order_id: booking.order_id,
           pod_id: booking.pod_id,
@@ -158,7 +174,10 @@ class BookingService {
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng kết thúc do không check-in",
-        body: "Phiên sử dụng của bạn đã hết giờ và được ghi nhận là NO_SHOW.",
+        message: "Phiên sử dụng của bạn đã hết giờ và được ghi nhận là NO_SHOW.",
+        type: "BOOKING",
+        event_code: "BOOKING_NO_SHOW",
+        dedupe_key: `BOOKING_NO_SHOW:${booking.id}`,
         data: {
           type: "BOOKING_NO_SHOW",
           booking_id: booking.id,
@@ -174,6 +193,86 @@ class BookingService {
     };
   }
 
+  async autoCheckoutExpiredBookings() {
+    const now = new Date();
+
+    // Find bookings that are still IN_USE but past their end_time
+    const expiredBookings = await Booking.find({
+      status: "IN_USE",
+      end_time: { $lte: now },
+    }).select("id user_id pod_id order_id start_time end_time status");
+
+    if (expiredBookings.length === 0) {
+      return { found: 0, auto_checked_out: 0, access_logs_updated: 0 };
+    }
+
+    let autoCheckedOutCount = 0;
+    let accessLogsUpdatedCount = 0;
+
+    for (const booking of expiredBookings) {
+      const updated = await Booking.updateOne(
+        {
+          id: booking.id,
+          status: "IN_USE",
+        },
+        {
+          $set: {
+            status: "COMPLETED",
+            actual_end_time: booking.end_time || now,
+            cleaner_access_allowed: true,
+            cleaner_access_updated_at: new Date(),
+          },
+        }
+      );
+
+      if (updated.modifiedCount !== 1) {
+        continue;
+      }
+
+      autoCheckedOutCount += 1;
+
+      // Update booking access session with timeout checkout
+      const accessSessionUpdate = await BookingAccessSession.updateOne(
+        {
+          booking_id: booking.id,
+          checkin_at: { $ne: null },
+          checkout_at: null, // Only update if not already checked out
+        },
+        {
+          $set: {
+            checkout_at: booking.end_time || now,
+            checkout_type: "TIMEOUT",
+          },
+        }
+      );
+
+      if (accessSessionUpdate.modifiedCount === 1) {
+        accessLogsUpdatedCount += 1;
+      }
+
+      await notificationService.sendToUser(booking.user_id, {
+        title: "Phiên sử dụng đã tự động checkout",
+        message: "Hệ thống đã tự động checkout do phiên sử dụng đã hết thời gian.",
+        type: "BOOKING",
+        event_code: "BOOKING_AUTO_CHECKOUT",
+        dedupe_key: `BOOKING_AUTO_CHECKOUT:${booking.id}`,
+        data: {
+          type: "BOOKING_AUTO_CHECKOUT",
+          booking_id: booking.id,
+          order_id: booking.order_id,
+          pod_id: booking.pod_id,
+          checkout_type: "TIMEOUT",
+        },
+      });
+    }
+
+    return {
+      found: expiredBookings.length,
+      auto_checked_out: autoCheckedOutCount,
+      access_logs_updated: accessLogsUpdatedCount,
+    };
+  }
+
   startAutoActivateCheckinJob(intervalMinutes = 1, graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 1);
 
@@ -184,6 +283,7 @@ class BookingService {
     Promise.all([
       this.autoActivateOverdueCheckins(graceMinutes),
       this.markNoShowForExpiredAutoActivatedBookings(),
+      this.autoCheckoutExpiredBookings(),
     ]).catch((error) => {
       console.error("Initial auto-activate checkin job failed:", error);
     });
@@ -193,6 +293,7 @@ class BookingService {
         await Promise.all([
           this.autoActivateOverdueCheckins(graceMinutes),
           this.markNoShowForExpiredAutoActivatedBookings(),
+          this.autoCheckoutExpiredBookings(),
         ]);
       } catch (error) {
         console.error("Auto-activate checkin job error:", error);
@@ -553,84 +654,212 @@ class BookingService {
 
 
   /**
-   * Checkin by qr_token and key_token
+   * Checkin by qr_token and key_token (or key_token only for cleaners)
+   * - CUSTOMER: Requires both QR token and online key token
+   * - CLEANER: Only requires online key token (no QR needed)
    * @param {Object} params
-   * @returns {Promise<Object>} Updated booking
+   * @returns {Promise<Object>} Updated booking or booking info
    */
   async checkinWithQrAndKey({ qr_token, key_token, actor }) {
-    if (!qr_token || !key_token) {
-      const error = new Error("QR token và key token là bắt buộc");
+    if (!key_token) {
+      const error = new Error("Key token là bắt buộc");
       error.statusCode = 400;
       throw error;
     }
 
-    const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
-    if (!qrCode) {
-      const error = new Error("QR code không hợp lệ hoặc không hoạt động");
+    const actorId = String(actor?._id || actor?.id || "");
+
+    // Find online key by key_token first (works for both CUSTOMER and CLEANER)
+    const onlineKey = await OnlineKey.findOne({
+      key_token,
+      is_revoked: false,
+    });
+
+    if (!onlineKey) {
+      const error = new Error("Khóa không hợp lệ hoặc không hoạt động");
       error.statusCode = 404;
       throw error;
     }
 
-    if (new Date(qrCode.expires_at).getTime() < Date.now()) {
-      const error = new Error("QR code đã hết hạn");
+    // Validate key is in valid time window
+    const now = new Date();
+    if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
+      const error = new Error("Khóa đã hết hạn hoặc chưa có hiệu lực");
       error.statusCode = 403;
       throw error;
     }
 
-    const onlineKey = await OnlineKey.validateOnlineKey({
-      pod_id: qrCode.pod_id,
-      key_type: "CUSTOMER",
-      key_token,
-    });
+    // Validate key is not locked due to failed attempts
+    if (onlineKey.isLocked(now)) {
+      const error = new Error("Khóa bị khóa do nhiều lần nhập sai. Vui lòng chờ một lúc");
+      error.statusCode = 429;
+      error.cooldown_until = onlineKey.locked_until;
+      throw error;
+    }
 
-    const actorId = String(actor?._id || actor?.id || "");
+    // Actor must be the key owner
     if (!actorId || String(onlineKey.user_id) !== actorId) {
       const error = new Error("Khóa này không thuộc về người dùng hiện tại.");
       error.statusCode = 403;
       throw error;
     }
 
+    // Reset failed attempts on successful validation
+    if (onlineKey.failed_attempts > 0 || onlineKey.locked_until || onlineKey.last_failed_at) {
+      await onlineKey.resetAttemptState();
+    }
+
     const booking = await Booking.findOne({
       id: onlineKey.booking_id,
-      user_id: actorId,
-      pod_id: qrCode.pod_id,
     });
 
     if (!booking) {
-      const error = new Error("Không tìm thấy đặt chỗ hợp lệ nào cho mã QR và mã khóa này.");
+      const error = new Error("Không tìm thấy đặt chỗ cho khóa này");
       error.statusCode = 404;
       throw error;
     }
 
-    if (booking.status === "IN_USE") {
-      if (booking.checkin_state === "NO_SHOW") {
-        const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");
+    // Determine access type based on key_type
+    const isCleanerAccess = onlineKey.key_type === "CLEANER";
+    const isCustomerAccess = onlineKey.key_type === "CUSTOMER";
+
+    // ============= CUSTOMER CHECK-IN =============
+    if (isCustomerAccess) {
+      // CUSTOMER requires QR code validation
+      if (!qr_token) {
+        const error = new Error("QR token là bắt buộc cho khách hàng");
         error.statusCode = 400;
         throw error;
       }
 
-      const needsManualSync =
-        booking.checkin_state !== "MANUAL_CHECKED_IN" ||
-        !booking.checked_in_at ||
-        booking.checkin_source !== "USER_QR";
-
-      if (needsManualSync) {
-        booking.checkin_state = "MANUAL_CHECKED_IN";
-        booking.checked_in_at = booking.checked_in_at || new Date();
-        booking.checkin_source = "USER_QR";
-        booking.no_show_marked_at = null;
-        await booking.save();
+      const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
+      if (!qrCode) {
+        const error = new Error("QR code không hợp lệ hoặc không hoạt động");
+        error.statusCode = 404;
+        throw error;
       }
+
+      if (new Date(qrCode.expires_at).getTime() < Date.now()) {
+        const error = new Error("QR code đã hết hạn");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      // Validate QR pod matches booking pod
+      if (String(qrCode.pod_id) !== String(booking.pod_id)) {
+        const error = new Error("QR code không khớp với pod của booking");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      // Validate booking belongs to customer
+      if (String(booking.user_id) !== actorId) {
+        const error = new Error("Booking này không thuộc về người dùng hiện tại.");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      if (booking.status === "IN_USE") {
+        if (booking.checkin_state === "NO_SHOW") {
+          const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");
+          error.statusCode = 400;
+          throw error;
+        }
+
+        const needsManualSync =
+          booking.checkin_state !== "MANUAL_CHECKED_IN" ||
+          !booking.checked_in_at ||
+          booking.checkin_source !== "USER_QR";
+
+        if (needsManualSync) {
+          booking.checkin_state = "MANUAL_CHECKED_IN";
+          booking.checked_in_at = booking.checked_in_at || new Date();
+          booking.checkin_source = "USER_QR";
+          booking.no_show_marked_at = null;
+          await booking.save();
+        }
+        return booking;
+      }
+
+      if (booking.status !== "BOOKED") {
+        const error = new Error(`Không thể checkin đặt chỗ với trạng thái ${booking.status}`);
+        error.statusCode = 400;
+        throw error;
+      }
+
+      // Start using and log access
+      const updatedBooking = await booking.startUsing();
+
+      // Create booking access session for customer manual check-in
+      await BookingAccessSession.create({
+        booking_id: booking.id,
+        pod_id: booking.pod_id,
+        user_id: actorId,
+        checkin_at: new Date(),
+        checkin_source: "MANUAL",
+        access_reason: "BOOKING",
+        key_type: "CUSTOMER",
+      });
+
+      await notificationService.sendToUser(booking.user_id, {
+        title: "Check-in thành công",
+        message: "Bạn đã check-in thành công và có thể bắt đầu phiên sử dụng.",
+        type: "BOOKING",
+        event_code: "BOOKING_CHECKIN",
+        dedupe_key: `BOOKING_CHECKIN:${booking.id}`,
+        data: {
+          type: "BOOKING_CHECKIN",
+          booking_id: booking.id,
+          order_id: booking.order_id,
+          pod_id: booking.pod_id,
+          checkin_source: "USER_QR",
+        },
+      });
+
+      return updatedBooking;
+    }
+
+    // ============= CLEANER CHECK-IN =============
+    if (isCleanerAccess) {
+      // CLEANER doesn't need QR code, only online key
+
+      // Validate cleaner access requirements
+      if (booking.checkin_state === "NO_SHOW") {
+        const error = new Error("Không được phép vào làm vệ sinh cho booking NO_SHOW");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      if (booking.status !== "COMPLETED") {
+        const error = new Error("Chỉ có thể vào làm vệ sinh sau khi khách hàng checkout (booking COMPLETED)");
+        error.statusCode = 400;
+        throw error;
+      }
+
+      if (!booking.cleaner_access_allowed) {
+        const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+        error.statusCode = 403;
+        throw error;
+      }
+
+      // Create booking access session for cleaner manual check-in (NO QR code needed)
+      await BookingAccessSession.create({
+        booking_id: booking.id,
+        pod_id: booking.pod_id,
+        user_id: actorId,
+        checkin_at: new Date(),
+        checkin_source: "MANUAL",
+        access_reason: "CLEANER_ACCESS",
+        key_type: "CLEANER",
+      });
+
       return booking;
     }
 
-    if (booking.status !== "BOOKED") {
-      const error = new Error(`Không thể checkin đặt chỗ với trạng thái ${booking.status}`);
-      error.statusCode = 400;
-      throw error;
-    }
-
-    return await booking.startUsing();
+    // Should not reach here if key_type is recognized
+    const error = new Error("Loại khóa không hợp lệ");
+    error.statusCode = 400;
+    throw error;
   }
 
 

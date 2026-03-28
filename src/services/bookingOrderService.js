@@ -1,5 +1,6 @@
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
+const BookingAccessSession = require("../models/BookingAccessSession");
 const PodCluster = require("../models/PodCluster");
 const Pod = require("../models/Pod");
 const User = require("../models/User");
@@ -10,6 +11,8 @@ const Transaction = require("../models/Transaction");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
 const { autoAssignTaskForBooking } = require("./cleaningTaskService");
+const reviewService = require("./reviewService");
+const notificationService = require("./notificationService");
 
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
@@ -1290,6 +1293,44 @@ class BookingOrderService {
                     error.message || error
                 );
             }
+
+            // Create review record after checkout
+            await reviewService.createReviewIfNotExists(booking).catch((err) => {
+                console.error(`Failed to create review for booking ${booking.id}:`, err.message);
+            });
+
+            await notificationService.sendToUser(booking.user_id, {
+                title: "Checkout thành công",
+                message: "Phiên sử dụng của bạn đã checkout thành công.",
+                type: "BOOKING",
+                event_code: "BOOKING_CHECKOUT",
+                dedupe_key: `BOOKING_CHECKOUT:${booking.id}`,
+                data: {
+                    type: "BOOKING_CHECKOUT",
+                    booking_id: booking.id,
+                    order_id: booking.order_id,
+                    pod_id: booking.pod_id,
+                    checkout_type: requestedAt < booking.end_time ? "EARLY" : "NORMAL",
+                },
+            });
+
+            // Determine checkout type
+            const checkoutType = requestedAt < booking.end_time ? "EARLY" : "NORMAL";
+
+            // Create booking access session for checkout
+            await BookingAccessSession.updateOne(
+                {
+                    booking_id: booking.id,
+                    checkin_at: { $ne: null },
+                    checkout_at: null, // Only update if not already checked out
+                },
+                {
+                    $set: {
+                        checkout_at: requestedAt,
+                        checkout_type: checkoutType,
+                    },
+                }
+            );
 
             checked_out.push({
                 id: booking.id,
