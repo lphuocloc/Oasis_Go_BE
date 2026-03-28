@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect } = require("../middlewares/authMiddleware");
-const User = require("../models/User");
+const userController = require("../controllers/userController");
 
 /**
  * @swagger
@@ -72,44 +72,6 @@ const User = require("../models/User");
  *       500:
  *         description: Server error
  */
-router.get("/", protect, async (req, res) => {
-  try {
-    const { role } = req.query;
-
-    let query = { isActive: true };
-    
-    // Filter by role if provided, otherwise return users by default
-    if (role) {
-      query.role = role;
-    } else {
-      query.role = "user";
-    }
-
-    const users = await User.find(query, {
-      _id: 1,
-      id: 1,
-      name: 1,
-      email: 1,
-      phone: 1,
-      avatar: 1,
-      role: 1,
-      isActive: 1,
-      createdAt: 1,
-    }).lean();
-
-    res.status(200).json({
-      success: true,
-      count: users.length,
-      data: users,
-    });
-  } catch (error) {
-    console.error("Get users error:", error);
-    const statusCode = error.statusCode || 500;
-    res.status(statusCode).json({
-      success: false,
-      message: error.message || "Server error",
-    });
-  }
-});
+router.get("/", protect, userController.getActiveUsers);
 
 module.exports = router;
