@@ -50,6 +50,8 @@ const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
 const staffWorkRosterRouter = require("./routes/staffWorkRoster");
 const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
+const reviewRouter = require("./routes/review");
+const notificationRouter = require("./routes/notification");
 const app = express();
 
 // Middlewares
@@ -88,6 +90,8 @@ app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
 app.use("/api/staff-work-rosters", staffWorkRosterRouter);
 app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
+app.use("/api/reviews", reviewRouter);
+app.use("/api/notifications", notificationRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

@@ -730,8 +730,10 @@ router.post("/test-push", protect, async (req, res) => {
 
   const result = await notificationService.sendToUser(req.user.id, {
     title: title || "Thông báo từ Backend",
-    body: body || "Hệ thống đã kết nối thành công!",
-    data: { url: "/home" },
+    message: body || "Hệ thống đã kết nối thành công!",
+    type: "SYSTEM",
+    event_code: "SYSTEM_TEST",
+    data: { type: "SYSTEM_TEST", url: "/home" },
   });
 
   if (result.success) {

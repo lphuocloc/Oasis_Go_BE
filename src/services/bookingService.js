@@ -86,9 +86,12 @@ class BookingService {
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng đã tự động kích hoạt",
-        body: "Bạn chưa check-in đúng giờ, hệ thống đã tự động kích hoạt phiên sử dụng của bạn.",
+        message: "Bạn chưa check-in đúng giờ, hệ thống đã tự động kích hoạt phiên sử dụng của bạn.",
+        type: "BOOKING",
+        event_code: "BOOKING_AUTO_CHECKIN",
+        dedupe_key: `BOOKING_AUTO_CHECKIN:${booking.id}`,
         data: {
-          type: "BOOKING_AUTO_ACTIVATED",
+          type: "BOOKING_AUTO_CHECKIN",
           booking_id: booking.id,
           order_id: booking.order_id,
           pod_id: booking.pod_id,
@@ -156,7 +159,10 @@ class BookingService {
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng kết thúc do không check-in",
-        body: "Phiên sử dụng của bạn đã hết giờ và được ghi nhận là NO_SHOW.",
+        message: "Phiên sử dụng của bạn đã hết giờ và được ghi nhận là NO_SHOW.",
+        type: "BOOKING",
+        event_code: "BOOKING_NO_SHOW",
+        dedupe_key: `BOOKING_NO_SHOW:${booking.id}`,
         data: {
           type: "BOOKING_NO_SHOW",
           booking_id: booking.id,
@@ -228,6 +234,21 @@ class BookingService {
       if (accessSessionUpdate.modifiedCount === 1) {
         accessLogsUpdatedCount += 1;
       }
+
+      await notificationService.sendToUser(booking.user_id, {
+        title: "Phiên sử dụng đã tự động checkout",
+        message: "Hệ thống đã tự động checkout do phiên sử dụng đã hết thời gian.",
+        type: "BOOKING",
+        event_code: "BOOKING_AUTO_CHECKOUT",
+        dedupe_key: `BOOKING_AUTO_CHECKOUT:${booking.id}`,
+        data: {
+          type: "BOOKING_AUTO_CHECKOUT",
+          booking_id: booking.id,
+          order_id: booking.order_id,
+          pod_id: booking.pod_id,
+          checkout_type: "TIMEOUT",
+        },
+      });
     }
 
     return {
@@ -722,6 +743,21 @@ class BookingService {
         checkin_source: "MANUAL",
         access_reason: "BOOKING",
         key_type: "CUSTOMER",
+      });
+
+      await notificationService.sendToUser(booking.user_id, {
+        title: "Check-in thành công",
+        message: "Bạn đã check-in thành công và có thể bắt đầu phiên sử dụng.",
+        type: "BOOKING",
+        event_code: "BOOKING_CHECKIN",
+        dedupe_key: `BOOKING_CHECKIN:${booking.id}`,
+        data: {
+          type: "BOOKING_CHECKIN",
+          booking_id: booking.id,
+          order_id: booking.order_id,
+          pod_id: booking.pod_id,
+          checkin_source: "USER_QR",
+        },
       });
 
       return updatedBooking;
