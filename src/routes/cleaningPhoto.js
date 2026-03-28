@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { uploadCleaningTaskPhoto } = require("../config/cloudinary");
 const {
   createCleaningPhoto,
   getAllCleaningPhotos,
@@ -64,11 +65,36 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getCleanin
  *     tags: [Cleaning Photos]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - cleaning_task_id
+ *               - type
+ *               - photo
+ *             properties:
+ *               cleaning_task_id:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 enum: [BEFORE, AFTER]
+ *               photo:
+ *                 type: string
+ *                 format: binary
  *     responses:
  *       201:
  *         description: Cleaning photo created successfully
  */
-router.post("/", protect, authorize("admin", "manager", "cleaner"), createCleaningPhoto);
+router.post(
+  "/",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  uploadCleaningTaskPhoto.single("photo"),
+  createCleaningPhoto
+);
 
 /**
  * @swagger
@@ -84,11 +110,32 @@ router.post("/", protect, authorize("admin", "manager", "cleaner"), createCleani
  *         required: true
  *         schema:
  *           type: string
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               cleaning_task_id:
+ *                 type: string
+ *               type:
+ *                 type: string
+ *                 enum: [BEFORE, AFTER]
+ *               photo:
+ *                 type: string
+ *                 format: binary
  *     responses:
  *       200:
  *         description: Cleaning photo updated successfully
  */
-router.put("/:id", protect, authorize("admin", "manager", "cleaner"), updateCleaningPhoto);
+router.put(
+  "/:id",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  uploadCleaningTaskPhoto.single("photo"),
+  updateCleaningPhoto
+);
 
 /**
  * @swagger

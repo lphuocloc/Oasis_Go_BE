@@ -740,4 +740,69 @@ router.post("/test-push", protect, async (req, res) => {
     res.status(500).json({ message: "Gửi thất bại", error: result.error });
   }
 });
+
+/**
+ * @swagger
+ * /api/auth/users:
+ *   get:
+ *     summary: Get list of all active users (cleaners by default)
+ *     description: Returns list of active users. Filters by role if provided, otherwise returns cleaners.
+ *     tags: [Authentication]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: role
+ *         schema:
+ *           type: string
+ *           enum: [user, admin, manager, cleaner]
+ *         description: Filter users by role (default returns cleaners)
+ *         example: cleaner
+ *     responses:
+ *       200:
+ *         description: List of users retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: number
+ *                   example: 5
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       _id:
+ *                         type: string
+ *                         example: 69bea38c2f15371f651d17d9
+ *                       name:
+ *                         type: string
+ *                         example: John Cleaner
+ *                       email:
+ *                         type: string
+ *                         example: cleaner@example.com
+ *                       phone:
+ *                         type: string
+ *                         example: "0912345678"
+ *                       avatar:
+ *                         type: string
+ *                         nullable: true
+ *                       role:
+ *                         type: string
+ *                         example: cleaner
+ *                       isActive:
+ *                         type: boolean
+ *                         example: true
+ *       401:
+ *         description: Unauthorized - Missing or invalid token
+ *       500:
+ *         description: Server error
+ */
+router.get("/users", protect, authController.getAllUsers);
+
 module.exports = router;

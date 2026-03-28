@@ -1,6 +1,23 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const CLEANING_TASK_STATUSES = [
+  "ASSIGNED",
+  "NOTIFIED",
+  "ACCEPTED",
+  "ARRIVED",
+  "IN_PROGRESS",
+  "DONE",
+  "CANCELLED",
+  "MISSED",
+];
+
+const CLEANING_REQUEST_SOURCES = [
+  "USER_REQUEST",
+  "AUTO_AFTER_CHECKOUT",
+  "SYSTEM_RETRY",
+];
+
 const cleaningTaskSchema = new mongoose.Schema(
   {
     id: {
@@ -33,6 +50,32 @@ const cleaningTaskSchema = new mongoose.Schema(
       ref: "StaffShiftAssignment",
       index: true,
     },
+    request_source: {
+      type: String,
+      default: "USER_REQUEST",
+      enum: {
+        values: CLEANING_REQUEST_SOURCES,
+        message: "{VALUE} is not a valid request_source",
+      },
+      index: true,
+    },
+    due_at: {
+      type: Date,
+      default: null,
+      index: true,
+    },
+    assigned_at: {
+      type: Date,
+      default: null,
+    },
+    notified_at: {
+      type: Date,
+      default: null,
+    },
+    accepted_at: {
+      type: Date,
+      default: null,
+    },
     start_time: {
       type: Date,
       default: null,
@@ -46,18 +89,44 @@ const cleaningTaskSchema = new mongoose.Schema(
       required: true,
       default: "ASSIGNED",
       enum: {
-        values: ["ASSIGNED", "IN_PROGRESS", "DONE"],
+        values: CLEANING_TASK_STATUSES,
         message: "{VALUE} is not a valid status",
       },
       index: true,
     },
+    note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    rejection_reason: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    reassigned_from_cleaner_id: {
+      type: String,
+      default: null,
+      ref: "User",
+      index: true,
+    },
   },
   {
-    timestamps: { createdAt: "created_at", updatedAt: false },
+    timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
   }
 );
 
 cleaningTaskSchema.index({ cleaner_id: 1, created_at: -1 });
 cleaningTaskSchema.index({ shift_assignment_id: 1, created_at: -1 });
+cleaningTaskSchema.index({ cleaner_id: 1, status: 1, due_at: 1 });
+cleaningTaskSchema.index({ shift_assignment_id: 1, status: 1 });
+cleaningTaskSchema.index({ pod_id: 1, created_at: -1 });
+cleaningTaskSchema.index(
+  { booking_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { booking_id: { $type: "string" } },
+  }
+);
 
 module.exports = mongoose.model("CleaningTask", cleaningTaskSchema);
