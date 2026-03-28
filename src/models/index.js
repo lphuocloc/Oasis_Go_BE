@@ -10,6 +10,7 @@ module.exports = {
   Booking: require("./Bookings"),
   BookingOrder: require("./BookingOrder"),
   BookingSlot: require("./BookingSlot"),
+  SupportRequest: require("./SupportRequest"),
   BookingAccessSession: require("./BookingAccessSession"),
   OnlineKey: require("./OnlineKey"),
   Incident: require("./Incidents"),

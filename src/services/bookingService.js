@@ -1,6 +1,7 @@
 const Booking = require("../models/Bookings");
 const BookingOrder = require("../models/BookingOrder");
 const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
@@ -729,6 +730,153 @@ class BookingService {
     if (allowed) {
       await this._tryAutoAssignCleaningTask(booking, "SET_CLEANER_ACCESS_TRUE");
     }
+
+    return booking;
+  }
+
+  /**
+   * Manager change pod for booking
+   * @param {String} bookingId - Booking ID
+   * @param {String} newPodId - New Pod ID
+   * @param {Object} actor - Authenticated actor
+   * @returns {Promise<Object>} Updated booking
+   */
+  async managerChangePod(bookingId, newPodId, actor, managerScope = null) {
+    if (!newPodId) {
+      const error = new Error("pod_id is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (String(actor?.role || "") !== "manager") {
+      const error = new Error("Only manager with accessibility can change booking pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: bookingId });
+    if (!booking) {
+      const error = new Error("Booking not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const scopedPodIds = new Set((managerScope?.podIds || []).map((podId) => String(podId)));
+    if (scopedPodIds.size === 0) {
+      const error = new Error("Manager has no assigned pod scope");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(booking.pod_id))) {
+      const error = new Error("You are not allowed to manage this booking pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(newPodId))) {
+      const error = new Error("You are not allowed to move booking to this pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!["BOOKED", "IN_USE"].includes(booking.status)) {
+      const error = new Error(
+        `Cannot change pod for booking with status ${booking.status}`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (String(booking.pod_id) === String(newPodId)) {
+      const error = new Error("New pod must be different from current pod");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [currentPod, nextPod] = await Promise.all([
+      Pod.findOne({ id: booking.pod_id }).select("id cluster_id status"),
+      Pod.findOne({ id: newPodId }).select("id cluster_id status"),
+    ]);
+
+    if (!currentPod) {
+      const error = new Error("Current booking pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!nextPod) {
+      const error = new Error("Target pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (nextPod.status === "MAINTENANCE") {
+      const error = new Error("Cannot move booking to a pod under maintenance");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [currentCluster, nextCluster] = await Promise.all([
+      PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id"),
+      PodCluster.findOne({ id: nextPod.cluster_id }).select("id location_id"),
+    ]);
+
+    if (!currentCluster || !nextCluster) {
+      const error = new Error("Pod cluster not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(currentCluster.location_id) !== String(nextCluster.location_id)) {
+      const error = new Error("Target pod must be in the same location as current booking pod");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const isAvailable = await Booking.isPodAvailable(
+      nextPod.id,
+      booking.start_time,
+      booking.end_time,
+      booking.id
+    );
+
+    if (!isAvailable) {
+      const error = new Error("Target pod is not available in booking time range");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const conflictingTimeSlot = await TimeSlot.findOne({
+      pod_id: nextPod.id,
+      status: "RESERVED",
+      start_time: { $lt: booking.end_time },
+      end_time: { $gt: booking.start_time },
+    }).select("id");
+
+    if (conflictingTimeSlot) {
+      const error = new Error("Target pod has conflicting reserved slots in booking time range");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    booking.pod_id = nextPod.id;
+    await booking.save();
+
+    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).select("time_slot_id");
+    const timeSlotIds = bookingSlots.map((slot) => slot.time_slot_id);
+
+    if (timeSlotIds.length > 0) {
+      await TimeSlot.updateMany(
+        { id: { $in: timeSlotIds } },
+        { $set: { pod_id: nextPod.id } }
+      );
+    }
+
+    await OnlineKey.updateMany(
+      { booking_id: booking.id, is_revoked: false },
+      { $set: { pod_id: nextPod.id } }
+    );
 
     return booking;
   }

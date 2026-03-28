@@ -68,7 +68,10 @@ class BookingOrderController {
         try {
             const { id } = req.params;
 
-            const result = await bookingOrderService.getBookingOrderById(id);
+            const result = await bookingOrderService.getBookingOrderById(id, {
+                actor: req.user,
+                managerScope: req.managerScope,
+            });
 
             return res.status(200).json({
                 success: true,
@@ -94,11 +97,15 @@ class BookingOrderController {
                 status: req.query.status,
                 start_date: req.query.start_date,
                 end_date: req.query.end_date,
+                pod_ids: req.query.pod_ids,
                 page: parseInt(req.query.page) || 1,
                 limit: parseInt(req.query.limit) || 20
             };
 
-            const result = await bookingOrderService.getAllBookingOrders(filters);
+            const result = await bookingOrderService.getAllBookingOrders(filters, {
+                actor: req.user,
+                managerScope: req.managerScope,
+            });
 
             return res.status(200).json({
                 success: true,
@@ -194,6 +201,66 @@ class BookingOrderController {
             return res.status(error.statusCode || 500).json({
                 success: false,
                 message: error.message || "Failed to initiate repayment"
+            });
+        }
+    }
+
+    /**
+     * Get pending refund requests that manager can process
+     * @route GET /api/booking-orders/refunds/pending
+     */
+    async getPendingRefundRequests(req, res) {
+        try {
+            const filters = {
+                pod_ids: req.query.pod_ids,
+                order_id: req.query.order_id,
+                page: parseInt(req.query.page) || 1,
+                limit: parseInt(req.query.limit) || 20,
+            };
+
+            const result = await bookingOrderService.getPendingRefundRequests(filters, {
+                actor: req.user,
+                managerScope: req.managerScope,
+            });
+
+            return res.status(200).json({
+                success: true,
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error getting pending refund requests:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to get pending refund requests",
+            });
+        }
+    }
+
+    /**
+     * Process a pending refund request (approve/reject)
+     * @route POST /api/booking-orders/refunds/:refundId/process
+     */
+    async processRefundRequest(req, res) {
+        try {
+            const { refundId } = req.params;
+            const { action, note } = req.body || {};
+
+            const result = await bookingOrderService.processRefundRequest(refundId, req.user, {
+                action,
+                note,
+                managerScope: req.managerScope,
+            });
+
+            return res.status(200).json({
+                success: true,
+                message: "Refund request processed successfully",
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error processing refund request:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to process refund request",
             });
         }
     }
