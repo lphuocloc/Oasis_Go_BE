@@ -1,5 +1,6 @@
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
+const BookingAccessSession = require("../models/BookingAccessSession");
 const PodCluster = require("../models/PodCluster");
 const Pod = require("../models/Pod");
 const User = require("../models/User");
@@ -977,6 +978,24 @@ class BookingOrderService {
             booking.cleaner_access_allowed = true;
             booking.cleaner_access_updated_at = new Date();
             await booking.save();
+
+            // Determine checkout type
+            const checkoutType = requestedAt < booking.end_time ? "EARLY" : "NORMAL";
+
+            // Create booking access session for checkout
+            await BookingAccessSession.updateOne(
+                {
+                    booking_id: booking.id,
+                    checkin_at: { $ne: null },
+                    checkout_at: null, // Only update if not already checked out
+                },
+                {
+                    $set: {
+                        checkout_at: requestedAt,
+                        checkout_type: checkoutType,
+                    },
+                }
+            );
 
             checked_out.push({
                 id: booking.id,

@@ -41,9 +41,38 @@ const bookingAccessSessionSchema = new mongoose.Schema(
             default: null,
             trim: true,
         },
+        checkin_source: {
+            type: String,
+            enum: {
+                values: ["MANUAL", "AUTO"],
+                message: "{VALUE} is not a valid checkin_source",
+            },
+            default: "MANUAL",
+            trim: true,
+        },
+        access_reason: {
+            type: String,
+            enum: {
+                values: ["BOOKING", "CLEANER_ACCESS", "MANAGER_OVERRIDE"],
+                message: "{VALUE} is not a valid access_reason",
+            },
+            default: "BOOKING",
+            trim: true,
+        },
+        key_type: {
+            type: String,
+            enum: {
+                values: ["CUSTOMER", "CLEANER", "SYSTEM"],
+                message: "{VALUE} is not a valid key_type",
+            },
+            default: "CUSTOMER",
+            trim: true,
+        },
     },
     {
         timestamps: true,
+        toJSON: { virtuals: true },
+        toObject: { virtuals: true },
     }
 );
 
@@ -53,6 +82,17 @@ bookingAccessSessionSchema.index({ pod_id: 1 });
 bookingAccessSessionSchema.index({ user_id: 1 });
 bookingAccessSessionSchema.index({ checkin_at: 1 });
 bookingAccessSessionSchema.index({ checkout_at: 1 });
+bookingAccessSessionSchema.index({ access_reason: 1 });
+bookingAccessSessionSchema.index({ checkin_source: 1 });
+
+// Virtual field to calculate access duration in minutes
+bookingAccessSessionSchema.virtual("access_duration_minutes").get(function () {
+    if (!this.checkin_at || !this.checkout_at) {
+        return null;
+    }
+    const durationMs = this.checkout_at.getTime() - this.checkin_at.getTime();
+    return Math.floor(durationMs / 60000); // Convert ms to minutes
+});
 
 const BookingAccessSession = mongoose.model("BookingAccessSession", bookingAccessSessionSchema);
 
