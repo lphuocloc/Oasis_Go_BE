@@ -29,8 +29,8 @@ router.get("/stats", protect, authorize("admin"), dashboardController.getAdminSt
  * @swagger
  * /api/admin/users:
  *   get:
- *     summary: Get list of all active users (cleaners by default)
- *     description: Returns list of active users. Filters by role if provided, otherwise returns cleaners.
+ *     summary: Get list of all active users (users by default)
+ *     description: Returns list of active users. Filters by role if provided, otherwise returns users.
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -40,8 +40,8 @@ router.get("/stats", protect, authorize("admin"), dashboardController.getAdminSt
  *         schema:
  *           type: string
  *           enum: [user, admin, manager, cleaner]
- *         description: Filter users by role (default returns cleaners)
- *         example: cleaner
+ *         description: Filter users by role (default returns users)
+ *         example: user
  *     responses:
  *       200:
  *         description: List of users retrieved successfully
@@ -52,11 +52,11 @@ router.get("/users", protect, authorize("admin", "manager"), async (req, res) =>
 
     let query = { isActive: true };
     
-    // Filter by role if provided, otherwise return cleaners by default
+    // Filter by role if provided, otherwise return users by default
     if (role) {
       query.role = role;
     } else {
-      query.role = "cleaner";
+      query.role = "user";
     }
 
     const users = await User.find(query, {

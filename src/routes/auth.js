@@ -745,8 +745,8 @@ router.post("/test-push", protect, async (req, res) => {
  * @swagger
  * /api/auth/users:
  *   get:
- *     summary: Get list of all active users (cleaners by default)
- *     description: Returns list of active users. Filters by role if provided, otherwise returns cleaners.
+ *     summary: Get list of all active users (users by default)
+ *     description: Returns list of active users. Filters by role if provided, otherwise returns users.
  *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
@@ -756,8 +756,8 @@ router.post("/test-push", protect, async (req, res) => {
  *         schema:
  *           type: string
  *           enum: [user, admin, manager, cleaner]
- *         description: Filter users by role (default returns cleaners)
- *         example: cleaner
+ *         description: Filter users by role (default returns users)
+ *         example: user
  *     responses:
  *       200:
  *         description: List of users retrieved successfully

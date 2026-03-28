@@ -14,6 +14,8 @@ module.exports = {
   BookingAccessSession: require("./BookingAccessSession"),
   OnlineKey: require("./OnlineKey"),
   Incident: require("./Incidents"),
+  IncidentPhoto: require("./IncidentPhoto"),
+  LostFoundItem: require("./LostFoundItem"),
   Transaction: require("./Transaction"),
   TimeSlot: require("./TimeSlot"),
   Item: require("./Item"),
