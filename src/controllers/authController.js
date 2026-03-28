@@ -1,4 +1,5 @@
 const authService = require("../services/authService");
+const userService = require("../services/userService");
 
 // @desc    Đăng ký bằng email/password với OTP
 // @route   POST /api/auth/register
@@ -288,29 +289,7 @@ exports.handleLogout = async (req, res) => {
 // @access  Private
 exports.getAllUsers = async (req, res) => {
   try {
-    const User = require("../models/User");
-    const { role } = req.query;
-
-    let query = { isActive: true };
-    
-    // Filter by role if provided, otherwise return users by default
-    if (role) {
-      query.role = role;
-    } else {
-      query.role = "user";
-    }
-
-    const users = await User.find(query, {
-      _id: 1,
-      id: 1,
-      name: 1,
-      email: 1,
-      phone: 1,
-      avatar: 1,
-      role: 1,
-      isActive: 1,
-      createdAt: 1,
-    }).lean();
+    const users = await userService.getActiveUsers(req.query.role);
 
     res.status(200).json({
       success: true,
