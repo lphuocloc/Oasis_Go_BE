@@ -92,6 +92,9 @@ class StaffWorkRosterService {
     if (filters.location_shift_id) {
       query.location_shift_id = filters.location_shift_id;
     }
+    if (filters.location_shift_ids) {
+      query.location_shift_id = { $in: filters.location_shift_ids.split(",") };
+    }
 
     if (filters.day_of_week !== undefined) {
       query.day_of_week = this.normalizeDayOfWeek(filters.day_of_week);

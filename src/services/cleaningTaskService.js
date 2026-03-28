@@ -447,7 +447,11 @@ exports.createCleaningTask = async (data) => {
 exports.getAllCleaningTasks = async (query = {}) => {
   const filter = {};
 
-  if (query.pod_id) filter.pod_id = query.pod_id;
+  if (query.pod_ids) {
+    filter.pod_id = { $in: query.pod_ids.split(",") };
+  } else if (query.pod_id) {
+    filter.pod_id = query.pod_id;
+  }
   if (query.booking_id) filter.booking_id = query.booking_id;
   if (query.cleaner_id) filter.cleaner_id = query.cleaner_id;
   if (query.shift_assignment_id) filter.shift_assignment_id = query.shift_assignment_id;
@@ -485,7 +489,11 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
     cleaner_id: { $in: [...new Set(cleanerIds)] },
   };
 
-  if (query.pod_id) filter.pod_id = query.pod_id;
+  if (query.pod_ids) {
+    filter.pod_id = { $in: query.pod_ids.split(",") };
+  } else if (query.pod_id) {
+    filter.pod_id = query.pod_id;
+  }
   if (query.booking_id) filter.booking_id = query.booking_id;
   if (query.shift_assignment_id) filter.shift_assignment_id = query.shift_assignment_id;
   if (query.status) {

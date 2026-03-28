@@ -65,7 +65,11 @@ const toIncidentView = (incidentDoc, photoUrls = []) => {
 exports.getIncidents = async (filters = {}) => {
   const query = {};
 
-  if (filters.pod_id) query.pod_id = filters.pod_id;
+  if (filters.pod_ids) {
+    query.pod_id = { $in: filters.pod_ids.split(",") };
+  } else if (filters.pod_id) {
+    query.pod_id = filters.pod_id;
+  }
   if (filters.cleaning_task_id) query.cleaning_task_id = filters.cleaning_task_id;
   if (filters.booking_id) query.booking_id = filters.booking_id;
   if (filters.reported_by) query.reported_by = filters.reported_by;
@@ -215,6 +219,12 @@ exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
 
   if (actorRole === "cleaner" && !isOwner) {
     throw createError("You are not allowed to update this incident", 403);
+  }
+
+  if (actorRole === "manager" && actor.managerScope) {
+    if (!actor.managerScope.podIds.includes(String(incident.pod_id))) {
+      throw createError("You are not allowed to update an incident out of your management scope", 403);
+    }
   }
 
   incident.status = normalizedStatus;

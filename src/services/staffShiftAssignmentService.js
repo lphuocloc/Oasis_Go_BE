@@ -259,6 +259,10 @@ class StaffShiftAssignmentService {
       query.location_shift_id = filters.location_shift_id;
     }
 
+    if (filters.location_shift_ids) {
+      query.location_shift_id = { $in: filters.location_shift_ids.split(",") };
+    }
+
     if (filters.status) {
       query.status = filters.status;
     }

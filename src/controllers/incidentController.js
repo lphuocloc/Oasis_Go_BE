@@ -88,6 +88,16 @@ exports.getIncidents = async (req, res) => {
 exports.getIncidentById = async (req, res) => {
   try {
     const incident = await incidentService.getIncidentById(req.params.id);
+
+    if (req.user && req.user.role === "manager" && req.managerScope) {
+      if (!req.managerScope.podIds.includes(String(incident.pod_id))) {
+        return res.status(403).json({
+          success: false,
+          message: "You are not allowed to access an incident out of your management scope",
+        });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: incident,
@@ -103,7 +113,8 @@ exports.getIncidentById = async (req, res) => {
 
 exports.updateIncidentStatus = async (req, res) => {
   try {
-    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body.status, req.user);
+    const actor = req.user ? { ...req.user, managerScope: req.managerScope } : null;
+    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body.status, actor);
     res.status(200).json({
       success: true,
       message: "Incident status updated successfully",

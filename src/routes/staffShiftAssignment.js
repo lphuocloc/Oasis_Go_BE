@@ -1,6 +1,7 @@
 const express = require("express");
 const staffShiftAssignmentController = require("../controllers/staffShiftAssignmentController");
 const authMiddleware = require("../middlewares/authMiddleware");
+const { loadManagerScope } = require("../middlewares/managerScopeMiddleware");
 
 const router = express.Router();
 
@@ -103,7 +104,8 @@ router.get(
 router.post(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.createAssignment
 );
 
@@ -212,7 +214,8 @@ router.post(
 router.get(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.getAssignments
 );
 
@@ -239,7 +242,8 @@ router.get(
 router.get(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.getAssignmentById
 );
 
@@ -284,7 +288,8 @@ router.get(
 router.put(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.updateAssignment
 );
 
@@ -309,7 +314,8 @@ router.put(
 router.delete(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.deleteAssignment
 );
 

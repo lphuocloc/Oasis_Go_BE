@@ -1,4 +1,6 @@
 const staffShiftAssignmentService = require("../services/staffShiftAssignmentService");
+const User = require("../models/User");
+const LocationShift = require("../models/LocationShift");
 
 const getMyAssignments = async (req, res) => {
   try {
@@ -27,6 +29,18 @@ const getMyAssignments = async (req, res) => {
 
 const createAssignment = async (req, res) => {
   try {
+    if (req.user && req.user.role === "manager") {
+      const staff = await User.findOne({ $or: [{ id: req.body.staff_id }, { _id: req.body.staff_id }] }).select("role").lean();
+      if (!staff || staff.role !== "cleaner") {
+        return res.status(403).json({ success: false, message: "Managers can only assign to cleaners" });
+      }
+
+      const locShift = await LocationShift.findOne({ id: req.body.location_shift_id }).select("location_id").lean();
+      if (!locShift || !req.managerScope.locationIds.includes(String(locShift.location_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope for this location shift" });
+      }
+    }
+
     const assignment = await staffShiftAssignmentService.createAssignment(req.body);
     res.status(201).json({
       success: true,
@@ -43,7 +57,23 @@ const createAssignment = async (req, res) => {
 
 const getAssignments = async (req, res) => {
   try {
-    const assignments = await staffShiftAssignmentService.getAssignments(req.query);
+    let query = { ...req.query };
+
+    // Auto-filter by manager scope if requested by manager, to prevent viewing other locations' assignments
+    if (req.user && req.user.role === "manager") {
+      const allowedLocShifts = await LocationShift.find({ location_id: { $in: req.managerScope.locationIds } }).select("id").lean();
+      const allowedLocShiftIds = allowedLocShifts.map(ls => ls.id);
+      
+      if (query.location_shift_id) {
+         if (!allowedLocShiftIds.includes(query.location_shift_id)) {
+             return res.status(403).json({ success: false, message: "Out of management scope" });
+         }
+      } else {
+         query.location_shift_ids = allowedLocShiftIds.join(',');
+      }
+    }
+
+    const assignments = await staffShiftAssignmentService.getAssignments(query);
     res.status(200).json({
       success: true,
       count: assignments.length,
@@ -60,6 +90,14 @@ const getAssignments = async (req, res) => {
 const getAssignmentById = async (req, res) => {
   try {
     const assignment = await staffShiftAssignmentService.getAssignmentById(req.params.id);
+
+    if (req.user && req.user.role === "manager") {
+      const locShift = await LocationShift.findOne({ id: assignment.location_shift_id }).select("location_id").lean();
+      if (!locShift || !req.managerScope.locationIds.includes(String(locShift.location_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+    }
+
     res.status(200).json({
       success: true,
       data: assignment,
@@ -74,6 +112,24 @@ const getAssignmentById = async (req, res) => {
 
 const updateAssignment = async (req, res) => {
   try {
+    if (req.user && req.user.role === "manager") {
+      const existingAssignment = await staffShiftAssignmentService.getAssignmentById(req.params.id);
+      
+      const checkLocShiftId = req.body.location_shift_id || existingAssignment.location_shift_id;
+      const locShift = await LocationShift.findOne({ id: checkLocShiftId }).select("location_id").lean();
+      if (!locShift || !req.managerScope.locationIds.includes(String(locShift.location_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope for this location shift" });
+      }
+
+      const checkStaffId = req.body.staff_id || existingAssignment.staff_id;
+      if (checkStaffId) {
+        const staff = await User.findOne({ $or: [{ id: checkStaffId }, { _id: checkStaffId }] }).select("role").lean();
+        if (!staff || staff.role !== "cleaner") {
+          return res.status(403).json({ success: false, message: "Managers can only assign to cleaners" });
+        }
+      }
+    }
+
     const assignment = await staffShiftAssignmentService.updateAssignment(
       req.params.id,
       req.body
@@ -93,6 +149,14 @@ const updateAssignment = async (req, res) => {
 
 const deleteAssignment = async (req, res) => {
   try {
+    if (req.user && req.user.role === "manager") {
+      const existingAssignment = await staffShiftAssignmentService.getAssignmentById(req.params.id);
+      const locShift = await LocationShift.findOne({ id: existingAssignment.location_shift_id }).select("location_id").lean();
+      if (!locShift || !req.managerScope.locationIds.includes(String(locShift.location_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+    }
+
     await staffShiftAssignmentService.deleteAssignment(req.params.id);
     res.status(200).json({
       success: true,
