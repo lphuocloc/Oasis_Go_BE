@@ -54,7 +54,9 @@ const locationShiftController = require("../controllers/locationShiftController"
 router.post(
 	"/create",
 	protect,
-	authorize("admin"),
+	authorize("admin", "manager"),
+	loadManagerScope,
+	requireManagerLocationAccess({ source: "body", key: "location_id" }),
 	locationShiftController.createLocationShift
 );
 

@@ -33,6 +33,13 @@ exports.getMyCleaningTasks = async (req, res) => {
 exports.getCleaningTaskById = async (req, res) => {
   try {
     const task = await cleaningTaskService.getCleaningTaskById(req.params.id);
+
+    if (req.user && req.user.role === "manager" && req.managerScope) {
+      if (!req.managerScope.podIds.includes(String(task.pod_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+    }
+
     res.status(200).json({ success: true, data: task });
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -42,7 +49,17 @@ exports.getCleaningTaskById = async (req, res) => {
 
 exports.updateCleaningTask = async (req, res) => {
   try {
-    const task = await cleaningTaskService.updateCleaningTask(req.params.id, req.body);
+    if (req.user && req.user.role === "manager" && req.managerScope) {
+      const oldTask = await cleaningTaskService.getCleaningTaskById(req.params.id);
+      if (!req.managerScope.podIds.includes(String(oldTask.pod_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+      if (req.body.pod_id && !req.managerScope.podIds.includes(String(req.body.pod_id))) {
+        return res.status(403).json({ success: false, message: "New pod is out of management scope" });
+      }
+    }
+
+    const task = await cleaningTaskService.updateCleaningTask(req.params.id, req.body, req.user);
     res.status(200).json({ success: true, message: "Cleaning task updated successfully", data: task });
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -57,5 +74,22 @@ exports.deleteCleaningTask = async (req, res) => {
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ success: false, message: error.message || "Error deleting cleaning task" });
+  }
+};
+
+exports.backfillCleaningTasks = async (req, res) => {
+  try {
+    const result = await cleaningTaskService.backfillMissingCleaningTasks(req.body || {});
+    res.status(200).json({
+      success: true,
+      message: "Cleaning task backfill completed",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error running cleaning task backfill",
+    });
   }
 };

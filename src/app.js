@@ -20,6 +20,19 @@ bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 const bookingService = require("./services/bookingService");
 bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
 
+const cleaningTaskService = require("./services/cleaningTaskService");
+if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
+  cleaningTaskService.startBackfillJob(
+    Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
+    {
+      cleaner_access_only:
+        String(process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true").toLowerCase() === "true",
+      limit: Number(process.env.CLEANING_TASK_BACKFILL_LIMIT || 200),
+      dry_run: String(process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false").toLowerCase() === "true",
+    }
+  );
+}
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");
@@ -32,6 +45,7 @@ const timeSlotRouter = require("./routes/timeSlot");
 const bookingRouter = require("./routes/booking");
 const bookingSlotRouter = require("./routes/bookingSlot");
 const bookingOrderRouter = require("./routes/bookingOrder");
+const supportRequestRouter = require("./routes/supportRequest");
 const adminRouter = require("./routes/admin");
 const podAmenityRouter = require("./routes/podAmenity");
 const doorRouter = require("./routes/door");
@@ -50,6 +64,9 @@ const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
 const staffWorkRosterRouter = require("./routes/staffWorkRoster");
 const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
+const usersRouter = require("./routes/users");
+const incidentRouter = require("./routes/incident");
+const lostFoundRouter = require("./routes/lostFound");
 const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
 const app = express();
@@ -72,6 +89,7 @@ app.use("/api/timeslots", timeSlotRouter);
 app.use("/api/bookings", bookingRouter);
 app.use("/api/booking-slots", bookingSlotRouter);
 app.use("/api/booking-orders", bookingOrderRouter);
+app.use("/api/support-requests", supportRequestRouter);
 app.use("/api/admin", adminRouter);
 app.use("/api/pod-amenities", podAmenityRouter);
 app.use("/api/doors", doorRouter);
@@ -90,6 +108,9 @@ app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
 app.use("/api/staff-work-rosters", staffWorkRosterRouter);
 app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
+app.use("/api/users", usersRouter);
+app.use("/api/incidents", incidentRouter);
+app.use("/api/lost-found-items", lostFoundRouter);
 app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/", indexRouter);

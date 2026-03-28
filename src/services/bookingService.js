@@ -2,11 +2,13 @@ const Booking = require("../models/Bookings");
 const BookingOrder = require("../models/BookingOrder");
 const BookingAccessSession = require("../models/BookingAccessSession");
 const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
+const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
@@ -16,6 +18,19 @@ const POD_DETAILS_SELECT =
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  async _tryAutoAssignCleaningTask(booking, trigger = "UNKNOWN") {
+    if (!booking) return;
+
+    try {
+      await autoAssignTaskForBooking(booking, { trigger });
+    } catch (error) {
+      console.error(
+        `Auto assign cleaning task failed (trigger=${trigger}, booking_id=${booking.id || "unknown"}):`,
+        error.message || error
+      );
+    }
+  }
+
   async autoActivateOverdueCheckins(graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const graceMs = Math.max(1, Number(graceMinutes) || AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) * 60 * 1000;
     const now = Date.now();
@@ -408,6 +423,7 @@ class BookingService {
     });
 
     await booking.save();
+    await this._tryAutoAssignCleaningTask(booking, "BOOKING_CREATED");
     return booking;
   }
 
@@ -555,6 +571,41 @@ class BookingService {
       throw new Error("Booking not found");
     }
 
+    if (
+      updateData.cleaner_access_allowed !== undefined &&
+      typeof updateData.cleaner_access_allowed !== "boolean"
+    ) {
+      const error = new Error("cleaner_access_allowed must be boolean");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const nextCheckinStateRaw =
+      updateData.checkin_state !== undefined ? updateData.checkin_state : booking.checkin_state;
+    const nextCheckinState = String(nextCheckinStateRaw || "").toUpperCase();
+    const nextCleanerAccessAllowed =
+      updateData.cleaner_access_allowed !== undefined
+        ? updateData.cleaner_access_allowed
+        : booking.cleaner_access_allowed;
+
+    if (nextCheckinState === "NO_SHOW" && nextCleanerAccessAllowed === true) {
+      const error = new Error("Cannot enable cleaner access for NO_SHOW booking");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (nextCheckinState === "NO_SHOW") {
+      updateData.cleaner_access_allowed = false;
+      if (updateData.cleaner_access_updated_at === undefined) {
+        updateData.cleaner_access_updated_at = new Date();
+      }
+      if (updateData.no_show_marked_at === undefined) {
+        updateData.no_show_marked_at = new Date();
+      }
+    }
+
+    const previousCleanerAccessAllowed = booking.cleaner_access_allowed;
+
     // Don't allow updating certain fields if booking is completed or cancelled
     if (["COMPLETED", "CANCELLED"].includes(booking.status)) {
       throw new Error(
@@ -587,6 +638,11 @@ class BookingService {
     });
 
     await booking.save();
+
+    if (!previousCleanerAccessAllowed && booking.cleaner_access_allowed === true) {
+      await this._tryAutoAssignCleaningTask(booking, "BOOKING_UPDATED_CLEANER_ACCESS_TRUE");
+    }
+
     return booking;
   }
 
@@ -890,9 +946,166 @@ class BookingService {
       throw error;
     }
 
+    if (allowed === true && booking.checkin_state === "NO_SHOW") {
+      const error = new Error("Cannot enable cleaner access for NO_SHOW booking");
+      error.statusCode = 400;
+      throw error;
+    }
+
     booking.cleaner_access_allowed = allowed;
     booking.cleaner_access_updated_at = new Date();
     await booking.save();
+
+    if (allowed) {
+      await this._tryAutoAssignCleaningTask(booking, "SET_CLEANER_ACCESS_TRUE");
+    }
+
+    return booking;
+  }
+
+  /**
+   * Manager change pod for booking
+   * @param {String} bookingId - Booking ID
+   * @param {String} newPodId - New Pod ID
+   * @param {Object} actor - Authenticated actor
+   * @returns {Promise<Object>} Updated booking
+   */
+  async managerChangePod(bookingId, newPodId, actor, managerScope = null) {
+    if (!newPodId) {
+      const error = new Error("pod_id is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (String(actor?.role || "") !== "manager") {
+      const error = new Error("Only manager with accessibility can change booking pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: bookingId });
+    if (!booking) {
+      const error = new Error("Booking not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const scopedPodIds = new Set((managerScope?.podIds || []).map((podId) => String(podId)));
+    if (scopedPodIds.size === 0) {
+      const error = new Error("Manager has no assigned pod scope");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(booking.pod_id))) {
+      const error = new Error("You are not allowed to manage this booking pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!scopedPodIds.has(String(newPodId))) {
+      const error = new Error("You are not allowed to move booking to this pod");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!["BOOKED", "IN_USE"].includes(booking.status)) {
+      const error = new Error(
+        `Cannot change pod for booking with status ${booking.status}`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    if (String(booking.pod_id) === String(newPodId)) {
+      const error = new Error("New pod must be different from current pod");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [currentPod, nextPod] = await Promise.all([
+      Pod.findOne({ id: booking.pod_id }).select("id cluster_id status"),
+      Pod.findOne({ id: newPodId }).select("id cluster_id status"),
+    ]);
+
+    if (!currentPod) {
+      const error = new Error("Current booking pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!nextPod) {
+      const error = new Error("Target pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (nextPod.status === "MAINTENANCE") {
+      const error = new Error("Cannot move booking to a pod under maintenance");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const [currentCluster, nextCluster] = await Promise.all([
+      PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id"),
+      PodCluster.findOne({ id: nextPod.cluster_id }).select("id location_id"),
+    ]);
+
+    if (!currentCluster || !nextCluster) {
+      const error = new Error("Pod cluster not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(currentCluster.location_id) !== String(nextCluster.location_id)) {
+      const error = new Error("Target pod must be in the same location as current booking pod");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const isAvailable = await Booking.isPodAvailable(
+      nextPod.id,
+      booking.start_time,
+      booking.end_time,
+      booking.id
+    );
+
+    if (!isAvailable) {
+      const error = new Error("Target pod is not available in booking time range");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const conflictingTimeSlot = await TimeSlot.findOne({
+      pod_id: nextPod.id,
+      status: "RESERVED",
+      start_time: { $lt: booking.end_time },
+      end_time: { $gt: booking.start_time },
+    }).select("id");
+
+    if (conflictingTimeSlot) {
+      const error = new Error("Target pod has conflicting reserved slots in booking time range");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    booking.pod_id = nextPod.id;
+    await booking.save();
+
+    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).select("time_slot_id");
+    const timeSlotIds = bookingSlots.map((slot) => slot.time_slot_id);
+
+    if (timeSlotIds.length > 0) {
+      await TimeSlot.updateMany(
+        { id: { $in: timeSlotIds } },
+        { $set: { pod_id: nextPod.id } }
+      );
+    }
+
+    await OnlineKey.updateMany(
+      { booking_id: booking.id, is_revoked: false },
+      { $set: { pod_id: nextPod.id } }
+    );
 
     return booking;
   }

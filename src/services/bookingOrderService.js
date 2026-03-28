@@ -10,6 +10,7 @@ const Location = require("../models/Location");
 const Transaction = require("../models/Transaction");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
+const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
 
@@ -23,6 +24,43 @@ const REFUND_RATE_BEFORE_48H = 0.8;
 
 
 class BookingOrderService {
+    _normalizeIdList(input) {
+        if (!input) return [];
+
+        if (Array.isArray(input)) {
+            return [...new Set(input.map((item) => String(item).trim()).filter(Boolean))];
+        }
+
+        return [...new Set(String(input).split(",").map((item) => item.trim()).filter(Boolean))];
+    }
+
+    async _findOrderIdsByPodIds(podIds) {
+        const normalizedPodIds = this._normalizeIdList(podIds);
+        if (normalizedPodIds.length === 0) {
+            return [];
+        }
+
+        const bookings = await Booking.find({ pod_id: { $in: normalizedPodIds } })
+            .select("order_id")
+            .lean();
+
+        return [...new Set(bookings.map((booking) => String(booking.order_id)).filter(Boolean))];
+    }
+
+    async _isOrderInManagerScope(orderId, managerScope = null) {
+        const scopedPodIds = this._normalizeIdList(managerScope?.podIds);
+        if (scopedPodIds.length === 0) return false;
+
+        const scopedBooking = await Booking.findOne({
+            order_id: orderId,
+            pod_id: { $in: scopedPodIds },
+        })
+            .select("id")
+            .lean();
+
+        return !!scopedBooking;
+    }
+
     async _releaseBookingResources(bookingIds, session = null) {
         if (!Array.isArray(bookingIds) || bookingIds.length === 0) {
             return;
@@ -87,7 +125,7 @@ class BookingOrderService {
 
         try {
             // Start transaction
-            return await session.withTransaction(async () => {
+            const txResult = await session.withTransaction(async () => {
                 // Validate required fields
                 if (!user_id || !cluster_id || !start_time || !end_time) {
                     const error = new Error("Missing required fields: user_id, cluster_id, start_time, end_time");
@@ -305,6 +343,21 @@ class BookingOrderService {
                     }
                 };
             }); // End of withTransaction
+
+            if (txResult && Array.isArray(txResult.bookings)) {
+                for (const booking of txResult.bookings) {
+                    try {
+                        await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CREATED" });
+                    } catch (error) {
+                        console.error(
+                            `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CREATED, booking_id=${booking.id || "unknown"}):`,
+                            error.message || error
+                        );
+                    }
+                }
+            }
+
+            return txResult;
         } catch (error) {
             throw error;
         } finally {
@@ -588,8 +641,11 @@ class BookingOrderService {
      * @param {String} orderId - Order ID
      * @returns {Promise<Object>} Order with bookings
      */
-    async getBookingOrderById(orderId) {
+    async getBookingOrderById(orderId, context = {}) {
         try {
+            const actorRole = String(context?.actor?.role || "").toLowerCase();
+            const scopedPodIds = this._normalizeIdList(context?.managerScope?.podIds);
+
             const order = await BookingOrder.findOne({ id: orderId }).lean();
 
             if (!order) {
@@ -601,8 +657,26 @@ class BookingOrderService {
             // Get all bookings for this order
             const bookings = await Booking.find({ order_id: orderId }).lean();
 
+            let visibleBookings = bookings;
+            if (actorRole === "manager") {
+                if (scopedPodIds.length === 0) {
+                    const error = new Error("Manager has no assigned pod scope");
+                    error.statusCode = 403;
+                    throw error;
+                }
+
+                const scopedPodIdSet = new Set(scopedPodIds.map((id) => String(id)));
+                visibleBookings = bookings.filter((booking) => scopedPodIdSet.has(String(booking.pod_id)));
+
+                if (visibleBookings.length === 0) {
+                    const error = new Error("You are not allowed to access this booking order");
+                    error.statusCode = 403;
+                    throw error;
+                }
+            }
+
             // Manually fetch pod details for each booking (since pod uses custom 'id' field)
-            const podIds = [...new Set(bookings.map(b => b.pod_id))];
+            const podIds = [...new Set(visibleBookings.map(b => b.pod_id))];
             const pods = await Pod.find({ id: { $in: podIds } }).lean();
             const podMap = pods.reduce((map, pod) => {
                 map[pod.id] = pod;
@@ -610,7 +684,7 @@ class BookingOrderService {
             }, {});
 
             // Attach pod details to bookings
-            const bookingsWithPods = bookings.map(booking => ({
+            const bookingsWithPods = visibleBookings.map(booking => ({
                 ...booking,
                 pod: podMap[booking.pod_id] || null
             }));
@@ -643,16 +717,42 @@ class BookingOrderService {
      * @param {Object} filters - Query filters
      * @returns {Promise<Object>} Orders with pagination
      */
-    async getAllBookingOrders(filters = {}) {
+    async getAllBookingOrders(filters = {}, context = {}) {
         try {
             const {
                 user_id,
                 status,
                 start_date,
                 end_date,
+                pod_ids,
                 page = 1,
                 limit = 20
             } = filters;
+
+            const actorRole = String(context?.actor?.role || "").toLowerCase();
+
+            let scopedOrderIds = null;
+            if (actorRole === "manager") {
+                const managerScopedPodIds = this._normalizeIdList(context?.managerScope?.podIds);
+                if (managerScopedPodIds.length === 0) {
+                    return {
+                        orders: [],
+                        pagination: {
+                            total: 0,
+                            page,
+                            limit,
+                            pages: 0,
+                        }
+                    };
+                }
+
+                scopedOrderIds = await this._findOrderIdsByPodIds(managerScopedPodIds);
+            }
+
+            const requestedPodIds = this._normalizeIdList(pod_ids);
+            const requestedOrderIds = requestedPodIds.length > 0
+                ? await this._findOrderIdsByPodIds(requestedPodIds)
+                : null;
 
             const query = {};
 
@@ -671,6 +771,53 @@ class BookingOrderService {
                 }
                 if (end_date) {
                     query.createdAt.$lte = new Date(end_date);
+                }
+            }
+
+            if (scopedOrderIds !== null) {
+                if (scopedOrderIds.length === 0) {
+                    return {
+                        orders: [],
+                        pagination: {
+                            total: 0,
+                            page,
+                            limit,
+                            pages: 0,
+                        }
+                    };
+                }
+
+                query.id = { $in: scopedOrderIds };
+            }
+
+            if (requestedOrderIds !== null) {
+                if (requestedOrderIds.length === 0) {
+                    return {
+                        orders: [],
+                        pagination: {
+                            total: 0,
+                            page,
+                            limit,
+                            pages: 0,
+                        }
+                    };
+                }
+
+                const existing = query.id && Array.isArray(query.id.$in) ? query.id.$in : null;
+                query.id = existing
+                    ? { $in: existing.filter((id) => requestedOrderIds.includes(id)) }
+                    : { $in: requestedOrderIds };
+
+                if (query.id.$in.length === 0) {
+                    return {
+                        orders: [],
+                        pagination: {
+                            total: 0,
+                            page,
+                            limit,
+                            pages: 0,
+                        }
+                    };
                 }
             }
 
@@ -866,8 +1013,8 @@ class BookingOrderService {
                         currency: "VND",
                         type: "REFUND",
                         method: "VNPAY",
-                        status: "SUCCESS",
-                        provider_reference: latestCharge?.provider_reference || null,
+                        status: "PENDING",
+                        provider_reference: latestCharge?.provider_reference || "REFUND_REQUESTED_BY_USER",
                     }], { session });
                 }
 
@@ -890,6 +1037,163 @@ class BookingOrderService {
         } finally {
             session.endSession();
         }
+    }
+
+    /**
+     * Get pending refund requests that manager can process
+     * @param {Object} filters - Query filters
+     * @param {Object} context - actor and manager scope
+     * @returns {Promise<Object>} Pending refund requests with pagination
+     */
+    async getPendingRefundRequests(filters = {}, context = {}) {
+        const actorRole = String(context?.actor?.role || "").toLowerCase();
+        if (actorRole !== "manager") {
+            const error = new Error("Only manager can view pending refund requests");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const managerScopedPodIds = this._normalizeIdList(context?.managerScope?.podIds);
+        if (managerScopedPodIds.length === 0) {
+            return {
+                refunds: [],
+                pagination: {
+                    total: 0,
+                    page: 1,
+                    limit: 20,
+                    pages: 0,
+                },
+            };
+        }
+
+        const scopedOrderIds = await this._findOrderIdsByPodIds(managerScopedPodIds);
+        if (scopedOrderIds.length === 0) {
+            return {
+                refunds: [],
+                pagination: {
+                    total: 0,
+                    page: 1,
+                    limit: 20,
+                    pages: 0,
+                },
+            };
+        }
+
+        const { order_id, page = 1, limit = 20 } = filters;
+        const currentPage = Math.max(parseInt(page, 10) || 1, 1);
+        const pageSize = Math.min(Math.max(parseInt(limit, 10) || 20, 1), 100);
+        const skip = (currentPage - 1) * pageSize;
+
+        const query = {
+            type: "REFUND",
+            status: "PENDING",
+            order_id: { $in: scopedOrderIds },
+        };
+
+        if (order_id) {
+            query.order_id = order_id;
+            if (!scopedOrderIds.includes(String(order_id))) {
+                return {
+                    refunds: [],
+                    pagination: {
+                        total: 0,
+                        page: currentPage,
+                        limit: pageSize,
+                        pages: 0,
+                    },
+                };
+            }
+        }
+
+        const [refunds, total] = await Promise.all([
+            Transaction.find(query)
+                .sort({ created_at: -1 })
+                .skip(skip)
+                .limit(pageSize)
+                .lean(),
+            Transaction.countDocuments(query),
+        ]);
+
+        const orderIds = [...new Set(refunds.map((refund) => String(refund.order_id)).filter(Boolean))];
+        const orders = orderIds.length > 0
+            ? await BookingOrder.find({ id: { $in: orderIds } })
+                .select("id user_id status final_total_price")
+                .lean()
+            : [];
+        const orderMap = orders.reduce((map, order) => {
+            map[String(order.id)] = order;
+            return map;
+        }, {});
+
+        return {
+            refunds: refunds.map((refund) => ({
+                ...refund,
+                order: orderMap[String(refund.order_id)] || null,
+            })),
+            pagination: {
+                total,
+                page: currentPage,
+                limit: pageSize,
+                pages: Math.ceil(total / pageSize),
+            },
+        };
+    }
+
+    /**
+     * Process pending refund request (approve/reject) by manager
+     * @param {String} refundId - Refund transaction ID
+     * @param {Object} actor - Authenticated manager
+     * @param {Object} options - Processing options
+     * @returns {Promise<Object>} Updated refund transaction
+     */
+    async processRefundRequest(refundId, actor, options = {}) {
+        const actorRole = String(actor?.role || "").toLowerCase();
+        if (actorRole !== "manager") {
+            const error = new Error("Only manager can process refund requests");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const action = String(options.action || "").toUpperCase();
+        if (!["APPROVE", "REJECT"].includes(action)) {
+            const error = new Error("action must be APPROVE or REJECT");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const refund = await Transaction.findOne({ id: refundId, type: "REFUND" });
+        if (!refund) {
+            const error = new Error("Refund request not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (refund.status !== "PENDING") {
+            const error = new Error(`Refund request is already processed with status ${refund.status}`);
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const canAccess = await this._isOrderInManagerScope(refund.order_id, options.managerScope);
+        if (!canAccess) {
+            const error = new Error("You are not allowed to process this refund request");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        const managerId = String(actor?._id || actor?.id || "");
+        const note = String(options.note || "").trim();
+        const decisionTag = action === "APPROVE" ? "APPROVED" : "REJECTED";
+        const noteTag = note ? `|NOTE:${note.slice(0, 120)}` : "";
+
+        refund.status = action === "APPROVE" ? "SUCCESS" : "VOIDED";
+        refund.provider_reference = `${decisionTag}_BY_MANAGER:${managerId}${noteTag}`;
+        await refund.save();
+
+        return {
+            refund,
+            decision: action,
+        };
     }
 
     /**
@@ -980,6 +1284,15 @@ class BookingOrderService {
             booking.cleaner_access_allowed = true;
             booking.cleaner_access_updated_at = new Date();
             await booking.save();
+
+            try {
+                await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CHECKOUT" });
+            } catch (error) {
+                console.error(
+                    `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CHECKOUT, booking_id=${booking.id || "unknown"}):`,
+                    error.message || error
+                );
+            }
 
             // Create review record after checkout
             await reviewService.createReviewIfNotExists(booking).catch((err) => {

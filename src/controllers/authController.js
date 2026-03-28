@@ -1,4 +1,5 @@
 const authService = require("../services/authService");
+const userService = require("../services/userService");
 
 // @desc    Đăng ký bằng email/password với OTP
 // @route   POST /api/auth/register
@@ -279,6 +280,28 @@ exports.handleLogout = async (req, res) => {
       success: false,
       message: "Lỗi hệ thống khi đăng xuất",
       error: error.message,
+    });
+  }
+};
+
+// @desc    Lấy danh sách tất cả users/cleaners
+// @route   GET /api/auth/users
+// @access  Private
+exports.getAllUsers = async (req, res) => {
+  try {
+    const users = await userService.getActiveUsers(req.query.role);
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      data: users,
+    });
+  } catch (error) {
+    console.error("Get all users error:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Server error",
     });
   }
 };

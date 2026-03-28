@@ -283,6 +283,34 @@ const setCleanerAccessFlag = async (req, res) => {
     }
 };
 
+/**
+ * Admin change pod for booking
+ * @route PATCH /api/bookings/:id/change-pod
+ * @access Private (Manager)
+ */
+const managerChangePod = async (req, res) => {
+    try {
+        const { pod_id } = req.body;
+        const booking = await bookingService.managerChangePod(
+            req.params.id,
+            pod_id,
+            req.user,
+            req.managerScope
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "Booking pod changed successfully",
+            data: booking,
+        });
+    } catch (error) {
+        res.status(error.statusCode || 400).json({
+            success: false,
+            message: error.message || "Failed to change booking pod",
+        });
+    }
+};
+
 module.exports = {
     createBooking,
     getAllBookings,
@@ -295,4 +323,5 @@ module.exports = {
     cancelBooking,
     checkAvailability,
     setCleanerAccessFlag,
+    managerChangePod,
 };
