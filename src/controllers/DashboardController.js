@@ -109,6 +109,7 @@ exports.getDashboard = async (req, res) => {
       : podsRaw;
 
     const podMongoIdSet = new Set(pods.map((pod) => String(pod._id)).filter(Boolean));
+    const podBusinessIdSet = new Set(pods.map((pod) => String(pod.id)).filter(Boolean));
 
     const rawBookings = Array.isArray(bookingsResult && bookingsResult.bookings)
       ? bookingsResult.bookings
@@ -119,8 +120,11 @@ exports.getDashboard = async (req, res) => {
 
     const incidents = isManager
       ? incidentsRaw.filter((incident) => {
-          const incidentPodId = incident.podId || (incident.pod && incident.pod._id) || null;
-          return incidentPodId ? podMongoIdSet.has(String(incidentPodId)) : false;
+          const incidentPodMongoId = incident.podId || (incident.pod && incident.pod._id) || null;
+          const incidentPodBusinessId = incident.pod_id || (incident.pod && incident.pod.id) || null;
+          if (incidentPodMongoId && podMongoIdSet.has(String(incidentPodMongoId))) return true;
+          if (incidentPodBusinessId && podBusinessIdSet.has(String(incidentPodBusinessId))) return true;
+          return false;
         })
       : incidentsRaw;
 

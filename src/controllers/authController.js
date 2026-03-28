@@ -293,11 +293,11 @@ exports.getAllUsers = async (req, res) => {
 
     let query = { isActive: true };
     
-    // Filter by role if provided, otherwise return cleaners by default
+    // Filter by role if provided, otherwise return users by default
     if (role) {
       query.role = role;
     } else {
-      query.role = "cleaner";
+      query.role = "user";
     }
 
     const users = await User.find(query, {
