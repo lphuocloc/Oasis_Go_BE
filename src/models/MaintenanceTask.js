@@ -27,6 +27,12 @@ const maintenanceTaskSchema = new mongoose.Schema(
       ref: "StaffShiftAssignment",
       index: true,
     },
+    incident_id: {
+      type: String,
+      default: null,
+      ref: "Incident",
+      index: true,
+    },
     description: {
       type: String,
       default: null,

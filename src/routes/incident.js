@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { loadManagerScope, applyManagerPodScope } = require("../middlewares/managerScopeMiddleware");
 const { uploadIncidentPhoto } = require("../config/cloudinary");
 const {
   createIncidentFromCleaningTask,
@@ -157,7 +158,7 @@ const {
  *                   items:
  *                     $ref: '#/components/schemas/Incident'
  */
-router.get("/", protect, authorize("admin", "manager", "cleaner"), getIncidents);
+router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, applyManagerPodScope, getIncidents);
 
 /**
  * @swagger
@@ -188,7 +189,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), getIncidents)
  *       404:
  *         description: Incident not found
  */
-router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getIncidentById);
+router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getIncidentById);
 
 /**
  * @swagger
@@ -257,6 +258,6 @@ router.post(
  *       404:
  *         description: Incident not found
  */
-router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), updateIncidentStatus);
+router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, updateIncidentStatus);
 
 module.exports = router;

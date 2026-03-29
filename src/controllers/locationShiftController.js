@@ -1,7 +1,15 @@
 const locationShiftService = require("../services/locationShiftService");
+const staffShiftService = require("../services/staffShiftService");
 
 const createLocationShift = async (req, res) => {
   try {
+    if (req.user && req.user.role === "manager") {
+      const shift = await staffShiftService.getStaffShiftById(req.body.shift_id);
+      if (shift && shift.role !== "CLEANER") {
+        return res.status(403).json({ success: false, message: "Managers can only assign CLEANER shifts to locations" });
+      }
+    }
+
     const locationShift = await locationShiftService.createLocationShift(req.body);
 
     res.status(201).json({

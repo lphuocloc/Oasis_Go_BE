@@ -4,6 +4,7 @@ const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
 const OnlineKey = require("../models/OnlineKey");
 const { randomInt } = require("crypto");
+const notificationService = require("./notificationService");
 
 class PaymentService {
   async _generateOnlineKeyToken() {
@@ -284,6 +285,25 @@ class PaymentService {
       );
 
       await this._ensureOnlineKeysForOrder(orderId);
+
+      const paidOrder = await BookingOrder.findOne({ id: originalOrderId }).select("id user_id final_total_price");
+      if (paidOrder?.user_id) {
+        await notificationService.sendToUser(paidOrder.user_id, {
+          title: "Thanh toán thành công",
+          message: `Đơn ${paidOrder.id} đã thanh toán thành công.`,
+          type: "PAYMENT",
+          event_code: "PAYMENT_SUCCESS",
+          dedupe_key: `PAYMENT_SUCCESS:${transaction.id}`,
+          data: {
+            type: "PAYMENT_SUCCESS",
+            order_id: paidOrder.id,
+            transaction_id: transaction.id,
+            transaction_no: transactionNo || "",
+            amount: String(paidOrder.final_total_price || amount || 0),
+            payment_method: "VNPAY",
+          },
+        });
+      }
     }
 
     console.log(`Transaction ${orderId} updated to ${newStatus}:`, {

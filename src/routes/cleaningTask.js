@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { loadManagerScope, applyManagerPodScope, requireManagerPodAccess } = require("../middlewares/managerScopeMiddleware");
 const {
   createCleaningTask,
   getAllCleaningTasks,
@@ -66,7 +67,7 @@ const {
  *       200:
  *         description: Cleaning tasks retrieved successfully
  */
-router.get("/", protect, authorize("admin", "manager", "cleaner"), getAllCleaningTasks);
+router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, applyManagerPodScope, getAllCleaningTasks);
 
 /**
  * @swagger
@@ -204,7 +205,7 @@ router.get(
  *       404:
  *         description: Cleaning task not found
  */
-router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getCleaningTaskById);
+router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getCleaningTaskById);
 
 /**
  * @swagger
@@ -218,7 +219,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getCleanin
  *       201:
  *         description: Cleaning task created successfully
  */
-router.post("/", protect, authorize("admin", "manager"), createCleaningTask);
+router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requireManagerPodAccess({ source: "body", key: "pod_id" }), createCleaningTask);
 
 /**
  * @swagger
@@ -238,7 +239,7 @@ router.post("/", protect, authorize("admin", "manager"), createCleaningTask);
  *       200:
  *         description: Cleaning task updated successfully
  */
-router.put("/:id", protect, authorize("admin", "manager", "cleaner"), updateCleaningTask);
+router.put("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, updateCleaningTask);
 
 /**
  * @swagger
