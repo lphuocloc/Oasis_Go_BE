@@ -304,11 +304,44 @@ class BookingOrderService {
                 };
             }); // End of withTransaction
 
+            const auto_assign = {
+                trigger: "BOOKING_ORDER_CREATED",
+                total: Array.isArray(txResult?.bookings) ? txResult.bookings.length : 0,
+                success_count: 0,
+                skipped_count: 0,
+                failed_count: 0,
+                results: [],
+            };
+
             if (txResult && Array.isArray(txResult.bookings)) {
                 for (const booking of txResult.bookings) {
                     try {
-                        await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CREATED" });
+                        const assignResult = await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CREATED" });
+                        const reason = assignResult?.reason || "UNKNOWN";
+                        const created = Boolean(assignResult?.created);
+
+                        if (created) {
+                            auto_assign.success_count += 1;
+                        } else {
+                            auto_assign.skipped_count += 1;
+                        }
+
+                        auto_assign.results.push({
+                            booking_id: booking.id,
+                            created,
+                            reason,
+                            task_id: assignResult?.task?.id || null,
+                            cleaner_id: assignResult?.task?.cleaner_id || null,
+                        });
                     } catch (error) {
+                        auto_assign.failed_count += 1;
+                        auto_assign.results.push({
+                            booking_id: booking.id,
+                            created: false,
+                            reason: "ERROR",
+                            error: error.message || "UNKNOWN_ERROR",
+                        });
+
                         console.error(
                             `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CREATED, booking_id=${booking.id || "unknown"}):`,
                             error.message || error
@@ -317,7 +350,10 @@ class BookingOrderService {
                 }
             }
 
-            return txResult;
+            return {
+                ...txResult,
+                auto_assign,
+            };
         } catch (error) {
             throw error;
         } finally {
@@ -971,6 +1007,14 @@ class BookingOrderService {
 
         const checked_out = [];
         const skipped = [];
+        const auto_assign = {
+            trigger: "BOOKING_ORDER_CHECKOUT",
+            total: 0,
+            success_count: 0,
+            skipped_count: 0,
+            failed_count: 0,
+            results: [],
+        };
 
         for (const booking of bookings) {
             if (booking.status === "COMPLETED") {
@@ -994,9 +1038,35 @@ class BookingOrderService {
             booking.cleaner_access_updated_at = new Date();
             await booking.save();
 
+            auto_assign.total += 1;
+
             try {
-                await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CHECKOUT" });
+                const assignResult = await autoAssignTaskForBooking(booking, { trigger: "BOOKING_ORDER_CHECKOUT" });
+                const reason = assignResult?.reason || "UNKNOWN";
+                const created = Boolean(assignResult?.created);
+
+                if (created) {
+                    auto_assign.success_count += 1;
+                } else {
+                    auto_assign.skipped_count += 1;
+                }
+
+                auto_assign.results.push({
+                    booking_id: booking.id,
+                    created,
+                    reason,
+                    task_id: assignResult?.task?.id || null,
+                    cleaner_id: assignResult?.task?.cleaner_id || null,
+                });
             } catch (error) {
+                auto_assign.failed_count += 1;
+                auto_assign.results.push({
+                    booking_id: booking.id,
+                    created: false,
+                    reason: "ERROR",
+                    error: error.message || "UNKNOWN_ERROR",
+                });
+
                 console.error(
                     `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CHECKOUT, booking_id=${booking.id || "unknown"}):`,
                     error.message || error
@@ -1019,6 +1089,7 @@ class BookingOrderService {
             skipped_count: skipped.length,
             checked_out,
             skipped,
+            auto_assign,
         };
     }
 

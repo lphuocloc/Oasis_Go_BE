@@ -9,6 +9,7 @@ const {
   updateCleaningTask,
   deleteCleaningTask,
   backfillCleaningTasks,
+  debugAutoAssignForBooking,
 } = require("../controllers/cleaningTaskController");
 
 /**
@@ -149,6 +150,41 @@ router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleani
  *         description: Backfill executed successfully
  */
 router.post("/backfill", protect, authorize("admin", "manager"), backfillCleaningTasks);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/debug/auto-assign/{bookingId}:
+ *   get:
+ *     summary: Diagnose auto-assignment pipeline for a booking (dry-run, no data mutation)
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: trigger
+ *         schema:
+ *           type: string
+ *         description: Optional trigger label for diagnostic context
+ *       - in: query
+ *         name: ignore_existing_task_check
+ *         schema:
+ *           type: boolean
+ *         description: Set true to continue pipeline checks even when a task already exists
+ *     responses:
+ *       200:
+ *         description: Diagnostic result generated successfully
+ */
+router.get(
+  "/debug/auto-assign/:bookingId",
+  protect,
+  authorize("admin", "manager"),
+  debugAutoAssignForBooking
+);
 
 /**
  * @swagger

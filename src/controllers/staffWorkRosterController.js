@@ -18,7 +18,7 @@ const createRoster = async (req, res) => {
 
 const getAllRosters = async (req, res) => {
   try {
-    const rosters = await staffWorkRosterService.getAllRosters(req.query);
+    const rosters = await staffWorkRosterService.getAllRosters(req.query, req.user);
     res.status(200).json({
       success: true,
       count: rosters.length,

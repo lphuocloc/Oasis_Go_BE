@@ -82,10 +82,31 @@ class StaffWorkRosterService {
     }
   }
 
-  async getAllRosters(filters = {}) {
+  async getAllRosters(filters = {}, actor = null) {
     const query = {};
+    const userRole = String(actor?.role || "").toLowerCase();
+    const userId = actor?.id || actor?._id;
 
-    if (filters.staff_id) {
+    // Authorization logic:
+    // - admin: view all rosters
+    // - manager: view their own roster + all cleaner rosters
+    // - cleaner: view only their own roster
+    if (userRole === "cleaner" && userId) {
+      query.staff_id = userId;
+    } else if (userRole === "manager" && userId) {
+      // Manager: their own roster OR any cleaner's roster
+      const cleaners = await User.find({ role: "cleaner" }).select("id _id").lean();
+      const cleanerIds = cleaners.map(c => c.id || String(c._id));
+      
+      query.$or = [
+        { staff_id: userId },
+        { staff_id: { $in: cleanerIds } }
+      ];
+    }
+    // admin/else: no staff_id filter, can see all after applying other filters
+
+    // Apply other filters from request
+    if (filters.staff_id && userRole === "admin") {
       query.staff_id = filters.staff_id;
     }
 
