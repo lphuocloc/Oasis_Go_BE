@@ -1,6 +1,7 @@
 const express = require("express");
 const staffShiftAssignmentController = require("../controllers/staffShiftAssignmentController");
 const authMiddleware = require("../middlewares/authMiddleware");
+const { loadManagerScope } = require("../middlewares/managerScopeMiddleware");
 
 const router = express.Router();
 
@@ -9,7 +10,7 @@ const router = express.Router();
  * /api/staff-shift-assignments/me:
  *   get:
  *     summary: Get my shift assignments (for manager/cleaner)
- *     tags: [Staff Shift Assignments]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -49,10 +50,10 @@ const router = express.Router();
  *         description: Unauthorized
  */
 router.get(
-	"/me",
-	authMiddleware.protect,
-	authMiddleware.authorize("manager", "cleaner"),
-	staffShiftAssignmentController.getMyAssignments
+  "/me",
+  authMiddleware.protect,
+  authMiddleware.authorize("manager", "cleaner"),
+  staffShiftAssignmentController.getMyAssignments
 );
 
 /**
@@ -63,7 +64,7 @@ router.get(
  *     description: >
  *       Create a shift assignment for a staff member covering a specific date range.
  *       The assignment defines when a staff member will work a particular shift at a location.
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -103,7 +104,8 @@ router.get(
 router.post(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.createAssignment
 );
 
@@ -179,7 +181,7 @@ router.post(
  *   get:
  *     summary: Get all shift assignments
  *     description: Retrieve all shift assignments with optional filtering
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -212,7 +214,8 @@ router.post(
 router.get(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.getAssignments
 );
 
@@ -221,7 +224,7 @@ router.get(
  * /api/staff-shift-assignments/{id}:
  *   get:
  *     summary: Get an assignment by ID
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -239,7 +242,8 @@ router.get(
 router.get(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.getAssignmentById
 );
 
@@ -248,7 +252,7 @@ router.get(
  * /api/staff-shift-assignments/{id}:
  *   put:
  *     summary: Update an assignment
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -284,7 +288,8 @@ router.get(
 router.put(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.updateAssignment
 );
 
@@ -293,7 +298,7 @@ router.put(
  * /api/staff-shift-assignments/{id}:
  *   delete:
  *     summary: Delete an assignment
- *     tags: [Staff Assignment]
+ *     tags: [Staff Assignments]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -309,7 +314,8 @@ router.put(
 router.delete(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffShiftAssignmentController.deleteAssignment
 );
 

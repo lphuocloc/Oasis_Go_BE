@@ -33,6 +33,12 @@ const getStaffShiftById = async (req, res) => {
 
 const createStaffShift = async (req, res) => {
 	try {
+		if (req.user && req.user.role === "manager") {
+			if (req.body.role !== "CLEANER") {
+				return res.status(403).json({ success: false, message: "Managers can only create CLEANER shifts" });
+			}
+		}
+
 		const shift = await staffShiftService.createStaffShift(req.body);
 		res.status(201).json({
 			success: true,
@@ -49,6 +55,16 @@ const createStaffShift = async (req, res) => {
 
 const updateStaffShift = async (req, res) => {
 	try {
+		if (req.user && req.user.role === "manager") {
+			const existingShift = await staffShiftService.getStaffShiftById(req.params.id);
+			if (existingShift.role !== "CLEANER") {
+				return res.status(403).json({ success: false, message: "Managers can only update CLEANER shifts" });
+			}
+			if (req.body.role && req.body.role !== "CLEANER") {
+				return res.status(403).json({ success: false, message: "Managers cannot change shift role to non-CLEANER" });
+			}
+		}
+
 		const shift = await staffShiftService.updateStaffShift(req.params.id, req.body);
 		res.status(200).json({
 			success: true,

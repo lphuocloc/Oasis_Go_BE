@@ -730,8 +730,10 @@ router.post("/test-push", protect, async (req, res) => {
 
   const result = await notificationService.sendToUser(req.user.id, {
     title: title || "Thông báo từ Backend",
-    body: body || "Hệ thống đã kết nối thành công!",
-    data: { url: "/home" },
+    message: body || "Hệ thống đã kết nối thành công!",
+    type: "SYSTEM",
+    event_code: "SYSTEM_TEST",
+    data: { type: "SYSTEM_TEST", url: "/home" },
   });
 
   if (result.success) {
@@ -745,8 +747,8 @@ router.post("/test-push", protect, async (req, res) => {
  * @swagger
  * /api/auth/users:
  *   get:
- *     summary: Get list of all active users (cleaners by default)
- *     description: Returns list of active users. Filters by role if provided, otherwise returns cleaners.
+ *     summary: Get list of all active users (users by default)
+ *     description: Returns list of active users. Filters by role if provided, otherwise returns users.
  *     tags: [Authentication]
  *     security:
  *       - bearerAuth: []
@@ -756,8 +758,8 @@ router.post("/test-push", protect, async (req, res) => {
  *         schema:
  *           type: string
  *           enum: [user, admin, manager, cleaner]
- *         description: Filter users by role (default returns cleaners)
- *         example: cleaner
+ *         description: Filter users by role (default returns users)
+ *         example: user
  *     responses:
  *       200:
  *         description: List of users retrieved successfully

@@ -1,6 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { loadManagerScope, applyManagerPodScope, requireManagerPodAccess } = require("../middlewares/managerScopeMiddleware");
 const {
   createMaintenanceTask,
   getAllMaintenanceTasks,
@@ -44,7 +45,7 @@ const {
  *       200:
  *         description: Maintenance tasks retrieved successfully
  */
-router.get("/", protect, authorize("admin", "manager", "cleaner"), getAllMaintenanceTasks);
+router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, applyManagerPodScope, getAllMaintenanceTasks);
 
 /**
  * @swagger
@@ -64,7 +65,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), getAllMainten
  *       404:
  *         description: Maintenance task not found
  */
-router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getMaintenanceTaskById);
+router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getMaintenanceTaskById);
 
 /**
  * @swagger
@@ -78,7 +79,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getMainten
  *       201:
  *         description: Maintenance task created successfully
  */
-router.post("/", protect, authorize("admin", "manager"), createMaintenanceTask);
+router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requireManagerPodAccess({ source: "body", key: "pod_id" }), createMaintenanceTask);
 
 /**
  * @swagger
@@ -98,7 +99,7 @@ router.post("/", protect, authorize("admin", "manager"), createMaintenanceTask);
  *       200:
  *         description: Maintenance task updated successfully
  */
-router.put("/:id", protect, authorize("admin", "manager"), updateMaintenanceTask);
+router.put("/:id", protect, authorize("admin", "manager"), loadManagerScope, updateMaintenanceTask);
 
 /**
  * @swagger

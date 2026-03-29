@@ -403,6 +403,44 @@ router.put("/:id", protect, bookingController.updateBooking);
 
 /**
  * @swagger
+ * /api/bookings/{id}/change-pod:
+ *   patch:
+ *     summary: Manager change pod for a booking
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pod_id
+ *             properties:
+ *               pod_id:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Booking pod changed
+ */
+router.patch(
+	"/:id/change-pod",
+	protect,
+	authorize("manager"),
+	loadManagerScope,
+	requireManagerPodAccess({ source: "body", key: "pod_id" }),
+	bookingController.managerChangePod
+);
+
+/**
+ * @swagger
  * /api/bookings/{id}/cleaner-access:
  *   post:
  *     summary: Enable or disable cleaner access confirmation for booking

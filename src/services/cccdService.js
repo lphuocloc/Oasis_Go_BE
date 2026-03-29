@@ -54,15 +54,21 @@ class IdentityService {
       userId,
       { identityCard: identity._id },
       { new: true },
-    ).select("fcmToken name");
-    if (user && user.fcmToken) {
+    ).select("name");
+    if (user) {
       notificationService
-        .sendPush(
-          user.fcmToken,
-          "Xác thực thành công!",
-          `Chúc mừng ${user.name}, thông tin định danh của bạn đã được cập nhật.`,
-          { screen: "/(main)/home", action: "identity_verified" },
-        )
+        .sendToUser(userId, {
+          title: "Xác thực thành công!",
+          message: `Chúc mừng ${user.name}, thông tin định danh của bạn đã được cập nhật.`,
+          type: "IDENTITY",
+          event_code: "IDENTITY_VERIFIED",
+          dedupe_key: `IDENTITY_VERIFIED:${userId}:${identity.id || identity._id}`,
+          data: {
+            type: "IDENTITY_VERIFIED",
+            screen: "/(main)/home",
+            action: "identity_verified",
+          },
+        })
         .catch((err) => console.error("Lỗi gửi thông báo:", err));
     }
 

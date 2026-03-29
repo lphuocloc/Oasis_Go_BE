@@ -112,7 +112,7 @@ const staffShiftController = require("../controllers/staffShiftController");
 router.get(
 	"/",
 	protect,
-	authorize("admin"),
+	authorize("admin", "manager"),
 	staffShiftController.getAllStaffShifts
 );
 
@@ -149,7 +149,7 @@ router.get(
 router.get(
 	"/:id",
 	protect,
-	authorize("admin"),
+	authorize("admin", "manager"),
 	staffShiftController.getStaffShiftById
 );
 
@@ -183,7 +183,7 @@ router.get(
 router.post(
 	"/create",
 	protect,
-	authorize("admin"),
+	authorize("admin", "manager"),
 	staffShiftController.createStaffShift
 );
 
@@ -225,7 +225,7 @@ router.post(
 router.put(
 	"/:id",
 	protect,
-	authorize("admin"),
+	authorize("admin", "manager"),
 	staffShiftController.updateStaffShift
 );
 

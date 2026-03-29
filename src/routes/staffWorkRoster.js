@@ -1,6 +1,7 @@
 const express = require("express");
 const staffWorkRosterController = require("../controllers/staffWorkRosterController");
 const authMiddleware = require("../middlewares/authMiddleware");
+const { loadManagerScope } = require("../middlewares/managerScopeMiddleware");
 
 const router = express.Router();
 
@@ -77,7 +78,8 @@ const router = express.Router();
 router.post(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffWorkRosterController.createRoster
 );
 
@@ -131,7 +133,8 @@ router.post(
 router.get(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffWorkRosterController.getAllRosters
 );
 
@@ -159,7 +162,8 @@ router.get(
 router.get(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffWorkRosterController.getRosterById
 );
 
@@ -202,7 +206,8 @@ router.get(
 router.put(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffWorkRosterController.updateRoster
 );
 
@@ -230,7 +235,8 @@ router.put(
 router.delete(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
 	staffWorkRosterController.deleteRoster
 );
 
