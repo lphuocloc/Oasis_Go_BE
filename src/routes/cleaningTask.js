@@ -47,7 +47,7 @@ const {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, ARRIVED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
@@ -94,7 +94,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, ARRIVED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
