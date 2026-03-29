@@ -67,6 +67,8 @@ const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const usersRouter = require("./routes/users");
 const incidentRouter = require("./routes/incident");
 const lostFoundRouter = require("./routes/lostFound");
+const reviewRouter = require("./routes/review");
+const notificationRouter = require("./routes/notification");
 const app = express();
 
 // Middlewares
@@ -109,6 +111,8 @@ app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/incidents", incidentRouter);
 app.use("/api/lost-found-items", lostFoundRouter);
+app.use("/api/reviews", reviewRouter);
+app.use("/api/notifications", notificationRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);
