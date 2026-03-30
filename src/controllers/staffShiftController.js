@@ -81,6 +81,13 @@ const updateStaffShift = async (req, res) => {
 
 const deleteStaffShift = async (req, res) => {
 	try {
+		if (req.user && req.user.role === "manager") {
+			const existingShift = await staffShiftService.getStaffShiftById(req.params.id);
+			if (existingShift.role !== "CLEANER") {
+				return res.status(403).json({ success: false, message: "Managers can only delete CLEANER shifts" });
+			}
+		}
+
 		await staffShiftService.deleteStaffShift(req.params.id);
 		res.status(200).json({
 			success: true,

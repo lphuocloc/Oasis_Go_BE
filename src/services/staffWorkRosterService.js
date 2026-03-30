@@ -53,28 +53,56 @@ class StaffWorkRosterService {
 
   async createRoster(data) {
     const { staff_id, location_shift_id } = data;
-    if (!staff_id || !location_shift_id || data.day_of_week === undefined) {
+
+    let days = [];
+    if (Array.isArray(data.days_of_week)) {
+      days = data.days_of_week;
+    } else if (data.day_of_week !== undefined) {
+      days = [data.day_of_week];
+    }
+
+    if (!staff_id || !location_shift_id || days.length === 0) {
       const error = new Error(
-        "staff_id, location_shift_id and day_of_week are required"
+        "staff_id, location_shift_id and day_of_week (or days_of_week array) are required"
       );
       error.statusCode = 400;
       throw error;
     }
 
-    const day_of_week = this.normalizeDayOfWeek(data.day_of_week);
+    const normalizedDays = days.map((d) => this.normalizeDayOfWeek(d));
+    const uniqueDays = [...new Set(normalizedDays)];
 
     await this.ensureRosterDependencies({ staff_id, location_shift_id });
 
+    // Check availability to avoid ugly duplicate insert errors
+    const existing = await StaffWorkRoster.find({
+      staff_id,
+      location_shift_id,
+      day_of_week: { $in: uniqueDays },
+    });
+    const existingDays = new Set(existing.map((e) => e.day_of_week));
+    const newDays = uniqueDays.filter((d) => !existingDays.has(d));
+
+    if (newDays.length === 0) {
+      const duplicateError = new Error("Roster already exists for this staff, location shift, and day_of_week(s)");
+      duplicateError.statusCode = 409;
+      throw duplicateError;
+    }
+
     try {
-      return await StaffWorkRoster.create({
+      const is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
+      const docs = newDays.map((d) => ({
         staff_id,
         location_shift_id,
-        day_of_week,
-        is_active: data.is_active !== undefined ? Boolean(data.is_active) : true,
-      });
+        day_of_week: d,
+        is_active,
+      }));
+
+      const created = await StaffWorkRoster.insertMany(docs);
+      return uniqueDays.length === 1 && days.length === 1 ? created[0] : created;
     } catch (error) {
       if (error && error.code === 11000) {
-        const duplicateError = new Error("Roster already exists for this staff, location shift and day_of_week");
+        const duplicateError = new Error("Roster already exists for this staff, location shift, and day_of_week");
         duplicateError.statusCode = 409;
         throw duplicateError;
       }
