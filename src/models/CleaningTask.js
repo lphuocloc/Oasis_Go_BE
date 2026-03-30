@@ -120,12 +120,6 @@ cleaningTaskSchema.index({ shift_assignment_id: 1, created_at: -1 });
 cleaningTaskSchema.index({ cleaner_id: 1, status: 1, due_at: 1 });
 cleaningTaskSchema.index({ shift_assignment_id: 1, status: 1 });
 cleaningTaskSchema.index({ pod_id: 1, created_at: -1 });
-cleaningTaskSchema.index(
-  { booking_id: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { booking_id: { $type: "string" } },
-  }
-);
+cleaningTaskSchema.index({ booking_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("CleaningTask", cleaningTaskSchema);

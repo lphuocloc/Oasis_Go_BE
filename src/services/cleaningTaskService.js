@@ -22,6 +22,7 @@ const CLEANING_TASK_STATUSES = [
 const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
 const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
+const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -139,19 +140,28 @@ const getDueTimeWithMinutes = (booking, fallbackTime, bufferMinutes) => {
   return new Date(baseTime.getTime() + Number(bufferMinutes) * 60 * 1000);
 };
 
-const isCheckoutTrigger = (trigger = "") => String(trigger || "").toUpperCase() === "BOOKING_ORDER_CHECKOUT";
-
 const TRIGGER_REQUEST_SOURCE_RULES = Object.freeze({
   BOOKING_ORDER_CREATED: "AUTO_AFTER_CHECKOUT",
   BOOKING_ORDER_CHECKOUT: "AUTO_AFTER_CHECKOUT",
   BOOKING_CREATED: "AUTO_AFTER_CHECKOUT",
-  BOOKING_UPDATED_CLEANER_ACCESS_TRUE: "AUTO_AFTER_CHECKOUT",
-  SET_CLEANER_ACCESS_TRUE: "AUTO_AFTER_CHECKOUT",
   SYSTEM_RETRY_BACKFILL: "SYSTEM_RETRY",
 });
 
-const getRequestSourceByTrigger = (trigger = "") => {
+const getRequestSourceByTrigger = (trigger = "", bookingLike = null) => {
   const normalized = String(trigger || "").toUpperCase();
+  const bookingStatus = String(bookingLike?.status || "").toUpperCase();
+  const checkinState = String(bookingLike?.checkin_state || "").toUpperCase();
+
+  if (
+    normalized === "BOOKING_UPDATED_CLEANER_ACCESS_TRUE" ||
+    normalized === "SET_CLEANER_ACCESS_TRUE"
+  ) {
+    if (bookingStatus === "IN_USE" && checkinState !== "NO_SHOW") {
+      return "USER_REQUEST";
+    }
+
+    return "AUTO_AFTER_CHECKOUT";
+  }
 
   if (TRIGGER_REQUEST_SOURCE_RULES[normalized]) {
     return TRIGGER_REQUEST_SOURCE_RULES[normalized];
@@ -168,12 +178,6 @@ const getRequestSourceByTrigger = (trigger = "") => {
 
   // Unknown/legacy system triggers default to turnover flow.
   return "AUTO_AFTER_CHECKOUT";
-};
-
-const isDuplicateBookingTaskError = (error) => {
-  if (!error || error.code !== 11000) return false;
-  if (!error.keyPattern) return false;
-  return Boolean(error.keyPattern.booking_id);
 };
 
 const applyStatusAuditFields = (taskPayload, previousStatus = null) => {
@@ -228,9 +232,14 @@ const applyDueRangeFilter = (filter, query = {}) => {
   }
 };
 
-const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = []) => {
+const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = [], options = {}) => {
   if (!Array.isArray(assignments) || assignments.length === 0) return null;
   if (!Array.isArray(eligibleCleanerIds) || eligibleCleanerIds.length === 0) return null;
+
+  const requestSource = String(options.requestSource || "").toUpperCase();
+  const dueAtInput = options.dueAt ? new Date(options.dueAt) : null;
+  const shouldApplyDueSpacingRule =
+    requestSource === "AUTO_AFTER_CHECKOUT" && dueAtInput && !Number.isNaN(dueAtInput.getTime());
 
   const cleanerIdSet = new Set(eligibleCleanerIds.map((id) => String(id)));
   const checkedInAssignments = assignments.filter(
@@ -263,10 +272,46 @@ const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleClean
 
   const countMap = new Map(counts.map((item) => [String(item._id), Number(item.total) || 0]));
 
+  let prioritizedAssignments = candidateAssignments;
+
+  if (shouldApplyDueSpacingRule) {
+    const spacingMs = AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES * 60 * 1000;
+    const windowStart = new Date(dueAtInput.getTime() - spacingMs);
+    const windowEnd = new Date(dueAtInput.getTime() + spacingMs);
+
+    const conflicts = await CleaningTask.aggregate([
+      {
+        $match: {
+          cleaner_id: { $in: candidateCleanerIds },
+          request_source: "AUTO_AFTER_CHECKOUT",
+          status: { $in: ACTIVE_TASK_STATUSES },
+          due_at: { $gte: windowStart, $lte: windowEnd },
+        },
+      },
+      {
+        $group: {
+          _id: "$cleaner_id",
+          total: { $sum: 1 },
+        },
+      },
+    ]);
+
+    const conflictCleanerIds = new Set(conflicts.map((item) => String(item._id)));
+    const nonConflictAssignments = candidateAssignments.filter(
+      (item) => !conflictCleanerIds.has(String(item.staff_id))
+    );
+
+    // Prefer cleaners with no AUTO_AFTER_CHECKOUT due-time conflict in +/- 30 minutes.
+    // If everyone conflicts, fallback to load balancing on all candidates.
+    if (nonConflictAssignments.length > 0) {
+      prioritizedAssignments = nonConflictAssignments;
+    }
+  }
+
   let selected = null;
   let minLoad = Number.MAX_SAFE_INTEGER;
 
-  for (const assignment of candidateAssignments) {
+  for (const assignment of prioritizedAssignments) {
     const cleanerId = String(assignment.staff_id);
     const load = countMap.has(cleanerId) ? countMap.get(cleanerId) : 0;
 
@@ -303,10 +348,44 @@ const getCleanerIdentity = (user) => {
   return null;
 };
 
+const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
+  const normalizedTrigger = String(trigger || "").toUpperCase();
+  const bookingStatus = String(bookingLike?.status || "").toUpperCase();
+
+  if (
+    normalizedTrigger === "SET_CLEANER_ACCESS_TRUE" ||
+    normalizedTrigger === "BOOKING_UPDATED_CLEANER_ACCESS_TRUE" ||
+    bookingStatus === "IN_USE"
+  ) {
+    return "NOTIFIED";
+  }
+
+  return "ASSIGNED";
+};
+
+const CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+
+const cancelOpenTasksForNoShowBooking = async (bookingId) => {
+  if (!bookingId) return 0;
+
+  const result = await CleaningTask.updateMany(
+    {
+      booking_id: String(bookingId),
+      status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
+    },
+    {
+      $set: {
+        status: "CANCELLED",
+      },
+    }
+  );
+
+  return Number(result?.modifiedCount || 0);
+};
+
 exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const includeDebug = options.include_debug === true;
   const dryRun = options.dry_run === true;
-  const ignoreExistingTaskCheck = options.ignore_existing_task_check === true;
   const trigger = options.trigger || "UNKNOWN";
 
   const debugInfo = {
@@ -343,14 +422,34 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
 
   if (bookingCheckinState === "NO_SHOW") {
     debugInfo.skip_reason = "NO_SHOW_BLOCKED";
-    return withDebug({ created: false, reason: "NO_SHOW_BLOCKED", booking_id: bookingId }, debugInfo, includeDebug);
+    const cancelled_task_count = dryRun ? 0 : await cancelOpenTasksForNoShowBooking(bookingId);
+    return withDebug(
+      {
+        created: false,
+        reason: "NO_SHOW_BLOCKED",
+        booking_id: bookingId,
+        cancelled_task_count,
+      },
+      debugInfo,
+      includeDebug
+    );
   }
 
   if (!bookingCheckinState) {
     const latestBooking = await Booking.findOne({ id: bookingId }).select("id checkin_state").lean();
     if (latestBooking && String(latestBooking.checkin_state || "").toUpperCase() === "NO_SHOW") {
       debugInfo.skip_reason = "NO_SHOW_BLOCKED";
-      return withDebug({ created: false, reason: "NO_SHOW_BLOCKED", booking_id: bookingId }, debugInfo, includeDebug);
+      const cancelled_task_count = dryRun ? 0 : await cancelOpenTasksForNoShowBooking(bookingId);
+      return withDebug(
+        {
+          created: false,
+          reason: "NO_SHOW_BLOCKED",
+          booking_id: bookingId,
+          cancelled_task_count,
+        },
+        debugInfo,
+        includeDebug
+      );
     }
   }
 
@@ -358,99 +457,6 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const { startOfDay, endOfDay } = getDateRangeForDay(taskReferenceTime);
   debugInfo.task_reference_time = taskReferenceTime;
   debugInfo.day_window = { start_of_day: startOfDay, end_of_day: endOfDay };
-
-  if (!ignoreExistingTaskCheck) {
-    const existingTask = await CleaningTask.findOne({ booking_id: bookingId });
-    if (existingTask) {
-      if (isCheckoutTrigger(trigger)) {
-        const podForExisting = await Pod.findOne({ id: podId }).select("id cluster_id").lean();
-        const clusterForExisting = podForExisting
-          ? await PodCluster.findOne({ id: podForExisting.cluster_id }).select("id location_id").lean()
-          : null;
-
-        if (podForExisting && clusterForExisting && clusterForExisting.location_id) {
-          const bufferConfig = await resolveCleaningBufferMinutes({
-            podId,
-            clusterId: clusterForExisting.id,
-            locationId: clusterForExisting.location_id,
-          });
-
-          debugInfo.buffer_minutes_applied = bufferConfig.bufferMinutes;
-          debugInfo.buffer_policy_source = bufferConfig.source;
-          debugInfo.buffer_policy_id = bufferConfig.policyId;
-
-          const nextDueAt = getDueTimeWithMinutes(
-            bookingLike,
-            bookingLike && bookingLike.actual_end_time ? bookingLike.actual_end_time : taskReferenceTime,
-            bufferConfig.bufferMinutes
-          );
-
-          const previousStatus = normalizeStatus(existingTask.status);
-          const terminalStatuses = new Set(["DONE", "CANCELLED", "MISSED"]);
-          const shouldPromoteToNotified = previousStatus === "ASSIGNED";
-
-          const previewTask = {
-            id: existingTask.id,
-            cleaner_id: existingTask.cleaner_id,
-            status: terminalStatuses.has(previousStatus)
-              ? existingTask.status
-              : shouldPromoteToNotified
-                ? "NOTIFIED"
-                : existingTask.status,
-            due_at: nextDueAt,
-          };
-
-          if (dryRun) {
-            debugInfo.skip_reason = "EXISTING_TASK_WOULD_BE_UPDATED_AFTER_CHECKOUT";
-            return withDebug({
-              created: false,
-              reason: "EXISTING_TASK_WOULD_BE_UPDATED_AFTER_CHECKOUT",
-              task: previewTask,
-              booking_id: bookingId,
-            }, debugInfo, includeDebug);
-          }
-
-          existingTask.due_at = nextDueAt;
-          existingTask.request_source = "AUTO_AFTER_CHECKOUT";
-
-          if (!terminalStatuses.has(previousStatus) && shouldPromoteToNotified) {
-            existingTask.status = "NOTIFIED";
-          }
-
-          if (!existingTask.assigned_at) {
-            existingTask.assigned_at = new Date();
-          }
-
-          applyStatusAuditFields(existingTask, previousStatus);
-          await existingTask.save();
-
-          debugInfo.skip_reason = "EXISTING_TASK_UPDATED_AFTER_CHECKOUT";
-          return withDebug({
-            created: false,
-            reason: "EXISTING_TASK_UPDATED_AFTER_CHECKOUT",
-            task: {
-              id: existingTask.id,
-              cleaner_id: existingTask.cleaner_id,
-              status: existingTask.status,
-              due_at: existingTask.due_at,
-            },
-            booking_id: bookingId,
-          }, debugInfo, includeDebug);
-        }
-      }
-
-      debugInfo.skip_reason = "ALREADY_EXISTS";
-      return withDebug({
-        created: false,
-        reason: "ALREADY_EXISTS",
-        task: {
-          id: existingTask.id,
-          cleaner_id: existingTask.cleaner_id,
-        },
-        booking_id: bookingId,
-      }, debugInfo, includeDebug);
-    }
-  }
 
   const pod = await Pod.findOne({ id: podId }).select("id cluster_id").lean();
   if (!pod) {
@@ -500,6 +506,18 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     debugInfo.skip_reason = "NO_CLEANER_LOCATION_SHIFT";
     return withDebug({ created: false, reason: "NO_CLEANER_LOCATION_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
   }
+
+  const requestSource = getRequestSourceByTrigger(trigger, bookingLike);
+  const bufferConfig = await resolveCleaningBufferMinutes({
+    podId,
+    clusterId: cluster.id,
+    locationId: cluster.location_id,
+  });
+  debugInfo.buffer_minutes_applied = bufferConfig.bufferMinutes;
+  debugInfo.buffer_policy_source = bufferConfig.source;
+  debugInfo.buffer_policy_id = bufferConfig.policyId;
+
+  const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
 
   let allSystemCleaners = [];
   if (includeDebug) {
@@ -668,7 +686,11 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
 
   const selectedAssignment = await selectAssignmentWithLoadBalancing(
     assignments,
-    eligibleCleanerIds
+    eligibleCleanerIds,
+    {
+      requestSource,
+      dueAt,
+    }
   );
 
   if (!selectedAssignment) {
@@ -739,18 +761,6 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     });
   }
 
-  const requestSource = getRequestSourceByTrigger(trigger);
-  const bufferConfig = await resolveCleaningBufferMinutes({
-    podId,
-    clusterId: cluster.id,
-    locationId: cluster.location_id,
-  });
-  debugInfo.buffer_minutes_applied = bufferConfig.bufferMinutes;
-  debugInfo.buffer_policy_source = bufferConfig.source;
-  debugInfo.buffer_policy_id = bufferConfig.policyId;
-
-  const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
-
   const payload = {
     pod_id: podId,
     booking_id: bookingId,
@@ -761,7 +771,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     assigned_at: new Date(),
     start_time: null,
     end_time: null,
-    status: "ASSIGNED",
+    status: getInitialAutoAssignStatus(bookingLike, trigger),
   };
 
   applyStatusAuditFields(payload);
@@ -782,23 +792,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     }, debugInfo, includeDebug);
   }
 
-  let createdTask;
-  try {
-    createdTask = await CleaningTask.create(payload);
-  } catch (error) {
-    if (isDuplicateBookingTaskError(error)) {
-      const duplicate = await CleaningTask.findOne({ booking_id: bookingId }).select("id cleaner_id").lean();
-      debugInfo.skip_reason = "ALREADY_EXISTS";
-      return withDebug({
-        created: false,
-        reason: "ALREADY_EXISTS",
-        task: duplicate,
-        booking_id: bookingId,
-      }, debugInfo, includeDebug);
-    }
-
-    throw error;
-  }
+  const createdTask = await CleaningTask.create(payload);
 
   return withDebug({
     created: true,
@@ -827,7 +821,6 @@ exports.diagnoseAutoAssignForBooking = async (bookingId, options = {}) => {
     trigger: options.trigger || "DEBUG_MANUAL",
     dry_run: true,
     include_debug: true,
-    ignore_existing_task_check: options.ignore_existing_task_check === true,
   });
 
   return {
@@ -889,13 +882,6 @@ exports.createCleaningTask = async (data) => {
   }
   if (reassignedCleaner && reassignedCleaner.role !== "cleaner") {
     throw createError("reassigned_from_cleaner_id must have cleaner role", 400);
-  }
-
-  if (booking_id) {
-    const existingForBooking = await CleaningTask.findOne({ booking_id }).select("id").lean();
-    if (existingForBooking) {
-      throw createError("Cleaning task already exists for this booking", 409);
-    }
   }
 
   const payload = {
@@ -1058,19 +1044,6 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
     throw createError("reassigned_from_cleaner_id must have cleaner role", 400);
   }
 
-  if (nextBookingId) {
-    const existingForBooking = await CleaningTask.findOne({
-      booking_id: nextBookingId,
-      id: { $ne: id },
-    })
-      .select("id")
-      .lean();
-
-    if (existingForBooking) {
-      throw createError("Another cleaning task already exists for this booking", 409);
-    }
-  }
-
   const previousStatus = task.status;
 
   task.pod_id = nextPodId;
@@ -1169,10 +1142,15 @@ exports.backfillMissingCleaningTasks = async (options = {}) => {
   };
 
   for (const booking of bookings) {
-    const existing = await CleaningTask.findOne({ booking_id: booking.id }).select("id").lean();
+    const existing = await CleaningTask.findOne({
+      booking_id: booking.id,
+      request_source: "SYSTEM_RETRY",
+    })
+      .select("id")
+      .lean();
     if (existing) {
       summary.skipped_count += 1;
-      summary.skipped.push({ booking_id: booking.id, reason: "ALREADY_EXISTS" });
+      summary.skipped.push({ booking_id: booking.id, reason: "ALREADY_BACKFILLED" });
       continue;
     }
 
