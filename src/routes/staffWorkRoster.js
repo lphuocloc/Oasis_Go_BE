@@ -37,6 +37,12 @@ const router = express.Router();
  *                 maximum: 6
  *                 description: Day of week (0=Sunday, 1=Monday, ...6=Saturday)
  *                 example: 1
+ *               days_of_week:
+ *                 type: array
+ *                 items:
+ *                   type: integer
+ *                 description: Array of day integers (0 to 6) avoiding creating same roster layout multiple times.
+ *                 example: [1, 2, 3, 4, 5]
  *               is_active:
  *                 type: boolean
  *                 description: Whether this roster entry is active
