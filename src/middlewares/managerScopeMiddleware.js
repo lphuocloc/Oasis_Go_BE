@@ -1,4 +1,5 @@
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const LocationShift = require("../models/LocationShift");
 const Location = require("../models/Location");
 const PodCluster = require("../models/PodCluster");
@@ -31,24 +32,35 @@ const loadManagerScope = async (req, res, next) => {
     const todayEnd = new Date(todayStart);
     todayEnd.setHours(23, 59, 59, 999);
 
-    const assignments = await StaffShiftAssignment.find({
-      staff_id: { $in: staffIds },
-      status: { $in: ACTIVE_SCOPE_STATUSES },
-      start_date: { $lte: todayEnd },
-      end_date: { $gte: todayStart },
-    })
-      .select("location_shift_id")
-      .lean();
+    const [assignments, rosters] = await Promise.all([
+      StaffShiftAssignment.find({
+        staff_id: { $in: staffIds },
+        status: { $in: ACTIVE_SCOPE_STATUSES },
+        start_date: { $lte: todayEnd },
+        end_date: { $gte: todayStart },
+      })
+        .select("location_shift_id")
+        .lean(),
+      StaffWorkRoster.find({
+        staff_id: { $in: staffIds },
+        is_active: true
+      })
+        .select("location_shift_id")
+        .lean()
+    ]);
 
-    if (assignments.length === 0) {
+    const assignmentLocShiftIds = assignments.map((item) => item.location_shift_id);
+    const rosterLocShiftIds = rosters.map((item) => item.location_shift_id);
+    const uniqueLocShiftIds = uniqueStrings([...assignmentLocShiftIds, ...rosterLocShiftIds]);
+
+    if (uniqueLocShiftIds.length === 0) {
       return res.status(403).json({
         success: false,
         message: "Manager has no assigned location scope",
       });
     }
 
-    const locationShiftIds = uniqueStrings(assignments.map((item) => item.location_shift_id));
-    const locationShifts = await LocationShift.find({ id: { $in: locationShiftIds } })
+    const locationShifts = await LocationShift.find({ id: { $in: uniqueLocShiftIds } })
       .select("location_id")
       .lean();
 

@@ -102,8 +102,53 @@ router.get(
 	protect,
 	authorize("admin", "manager"),
 	loadManagerScope,
-	requireManagerLocationAccess({ source: "params", key: "locationId" }),
-	locationShiftController.getWorkingStaffByLocation
+  requireManagerLocationAccess({ source: "params", key: "locationId" }),
+  locationShiftController.getWorkingStaffByLocation
+);
+
+/**
+ * @swagger
+ * /api/location-shifts:
+ *   get:
+ *     summary: Get all location shifts
+ *     tags: [Location Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of all location shifts
+ */
+router.get(
+  "/",
+  protect,
+  authorize("admin", "manager"),
+  loadManagerScope,
+  locationShiftController.getAllLocationShifts
+);
+
+/**
+ * @swagger
+ * /api/location-shifts/{id}:
+ *   delete:
+ *     summary: Delete a location shift mapping by ID
+ *     tags: [Location Shifts]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Location shift deleted successfully
+ */
+router.delete(
+  "/:id",
+  protect,
+  authorize("admin", "manager"),
+  locationShiftController.deleteLocationShift
 );
 
 module.exports = router;

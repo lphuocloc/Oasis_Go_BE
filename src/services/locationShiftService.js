@@ -177,6 +177,38 @@ class LocationShiftService {
       data,
     };
   }
+
+  async getAllLocationShifts(filters = {}) {
+    const query = {};
+    if (filters.location_ids) {
+      query.location_id = { $in: filters.location_ids.split(',') };
+    }
+    if (filters.location_id) {
+      query.location_id = filters.location_id;
+    }
+    if (filters.shift_id) {
+      query.shift_id = filters.shift_id;
+    }
+    return LocationShift.find(query).sort({ created_at: -1 });
+  }
+
+  async deleteLocationShift(id) {
+    if (!id) {
+      const error = new Error("Location shift ID is required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const shift = await LocationShift.findOne({ id });
+    if (!shift) {
+      const error = new Error("Location shift not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    await LocationShift.deleteOne({ id });
+    return { message: "Location shift deleted successfully" };
+  }
 }
 
 module.exports = new LocationShiftService();
