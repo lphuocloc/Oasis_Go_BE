@@ -109,13 +109,13 @@ reviewSchema.statics.getByCluster = async function (clusterId, options = {}) {
   const skip = (page - 1) * limit;
 
   const filter = { cluster_id: clusterId, is_rejected: false };
-  
+
   const [reviews, total] = await Promise.all([
     this.find(filter)
       .sort({ created_at: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("user", "name")
+      .populate("user", "name avatar")
       .lean(),
     this.countDocuments(filter),
   ]);
