@@ -1070,7 +1070,9 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
 exports.getCleaningTaskById = async (id) => {
   const task = await CleaningTask.findOne({ id });
   if (!task) throw createError("Cleaning task not found", 404);
-  return task;
+  // Reuse enrich logic for single task
+  const enriched = await enrichCleaningTasksWithRelatedData([task]);
+  return enriched[0] || null;
 };
 
 exports.updateCleaningTask = async (id, data, actor = null) => {

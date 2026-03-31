@@ -8,7 +8,7 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
-const { autoAssignTaskForBooking } = require("./cleaningTaskService");
+const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
@@ -186,6 +186,9 @@ class BookingService {
           $set: { is_revoked: true },
         }
       );
+
+      // Cancel all open cleaning tasks for this booking
+      await cancelOpenTasksForNoShowBooking(booking.id);
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng kết thúc do không check-in",
