@@ -88,6 +88,27 @@ const {
  *                         type: string
  *                       cleaner_id:
  *                         type: string
+ *                       pod_name:
+ *                         type: string
+ *                         nullable: true
+ *                       pod_cluster_id:
+ *                         type: string
+ *                         nullable: true
+ *                       pod_cluster_name:
+ *                         type: string
+ *                         nullable: true
+ *                       location_id:
+ *                         type: string
+ *                         nullable: true
+ *                       location_name:
+ *                         type: string
+ *                         nullable: true
+ *                       booking_guest_id:
+ *                         type: string
+ *                         nullable: true
+ *                       booking_guest_name:
+ *                         type: string
+ *                         nullable: true
  *                       estimated_start_time:
  *                         type: string
  *                         format: date-time
@@ -165,6 +186,29 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *                         type: string
  *                       booking_id:
  *                         type: string
+ *                       cleaner_id:
+ *                         type: string
+ *                       pod_name:
+ *                         type: string
+ *                         nullable: true
+ *                       pod_cluster_id:
+ *                         type: string
+ *                         nullable: true
+ *                       pod_cluster_name:
+ *                         type: string
+ *                         nullable: true
+ *                       location_id:
+ *                         type: string
+ *                         nullable: true
+ *                       location_name:
+ *                         type: string
+ *                         nullable: true
+ *                       booking_guest_id:
+ *                         type: string
+ *                         nullable: true
+ *                       booking_guest_name:
+ *                         type: string
+ *                         nullable: true
  *                       estimated_start_time:
  *                         type: string
  *                         format: date-time
