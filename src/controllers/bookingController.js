@@ -195,6 +195,32 @@ const checkinWithQrAndKey = async (req, res) => {
     }
 };
 
+/**
+ * Get my cleaner online key by booking ID
+ * @route GET /api/bookings/:id/my-cleaner-key
+ * @access Private (Cleaner)
+ */
+const getMyCleanerKeyByBookingId = async (req, res) => {
+    try {
+        const result = await bookingService.getMyCleanerKeyByBookingId(
+            req.params.id,
+            req.user
+        );
+
+        res.status(200).json({
+            success: true,
+            message: "Cleaner key retrieved successfully",
+            data: result,
+        });
+    } catch (error) {
+        const statusCode = error.statusCode || 400;
+        res.status(statusCode).json({
+            success: false,
+            message: error.message || "Failed to retrieve cleaner key",
+        });
+    }
+};
+
 
 
 /**
@@ -320,6 +346,7 @@ module.exports = {
     getBookingsByOrder,
     updateBooking,
     checkinWithQrAndKey,
+    getMyCleanerKeyByBookingId,
     cancelBooking,
     checkAvailability,
     setCleanerAccessFlag,

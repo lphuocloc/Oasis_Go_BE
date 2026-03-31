@@ -344,6 +344,32 @@ router.get("/order/:orderId", protect, bookingController.getBookingsByOrder);
 
 /**
  * @swagger
+ * /api/bookings/{id}/my-cleaner-key:
+ *   get:
+ *     summary: Get my cleaner online key for a booking
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Cleaner key retrieved
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Only cleaner can access this endpoint
+ *       404:
+ *         description: Booking or cleaner key not found
+ */
+router.get("/:id/my-cleaner-key", protect, bookingController.getMyCleanerKeyByBookingId);
+
+/**
+ * @swagger
  * /api/bookings/{id}:
  *   get:
  *     summary: Get booking by ID
