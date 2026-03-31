@@ -542,6 +542,77 @@ class BookingService {
   }
 
   /**
+   * Get cleaner online key for current authenticated cleaner by booking ID
+   * @param {String} bookingId - Booking ID
+   * @param {Object} actor - Authenticated user
+   * @returns {Promise<Object>} Cleaner online key payload
+   */
+  async getMyCleanerKeyByBookingId(bookingId, actor) {
+    const actorRole = String(actor?.role || "").toLowerCase();
+    const actorId = String(actor?._id || actor?.id || "");
+
+    if (!actorId) {
+      const error = new Error("Không xác định được người dùng hiện tại");
+      error.statusCode = 401;
+      throw error;
+    }
+
+    if (actorRole !== "cleaner") {
+      const error = new Error("Chỉ cleaner mới được lấy cleaner key của chính mình");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: bookingId }).select(
+      "id status checkin_state cleaner_access_allowed"
+    );
+    if (!booking) {
+      const error = new Error("Booking not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      const error = new Error("Không được phép lấy cleaner key cho booking NO_SHOW");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!booking.cleaner_access_allowed) {
+      const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const cleanerKey = await OnlineKey.findOne({
+      booking_id: String(bookingId),
+      key_type: "CLEANER",
+      user_id: actorId,
+      is_revoked: false,
+    })
+      .sort({ createdAt: -1 })
+      .select("id booking_id pod_id user_id key_type key_token valid_from valid_to is_revoked createdAt updatedAt");
+
+    if (!cleanerKey) {
+      const error = new Error("Không tìm thấy cleaner key cho booking này");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;
+
+    return {
+      booking_id: String(booking.id),
+      booking_status: booking.status,
+      booking_checkin_state: booking.checkin_state,
+      online_key: {
+        ...keyData,
+        role: "cleaner",
+      },
+    };
+  }
+
+  /**
    * Get bookings by user
    * @param {String} userId - User ID
    * @param {String} status - Optional status filter
