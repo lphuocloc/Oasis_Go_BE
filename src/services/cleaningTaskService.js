@@ -31,6 +31,26 @@ const createError = (message, statusCode) => {
   return err;
 };
 
+const buildUserIdentityQuery = (identity) => {
+  const normalizedIdentity = String(identity || "").trim();
+  if (!normalizedIdentity) {
+    return null;
+  }
+
+  const orQuery = [{ id: normalizedIdentity }];
+  if (mongoose.Types.ObjectId.isValid(normalizedIdentity)) {
+    orQuery.push({ _id: new mongoose.Types.ObjectId(normalizedIdentity) });
+  }
+
+  return { $or: orQuery };
+};
+
+const resolveActorCleanerIds = (actor) => {
+  return [actor?.id, actor?._id]
+    .filter(Boolean)
+    .map((value) => String(value));
+};
+
 const normalizeStatus = (status) => {
   if (status === undefined || status === null) return status;
   return String(status).trim().toUpperCase();
@@ -869,13 +889,13 @@ exports.createCleaningTask = async (data) => {
   const [pod, booking, cleaner, assignment, reassignedCleaner] = await Promise.all([
     Pod.findOne({ id: pod_id }).select("id").lean(),
     booking_id ? Booking.findOne({ id: booking_id }).select("id").lean() : Promise.resolve(null),
-    User.findOne({ id: cleaner_id }).select("id role isActive").lean(),
+    User.findOne(buildUserIdentityQuery(cleaner_id)).select("_id id role isActive").lean(),
     shift_assignment_id
       ? StaffShiftAssignment.findOne({ id: shift_assignment_id }).select("id").lean()
       : Promise.resolve(null),
     reassigned_from_cleaner_id
-      ? User.findOne({ id: reassigned_from_cleaner_id })
-        .select("id role")
+      ? User.findOne(buildUserIdentityQuery(reassigned_from_cleaner_id))
+        .select("_id id role")
         .lean()
       : Promise.resolve(null),
   ]);
@@ -1031,9 +1051,7 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
     throw createError("User context is required", 401);
   }
 
-  const cleanerIds = [
-    user && user.id ? String(user.id) : null,
-  ].filter(Boolean);
+  const cleanerIds = [...new Set(resolveActorCleanerIds(user))];
 
   if (cleanerIds.length === 0) {
     throw createError("Unable to resolve cleaner id", 400);
@@ -1081,9 +1099,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   const actorRole = String(actor?.role || "").toLowerCase();
   if (actorRole === "cleaner") {
-    const actorCleanerIds = [
-      actor && actor.id ? String(actor.id) : null,
-    ].filter(Boolean);
+    const actorCleanerIds = [...new Set(resolveActorCleanerIds(actor))];
 
     if (actorCleanerIds.length === 0) {
       throw createError("Unable to resolve cleaner id", 400);
@@ -1115,13 +1131,13 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   const [pod, booking, cleaner, assignment, reassignedCleaner] = await Promise.all([
     Pod.findOne({ id: nextPodId }).select("id").lean(),
     nextBookingId ? Booking.findOne({ id: nextBookingId }).select("id").lean() : Promise.resolve(null),
-    User.findOne({ id: nextCleanerId }).select("id role isActive").lean(),
+    User.findOne(buildUserIdentityQuery(nextCleanerId)).select("_id id role isActive").lean(),
     nextShiftAssignmentId
       ? StaffShiftAssignment.findOne({ id: nextShiftAssignmentId }).select("id").lean()
       : Promise.resolve(null),
     nextReassignedFromCleanerId
-      ? User.findOne({ id: nextReassignedFromCleanerId })
-        .select("id role")
+      ? User.findOne(buildUserIdentityQuery(nextReassignedFromCleanerId))
+        .select("_id id role")
         .lean()
       : Promise.resolve(null),
   ]);
