@@ -66,6 +66,38 @@ const {
  *     responses:
  *       200:
  *         description: Cleaning tasks retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       pod_id:
+ *                         type: string
+ *                       booking_id:
+ *                         type: string
+ *                       cleaner_id:
+ *                         type: string
+ *                       estimated_start_time:
+ *                         type: string
+ *                         format: date-time
+ *                       due_at:
+ *                         type: string
+ *                         format: date-time
+ *                       status:
+ *                         type: string
+ *                       request_source:
+ *                         type: string
  */
 router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, applyManagerPodScope, getAllCleaningTasks);
 
@@ -113,6 +145,34 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *     responses:
  *       200:
  *         description: My cleaning tasks retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       pod_id:
+ *                         type: string
+ *                       booking_id:
+ *                         type: string
+ *                       estimated_start_time:
+ *                         type: string
+ *                         format: date-time
+ *                       due_at:
+ *                         type: string
+ *                         format: date-time
+ *                       status:
+ *                         type: string
  */
 router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleaningTasks);
 
@@ -239,6 +299,12 @@ router.post("/backfill", protect, authorize("admin", "manager"), backfillCleanin
  *                             request_source:
  *                               type: string
  *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                             estimated_start_time:
+ *                               type: string
+ *                               format: date-time
+ *                             due_at:
+ *                               type: string
+ *                               format: date-time
  *                             status:
  *                               type: string
  *                               enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
@@ -265,6 +331,32 @@ router.get(
  *     responses:
  *       200:
  *         description: Cleaning task retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     id:
+ *                       type: string
+ *                     pod_id:
+ *                       type: string
+ *                     booking_id:
+ *                       type: string
+ *                     cleaner_id:
+ *                       type: string
+ *                     estimated_start_time:
+ *                       type: string
+ *                       format: date-time
+ *                     due_at:
+ *                       type: string
+ *                       format: date-time
+ *                     status:
+ *                       type: string
  *       404:
  *         description: Cleaning task not found
  */
@@ -278,6 +370,47 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *     tags: [Cleaning Tasks]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pod_id
+ *               - cleaner_id
+ *             properties:
+ *               pod_id:
+ *                 type: string
+ *                 description: Pod ID
+ *               booking_id:
+ *                 type: string
+ *                 description: Optional booking ID
+ *               cleaner_id:
+ *                 type: string
+ *                 description: Cleaner ID
+ *               shift_assignment_id:
+ *                 type: string
+ *                 description: Optional shift assignment ID
+ *               request_source:
+ *                 type: string
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                 description: Request source
+ *               estimated_start_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Estimated start time for the cleaning task
+ *               due_at:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Due timestamp for task completion
+ *               status:
+ *                 type: string
+ *                 enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *                 description: Task status
+ *               note:
+ *                 type: string
+ *                 description: Optional note
  *     responses:
  *       201:
  *         description: Cleaning task created successfully
@@ -298,6 +431,52 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *         required: true
  *         schema:
  *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               pod_id:
+ *                 type: string
+ *               booking_id:
+ *                 type: string
+ *               cleaner_id:
+ *                 type: string
+ *               shift_assignment_id:
+ *                 type: string
+ *               request_source:
+ *                 type: string
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *               estimated_start_time:
+ *                 type: string
+ *                 format: date-time
+ *                 description: Estimated start time for the cleaning task
+ *               due_at:
+ *                 type: string
+ *                 format: date-time
+ *               status:
+ *                 type: string
+ *                 enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *               assigned_at:
+ *                 type: string
+ *                 format: date-time
+ *               notified_at:
+ *                 type: string
+ *                 format: date-time
+ *               accepted_at:
+ *                 type: string
+ *                 format: date-time
+ *               start_time:
+ *                 type: string
+ *                 format: date-time
+ *               end_time:
+ *                 type: string
+ *                 format: date-time
+ *               note:
+ *                 type: string
  *     responses:
  *       200:
  *         description: Cleaning task updated successfully

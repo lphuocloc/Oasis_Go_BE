@@ -518,6 +518,11 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   debugInfo.buffer_policy_id = bufferConfig.policyId;
 
   const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
+  
+  // estimated_start_time = booking.end_time + 5 minutes
+  const estimatedStartTime = bookingLike && bookingLike.end_time
+    ? new Date(new Date(bookingLike.end_time).getTime() + 5 * 60 * 1000)
+    : null;
 
   let allSystemCleaners = [];
   if (includeDebug) {
@@ -767,6 +772,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     cleaner_id: selectedAssignment.staff_id,
     shift_assignment_id: selectedAssignment.id,
     request_source: requestSource,
+    estimated_start_time: estimatedStartTime,
     due_at: dueAt,
     assigned_at: new Date(),
     start_time: null,
@@ -786,6 +792,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
         cleaner_id: payload.cleaner_id,
         shift_assignment_id: payload.shift_assignment_id,
         request_source: payload.request_source,
+        estimated_start_time: payload.estimated_start_time,
         due_at: payload.due_at,
         status: payload.status,
       },
@@ -836,6 +843,7 @@ exports.createCleaningTask = async (data) => {
     cleaner_id,
     shift_assignment_id,
     request_source,
+    estimated_start_time,
     due_at,
     assigned_at,
     notified_at,
@@ -889,6 +897,7 @@ exports.createCleaningTask = async (data) => {
     booking_id: booking_id || null,
     cleaner_id,
     shift_assignment_id: shift_assignment_id || null,
+    estimated_start_time: estimated_start_time || null,
     request_source: normalizedRequestSource,
     due_at: due_at || null,
     assigned_at: assigned_at || null,
@@ -1056,6 +1065,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   task.cleaner_id = nextCleanerId;
   task.shift_assignment_id = nextShiftAssignmentId || null;
+  task.estimated_start_time = data.estimated_start_time !== undefined ? data.estimated_start_time : task.estimated_start_time;
   task.request_source = nextRequestSource;
   task.due_at = data.due_at !== undefined ? data.due_at : task.due_at;
   task.assigned_at = data.assigned_at !== undefined ? data.assigned_at : task.assigned_at;
