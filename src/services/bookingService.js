@@ -12,12 +12,27 @@ const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
+const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  async _revokeCleanerKeysForBooking(bookingId) {
+    if (!bookingId) return;
+    await OnlineKey.updateMany(
+      {
+        booking_id: String(bookingId),
+        key_type: "CLEANER",
+        is_revoked: false,
+      },
+      {
+        $set: { is_revoked: true },
+      }
+    );
+  }
+
   async _tryAutoAssignCleaningTask(booking, trigger = "UNKNOWN") {
     if (!booking) return;
 
@@ -639,6 +654,11 @@ class BookingService {
 
     await booking.save();
 
+    // NO_SHOW has highest priority: cleaner access must be blocked and keys revoked.
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      await this._revokeCleanerKeysForBooking(booking.id);
+    }
+
     if (!previousCleanerAccessAllowed && booking.cleaner_access_allowed === true) {
       await this._tryAutoAssignCleaningTask(booking, "BOOKING_UPDATED_CLEANER_ACCESS_TRUE");
     }
@@ -830,15 +850,25 @@ class BookingService {
         throw error;
       }
 
-      if (booking.status !== "COMPLETED") {
-        const error = new Error("Chỉ có thể vào làm vệ sinh sau khi khách hàng checkout (booking COMPLETED)");
-        error.statusCode = 400;
-        throw error;
-      }
-
       if (!booking.cleaner_access_allowed) {
         const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
         error.statusCode = 403;
+        throw error;
+      }
+
+      const cleanerWindowEnd = booking.end_time
+        ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
+        : null;
+
+      const isInUseUrgentCleaning = booking.status === "IN_USE";
+      const isCompletedCleaningWindow =
+        booking.status === "COMPLETED" && cleanerWindowEnd && now <= cleanerWindowEnd;
+
+      if (!isInUseUrgentCleaning && !isCompletedCleaningWindow) {
+        const error = new Error(
+          `Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED trong ${CLEANER_POST_CHECKOUT_WINDOW_MINUTES} phut sau checkout`
+        );
+        error.statusCode = 400;
         throw error;
       }
 
@@ -955,6 +985,10 @@ class BookingService {
     booking.cleaner_access_allowed = allowed;
     booking.cleaner_access_updated_at = new Date();
     await booking.save();
+
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      await this._revokeCleanerKeysForBooking(booking.id);
+    }
 
     if (allowed) {
       await this._tryAutoAssignCleaningTask(booking, "SET_CLEANER_ACCESS_TRUE");

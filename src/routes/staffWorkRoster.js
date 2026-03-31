@@ -139,7 +139,7 @@ router.post(
 router.get(
 	"/",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin", "manager"),
+	authMiddleware.authorize("admin", "manager", "cleaner"),
 	loadManagerScope,
 	staffWorkRosterController.getAllRosters
 );
@@ -168,7 +168,7 @@ router.get(
 router.get(
 	"/:id",
 	authMiddleware.protect,
-	authMiddleware.authorize("admin", "manager"),
+	authMiddleware.authorize("admin", "manager", "cleaner"),
 	loadManagerScope,
 	staffWorkRosterController.getRosterById
 );

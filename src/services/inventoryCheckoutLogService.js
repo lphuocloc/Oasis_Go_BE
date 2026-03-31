@@ -11,12 +11,7 @@ const createError = (message, statusCode) => {
 const findStaffUser = async (staffId) => {
   if (!staffId) return null;
 
-  // Primary lookup by Mongo ObjectId (req.user.id from auth middleware)
-  const byObjectId = await User.findById(staffId).select("_id role isActive").lean();
-  if (byObjectId) return byObjectId;
-
-  // Fallback for systems using a custom "id" field
-  return User.findOne({ id: staffId }).select("_id role isActive").lean();
+  return User.findOne({ id: staffId }).select("id role isActive").lean();
 };
 
 const normalizeTaskId = (value) => {

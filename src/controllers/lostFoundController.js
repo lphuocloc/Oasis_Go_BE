@@ -19,12 +19,19 @@ exports.createLostFoundItem = async (req, res) => {
 
 exports.getLostFoundItems = async (req, res) => {
   try {
-    const items = await lostFoundService.getLostFoundItems(req.query);
-    res.status(200).json({
+    const result = await lostFoundService.getLostFoundItems(req.query);
+    const items = Array.isArray(result) ? result : result.items || [];
+    const responseBody = {
       success: true,
       count: items.length,
       data: items,
-    });
+    };
+
+    if (!Array.isArray(result) && result.pagination) {
+      responseBody.pagination = result.pagination;
+    }
+
+    res.status(200).json(responseBody);
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({

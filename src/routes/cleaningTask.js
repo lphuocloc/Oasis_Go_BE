@@ -10,6 +10,7 @@ const {
   updateCleaningTask,
   deleteCleaningTask,
   backfillCleaningTasks,
+  debugAutoAssignForBooking,
 } = require("../controllers/cleaningTaskController");
 
 /**
@@ -46,7 +47,7 @@ const {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, ARRIVED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
@@ -93,7 +94,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, ARRIVED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
@@ -119,10 +120,15 @@ router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleani
  * @swagger
  * /api/cleaning-tasks/backfill:
  *   post:
- *     summary: Backfill missing cleaning tasks for old bookings
+ *     summary: Backfill cleaning tasks for old bookings (supports one booking to many tasks)
  *     tags: [Cleaning Tasks]
  *     security:
  *       - bearerAuth: []
+ *     description: |
+ *       Create missing cleaning tasks from historical bookings using trigger SYSTEM_RETRY_BACKFILL.
+ *       This endpoint now supports one booking to many cleaning tasks.
+ *       To avoid unlimited duplication from retries, backfill skips a booking only when a SYSTEM_RETRY task already exists.
+ *       It does not skip just because the booking already has tasks from other sources.
  *     requestBody:
  *       required: false
  *       content:
@@ -148,8 +154,101 @@ router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleani
  *     responses:
  *       200:
  *         description: Backfill executed successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     dry_run:
+ *                       type: boolean
+ *                     scanned:
+ *                       type: integer
+ *                     created_count:
+ *                       type: integer
+ *                     skipped_count:
+ *                       type: integer
+ *                     failed_count:
+ *                       type: integer
+ *                     skipped:
+ *                       type: array
+ *                       items:
+ *                         type: object
+ *                         properties:
+ *                           booking_id:
+ *                             type: string
+ *                           reason:
+ *                             type: string
+ *                             example: ALREADY_BACKFILLED
  */
 router.post("/backfill", protect, authorize("admin", "manager"), backfillCleaningTasks);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/debug/auto-assign/{bookingId}:
+ *   get:
+ *     summary: Diagnose auto-assignment pipeline for a booking (dry-run, no data mutation)
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Returns diagnostic information for auto-assignment without creating/updating records.
+ *       Current business rules reflected in diagnostics:
+ *       - One booking can have many cleaning tasks.
+ *       - For cleaner-access triggers (SET_CLEANER_ACCESS_TRUE, BOOKING_UPDATED_CLEANER_ACCESS_TRUE),
+ *         request_source becomes USER_REQUEST only when booking.status is IN_USE and checkin_state is not NO_SHOW.
+ *       - If booking checkin_state is NO_SHOW, no new task is created.
+ *         In real execution (not dry-run), open tasks for that booking are moved to CANCELLED.
+ *     parameters:
+ *       - in: path
+ *         name: bookingId
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: trigger
+ *         schema:
+ *           type: string
+ *         description: Optional trigger label for diagnostic context
+ *     responses:
+ *       200:
+ *         description: Diagnostic result generated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     auto_assign_diagnostic:
+ *                       type: object
+ *                       properties:
+ *                         reason:
+ *                           type: string
+ *                           example: DRY_RUN_ELIGIBLE
+ *                         preview:
+ *                           type: object
+ *                           properties:
+ *                             request_source:
+ *                               type: string
+ *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                             status:
+ *                               type: string
+ *                               enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ */
+router.get(
+  "/debug/auto-assign/:bookingId",
+  protect,
+  authorize("admin", "manager"),
+  debugAutoAssignForBooking
+);
 
 /**
  * @swagger
