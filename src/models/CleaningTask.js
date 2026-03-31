@@ -58,6 +58,11 @@ const cleaningTaskSchema = new mongoose.Schema(
       },
       index: true,
     },
+    estimated_start_time: {
+      type: Date,
+      default: null,
+      index: true,
+    },
     due_at: {
       type: Date,
       default: null,

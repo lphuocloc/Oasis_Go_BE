@@ -7,6 +7,7 @@ const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
+const Location = require("../models/Location");
 const mongoose = require("mongoose");
 
 const CLEANING_TASK_STATUSES = [
@@ -518,6 +519,11 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   debugInfo.buffer_policy_id = bufferConfig.policyId;
 
   const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
+  
+  // estimated_start_time = booking.end_time + 5 minutes
+  const estimatedStartTime = bookingLike && bookingLike.end_time
+    ? new Date(new Date(bookingLike.end_time).getTime() + 5 * 60 * 1000)
+    : null;
 
   let allSystemCleaners = [];
   if (includeDebug) {
@@ -767,6 +773,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     cleaner_id: selectedAssignment.staff_id,
     shift_assignment_id: selectedAssignment.id,
     request_source: requestSource,
+    estimated_start_time: estimatedStartTime,
     due_at: dueAt,
     assigned_at: new Date(),
     start_time: null,
@@ -786,6 +793,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
         cleaner_id: payload.cleaner_id,
         shift_assignment_id: payload.shift_assignment_id,
         request_source: payload.request_source,
+        estimated_start_time: payload.estimated_start_time,
         due_at: payload.due_at,
         status: payload.status,
       },
@@ -836,6 +844,7 @@ exports.createCleaningTask = async (data) => {
     cleaner_id,
     shift_assignment_id,
     request_source,
+    estimated_start_time,
     due_at,
     assigned_at,
     notified_at,
@@ -889,6 +898,7 @@ exports.createCleaningTask = async (data) => {
     booking_id: booking_id || null,
     cleaner_id,
     shift_assignment_id: shift_assignment_id || null,
+    estimated_start_time: estimated_start_time || null,
     request_source: normalizedRequestSource,
     due_at: due_at || null,
     assigned_at: assigned_at || null,
@@ -905,6 +915,87 @@ exports.createCleaningTask = async (data) => {
   applyStatusAuditFields(payload);
 
   return CleaningTask.create(payload);
+};
+
+const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return tasks;
+  }
+
+  const taskObjects = tasks.map((task) => (typeof task.toObject === "function" ? task.toObject() : task));
+
+  const podIds = [...new Set(taskObjects.map((task) => String(task.pod_id || "")).filter(Boolean))];
+  const bookingIds = [...new Set(taskObjects.map((task) => String(task.booking_id || "")).filter(Boolean))];
+
+  const [pods, bookings] = await Promise.all([
+    podIds.length > 0
+      ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id").lean()
+      : Promise.resolve([]),
+    bookingIds.length > 0
+      ? Booking.find({ id: { $in: bookingIds } }).select("id user_id").lean()
+      : Promise.resolve([]),
+  ]);
+
+  const podById = new Map(pods.map((pod) => [String(pod.id), pod]));
+  const bookingById = new Map(bookings.map((booking) => [String(booking.id), booking]));
+
+  const userIds = [...new Set(bookings.map((booking) => String(booking.user_id || "")).filter(Boolean))];
+  const clusterIds = [...new Set(pods.map((pod) => String(pod.cluster_id || "")).filter(Boolean))];
+
+  const [bookingUsers, podClusters] = await Promise.all([
+    userIds.length > 0
+      ? User.find({
+        $or: [
+          { id: { $in: userIds } },
+          {
+            _id: {
+              $in: userIds
+                .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                .map((id) => new mongoose.Types.ObjectId(id)),
+            },
+          },
+        ],
+      })
+        .select("_id id name")
+        .lean()
+      : Promise.resolve([]),
+    clusterIds.length > 0
+      ? PodCluster.find({ id: { $in: clusterIds } }).select("id name location_id").lean()
+      : Promise.resolve([]),
+  ]);
+
+  const bookingUserById = new Map();
+  bookingUsers.forEach((userItem) => {
+    if (userItem && userItem.id) bookingUserById.set(String(userItem.id), userItem);
+    if (userItem && userItem._id) bookingUserById.set(String(userItem._id), userItem);
+  });
+
+  const clusterById = new Map(podClusters.map((cluster) => [String(cluster.id), cluster]));
+  const locationIds = [...new Set(podClusters.map((cluster) => String(cluster.location_id || "")).filter(Boolean))];
+
+  const locations = locationIds.length > 0
+    ? await Location.find({ id: { $in: locationIds } }).select("id name").lean()
+    : [];
+  const locationById = new Map(locations.map((location) => [String(location.id), location]));
+
+  return taskObjects.map((task) => {
+    const pod = podById.get(String(task.pod_id || "")) || null;
+    const booking = bookingById.get(String(task.booking_id || "")) || null;
+    const bookingUser = booking ? bookingUserById.get(String(booking.user_id || "")) || null : null;
+    const podCluster = pod ? clusterById.get(String(pod.cluster_id || "")) || null : null;
+    const location = podCluster ? locationById.get(String(podCluster.location_id || "")) || null : null;
+
+    return {
+      ...task,
+      pod_name: pod ? pod.name || null : null,
+      pod_cluster_id: pod ? pod.cluster_id || null : null,
+      pod_cluster_name: podCluster ? podCluster.name || null : null,
+      location_id: podCluster ? podCluster.location_id || null : null,
+      location_name: location ? location.name || null : null,
+      booking_guest_id: booking ? booking.user_id || null : null,
+      booking_guest_name: bookingUser ? bookingUser.name || null : null,
+    };
+  });
 };
 
 exports.getAllCleaningTasks = async (query = {}) => {
@@ -931,7 +1022,8 @@ exports.getAllCleaningTasks = async (query = {}) => {
 
   applyDueRangeFilter(filter, query);
 
-  return CleaningTask.find(filter).sort({ created_at: -1 });
+  const tasks = await CleaningTask.find(filter).sort({ created_at: -1 });
+  return enrichCleaningTasksWithRelatedData(tasks);
 };
 
 exports.getMyCleaningTasks = async (user, query = {}) => {
@@ -971,7 +1063,8 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
 
   applyDueRangeFilter(filter, query);
 
-  return CleaningTask.find(filter).sort({ created_at: -1 });
+  const tasks = await CleaningTask.find(filter).sort({ created_at: -1 });
+  return enrichCleaningTasksWithRelatedData(tasks);
 };
 
 exports.getCleaningTaskById = async (id) => {
@@ -1056,6 +1149,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   task.cleaner_id = nextCleanerId;
   task.shift_assignment_id = nextShiftAssignmentId || null;
+  task.estimated_start_time = data.estimated_start_time !== undefined ? data.estimated_start_time : task.estimated_start_time;
   task.request_source = nextRequestSource;
   task.due_at = data.due_at !== undefined ? data.due_at : task.due_at;
   task.assigned_at = data.assigned_at !== undefined ? data.assigned_at : task.assigned_at;
