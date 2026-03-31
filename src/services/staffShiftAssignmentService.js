@@ -1,5 +1,4 @@
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
-const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const LocationShift = require("../models/LocationShift");
 const Location = require("../models/Location");
 const StaffShift = require("../models/StaffShift");
@@ -136,9 +135,9 @@ class StaffShiftAssignmentService {
         assignment_id: assignment.id,
         start_date: assignment.start_date,
         end_date: assignment.end_date,
+        start_time: assignment.start_time,
+        end_time: assignment.end_time,
         status: assignment.status,
-        checkin_at: assignment.checkin_at,
-        checkout_at: assignment.checkout_at,
         location_shift_id: assignment.location_shift_id,
         shift,
         location,
@@ -214,6 +213,13 @@ class StaffShiftAssignmentService {
       throw error;
     }
 
+    const shift = await StaffShift.findOne({ id: locationShift.shift_id }).lean();
+    if (!shift) {
+      const error = new Error("Staff shift not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
     // Check for duplicate assignment with same date range
     const existing = await StaffShiftAssignment.findOne({
       staff_id,
@@ -234,6 +240,8 @@ class StaffShiftAssignmentService {
         location_shift_id,
         start_date: startDate,
         end_date: endDate,
+        start_time: shift.start_time,
+        end_time: shift.end_time,
         status: "ASSIGNED",
       });
 
@@ -369,120 +377,6 @@ class StaffShiftAssignmentService {
     }
 
     return User.findOne(userQuery).select("_id id role name email");
-  }
-
-  async checkinWork({ shift_assignment_id, user }) {
-    if (!shift_assignment_id) {
-      const error = new Error("shift_assignment_id is required");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const assignment = await StaffShiftAssignment.findOne({ id: shift_assignment_id });
-    if (!assignment) {
-      const error = new Error("Shift assignment not found");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    const requesterIds = [
-      user && user.id ? String(user.id) : null,
-      user && user._id ? String(user._id) : null,
-    ].filter(Boolean);
-
-    if (!requesterIds.includes(String(assignment.staff_id))) {
-      const error = new Error("You are not allowed to check in this assignment");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    if (assignment.status === "ABSENT") {
-      const error = new Error(`Cannot check in assignment with status ${assignment.status}`);
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const existingCheckinLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
-      action: "CHECKIN",
-    }).select("id").lean();
-
-    if (existingCheckinLog) {
-      const error = new Error("You have already checked in");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    await StaffAttendanceLog.create({
-      staff_id: assignment.staff_id,
-      shift_assignment_id: assignment.id,
-      action: "CHECKIN",
-    });
-
-    assignment.checkin_at = new Date();
-    await assignment.save();
-
-    return assignment;
-  }
-
-  async checkoutWork({ shift_assignment_id, user }) {
-    if (!shift_assignment_id) {
-      const error = new Error("shift_assignment_id is required");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const assignment = await StaffShiftAssignment.findOne({ id: shift_assignment_id });
-    if (!assignment) {
-      const error = new Error("Shift assignment not found");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    const requesterIds = [
-      user && user.id ? String(user.id) : null,
-      user && user._id ? String(user._id) : null,
-    ].filter(Boolean);
-
-    if (!requesterIds.includes(String(assignment.staff_id))) {
-      const error = new Error("You are not allowed to check out this assignment");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    const existingCheckinLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
-      action: "CHECKIN",
-    }).select("id").lean();
-
-    if (!existingCheckinLog) {
-      const error = new Error("You must check in before check out");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const existingCheckoutLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
-      action: "CHECKOUT",
-    }).select("id").lean();
-
-    if (existingCheckoutLog) {
-      const error = new Error("You have already checked out");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    await StaffAttendanceLog.create({
-      staff_id: assignment.staff_id,
-      shift_assignment_id: assignment.id,
-      action: "CHECKOUT",
-    });
-
-    assignment.checkout_at = new Date();
-    assignment.status = "COMPLETED";
-    await assignment.save();
-
-    return assignment;
   }
 }
 

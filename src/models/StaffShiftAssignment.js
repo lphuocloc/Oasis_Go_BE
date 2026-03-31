@@ -41,13 +41,15 @@ const staffShiftAssignmentSchema = new mongoose.Schema(
 			},
 			index: true,
 		},
-		checkin_at: {
-			type: Date,
+		start_time: {
+			type: String,
 			default: null,
+			match: [/^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/, "Start time must be HH:mm or HH:mm:ss"],
 		},
-		checkout_at: {
-			type: Date,
+		end_time: {
+			type: String,
 			default: null,
+			match: [/^([01]\d|2[0-3]):([0-5]\d)(:[0-5]\d)?$/, "End time must be HH:mm or HH:mm:ss"],
 		},
 	},
 	{
