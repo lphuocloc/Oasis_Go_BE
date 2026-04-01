@@ -179,6 +179,7 @@ const applyManagerBookingScope = (req, res, next) => {
 
   const scopedPodIds = (req.managerScope && req.managerScope.podIds) || [];
   req.query.pod_ids = scopedPodIds.join(",");
+
   next();
 };
 
