@@ -50,7 +50,7 @@ const getAllBookings = async (req, res) => {
  */
 const getBookingById = async (req, res) => {
     try {
-        const booking = await bookingService.getBookingById(req.params.id);
+        const booking = await bookingService.getBookingById(req.params.id, req.user?.role);
         res.status(200).json({
             success: true,
             message: "Booking retrieved successfully",
@@ -158,7 +158,9 @@ const updateBooking = async (req, res) => {
 
 
 /**
- * Checkin booking using QR token and key token
+ * Checkin booking
+ * - Customer: qr_token only
+ * - Cleaner: key_token only
  * @route POST /api/bookings/checkin
  * @access Private
  */
@@ -173,23 +175,15 @@ const checkinWithQrAndKey = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Checkin successful",
+            message: "Checkin thành công!",
             data: booking,
         });
     } catch (error) {
         const statusCode = error.statusCode || 400;
         const response = {
             success: false,
-            message: error.message || "Failed to checkin",
+            message: error.message || "Checkin thất bại!",
         };
-
-        if (error.remaining_attempts !== undefined) {
-            response.remaining_attempts = error.remaining_attempts;
-        }
-
-        if (error.cooldown_until) {
-            response.cooldown_until = error.cooldown_until;
-        }
 
         res.status(statusCode).json(response);
     }

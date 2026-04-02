@@ -1,6 +1,9 @@
 const Door = require("../models/Door");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
+const OnlineKey = require("../models/OnlineKey");
+const Booking = require("../models/Bookings");
+const { emitDoorUnlockRequest } = require("../socket/socketServer");
 
 class DoorService {
   async createDoor(data) {
@@ -65,6 +68,67 @@ class DoorService {
     await this.getDoorById(id);
     await Door.deleteOne({ id });
     return { message: "Door deleted successfully" };
+  }
+
+  async openDoorWithOnlineKey({ pod_id, key_token }) {
+    if (!pod_id || !key_token) {
+      const error = new Error("pod_id and key_token are required");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const now = new Date();
+
+    const onlineKey = await OnlineKey.findOne({
+      pod_id,
+      key_token,
+      is_revoked: false,
+      valid_from: { $lte: now },
+      valid_to: { $gte: now },
+    }).sort({ valid_from: -1 });
+
+    if (!onlineKey) {
+      const error = new Error("Online key đã hết hạn hoặc chưa hoạt động!");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: onlineKey.booking_id }).select(
+      "id pod_id checked_in_at status"
+    );
+    if (!booking) {
+      const error = new Error("Booking không tìm thấy cho online key này!");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!booking.checked_in_at) {
+      const error = new Error("Booking chưa được check-in, không thể mở cửa!");
+      error.statusCode = 409;
+      throw error;
+    }
+
+    const door = await this.ensureDoorForPod(pod_id);
+    door.lock_status = "UNLOCKED";
+    door.last_sync_at = new Date();
+    await door.save();
+
+    const delivered = emitDoorUnlockRequest({
+      pod_id,
+      payload: {
+        booking_id: booking.id,
+        key_type: onlineKey.key_type,
+        type: "success",
+        message: "Cửa đã mở, mời bạn vào bên trong và đóng cửa lại sau khi vào nhé!",
+      },
+    });
+    return {
+      pod_id,
+      booking_id: booking.id,
+      lock_status: door.lock_status,
+      socket_delivered: delivered,
+      unlocked_at: door.last_sync_at,
+    };
   }
 
   async generateDoorsByPodCluster(clusterId) {

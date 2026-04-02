@@ -69,7 +69,7 @@ class TimeSlotService {
 
             // Validate time
             if (new Date(end_time) <= new Date(start_time)) {
-                const error = new Error("End time must be after start time");
+                const error = new Error("Thời gian kết thúc phải sau thời gian bắt đầu");
                 error.statusCode = 400;
                 throw error;
             }
@@ -86,7 +86,7 @@ class TimeSlotService {
             });
 
             if (overlapping) {
-                const error = new Error("Time slot overlaps with existing slot");
+                const error = new Error("Khung giờ trùng với khung giờ đã tồn tại");
                 error.statusCode = 409;
                 throw error;
             }
@@ -180,7 +180,7 @@ class TimeSlotService {
             const timeSlot = await TimeSlot.findOne({ id }).lean();
 
             if (!timeSlot) {
-                const error = new Error("Time slot not found");
+                const error = new Error("Khung giờ không tìm thấy");
                 error.statusCode = 404;
                 throw error;
             }
@@ -202,7 +202,7 @@ class TimeSlotService {
             const timeSlot = await TimeSlot.findOne({ id });
 
             if (!timeSlot) {
-                const error = new Error("Time slot not found");
+                const error = new Error("Khung giờ không tìm thấy");
                 error.statusCode = 404;
                 throw error;
             }
@@ -213,7 +213,7 @@ class TimeSlotService {
                 const endTime = data.end_time ? new Date(data.end_time) : timeSlot.end_time;
 
                 if (endTime <= startTime) {
-                    const error = new Error("End time must be after start time");
+                    const error = new Error("Thời gian kết thúc phải sau thời gian bắt đầu");
                     error.statusCode = 400;
                     throw error;
                 }
@@ -242,21 +242,21 @@ class TimeSlotService {
             const timeSlot = await TimeSlot.findOne({ id });
 
             if (!timeSlot) {
-                const error = new Error("Time slot not found");
+                const error = new Error("Khung giờ không tìm thấy");
                 error.statusCode = 404;
                 throw error;
             }
 
             // Don't allow deleting reserved slots
             if (timeSlot.status === 'RESERVED') {
-                const error = new Error("Cannot delete reserved time slot");
+                const error = new Error("Không thể xóa khung giờ đã được đặt");
                 error.statusCode = 400;
                 throw error;
             }
 
             await TimeSlot.deleteOne({ id });
 
-            return { message: "Time slot deleted successfully" };
+            return { message: "Khung giờ đã được xóa thành công" };
         } catch (error) {
             throw error;
         }
@@ -283,7 +283,7 @@ class TimeSlotService {
             );
 
             return {
-                message: "Time slots reserved successfully",
+                message: "Khung giờ đã được đặt thành công",
                 modifiedCount: result.modifiedCount
             };
         } catch (error) {
@@ -304,7 +304,7 @@ class TimeSlotService {
             );
 
             return {
-                message: "Time slots released successfully",
+                message: "Khung giờ đã được giải phóng thành công",
                 modifiedCount: result.modifiedCount
             };
         } catch (error) {
