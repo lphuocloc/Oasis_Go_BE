@@ -537,7 +537,7 @@ class BookingService {
    * @param {String} bookingId - Booking ID
    * @returns {Promise<Object>} Booking details
    */
-  async getBookingById(bookingId) {
+  async getBookingById(bookingId, viewerRole = null) {
     const booking = await Booking.findOne({ id: bookingId })
       .select(
         "id order_id user_id pod_id start_time end_time actual_end_time status " +
@@ -551,7 +551,8 @@ class BookingService {
       throw new Error("Booking not found");
     }
 
-    return booking;
+    const [bookingWithKeys] = await this._attachOnlineKeys([booking], viewerRole);
+    return bookingWithKeys || booking;
   }
 
   /**

@@ -50,7 +50,7 @@ const getAllBookings = async (req, res) => {
  */
 const getBookingById = async (req, res) => {
     try {
-        const booking = await bookingService.getBookingById(req.params.id);
+        const booking = await bookingService.getBookingById(req.params.id, req.user?.role);
         res.status(200).json({
             success: true,
             message: "Booking retrieved successfully",
@@ -175,14 +175,14 @@ const checkinWithQrAndKey = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Checkin successful",
+            message: "Checkin thành công!",
             data: booking,
         });
     } catch (error) {
         const statusCode = error.statusCode || 400;
         const response = {
             success: false,
-            message: error.message || "Failed to checkin",
+            message: error.message || "Checkin thất bại!",
         };
 
         res.status(statusCode).json(response);
