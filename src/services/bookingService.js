@@ -477,7 +477,16 @@ class BookingService {
       query.pod_id = { $in: ids };
     }
     if (order_id) query.order_id = order_id;
-    if (status) query.status = status;
+    if (status) {
+      const statusValues = (Array.isArray(status) ? status : String(status).split(","))
+        .map((item) => String(item || "").trim().toUpperCase())
+        .filter(Boolean);
+
+      const hasAllStatus = statusValues.includes("ALL");
+      if (!hasAllStatus && statusValues.length > 0) {
+        query.status = statusValues.length === 1 ? statusValues[0] : { $in: statusValues };
+      }
+    }
 
     if (start_date || end_date) {
       query.start_time = {};
@@ -1148,8 +1157,10 @@ class BookingService {
       throw error;
     }
 
-    if (nextPod.status === "MAINTENANCE") {
-      const error = new Error("Cannot move booking to a pod under maintenance");
+    if (String(nextPod.status || "").toUpperCase() !== "AVAILABLE") {
+      const error = new Error(
+        `Target pod must be AVAILABLE for change pod action (current status: ${nextPod.status || "UNKNOWN"})`
+      );
       error.statusCode = 400;
       throw error;
     }

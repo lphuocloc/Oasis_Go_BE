@@ -47,6 +47,10 @@ const options = {
             {
                 name: 'Pods',
                 description: 'Pod management endpoints with Grid and Single creation modes'
+            },
+            {
+                name: 'SupportRequests',
+                description: 'Support request endpoints for users and managers'
             }
         ],
         components: {
