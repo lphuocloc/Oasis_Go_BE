@@ -137,6 +137,17 @@ const {
  *         schema:
  *           type: string
  *           enum: [FOUND, STORED, CLAIMED, DISPOSED]
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
  *     responses:
  *       200:
  *         description: Lost & found items retrieved successfully
@@ -153,6 +164,18 @@ const {
  *                   type: array
  *                   items:
  *                     $ref: '#/components/schemas/LostFoundItem'
+ *                 pagination:
+ *                   type: object
+ *                   nullable: true
+ *                   properties:
+ *                     current_page:
+ *                       type: integer
+ *                     total_pages:
+ *                       type: integer
+ *                     total_items:
+ *                       type: integer
+ *                     items_per_page:
+ *                       type: integer
  */
 router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundItems);
 

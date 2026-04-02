@@ -5,7 +5,6 @@ const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
   "NOTIFIED",
   "ACCEPTED",
-  "ARRIVED",
   "IN_PROGRESS",
   "DONE",
   "CANCELLED",
@@ -57,6 +56,11 @@ const cleaningTaskSchema = new mongoose.Schema(
         values: CLEANING_REQUEST_SOURCES,
         message: "{VALUE} is not a valid request_source",
       },
+      index: true,
+    },
+    estimated_start_time: {
+      type: Date,
+      default: null,
       index: true,
     },
     due_at: {
@@ -121,12 +125,6 @@ cleaningTaskSchema.index({ shift_assignment_id: 1, created_at: -1 });
 cleaningTaskSchema.index({ cleaner_id: 1, status: 1, due_at: 1 });
 cleaningTaskSchema.index({ shift_assignment_id: 1, status: 1 });
 cleaningTaskSchema.index({ pod_id: 1, created_at: -1 });
-cleaningTaskSchema.index(
-  { booking_id: 1 },
-  {
-    unique: true,
-    partialFilterExpression: { booking_id: { $type: "string" } },
-  }
-);
+cleaningTaskSchema.index({ booking_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("CleaningTask", cleaningTaskSchema);

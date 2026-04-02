@@ -93,3 +93,26 @@ exports.backfillCleaningTasks = async (req, res) => {
     });
   }
 };
+
+exports.debugAutoAssignForBooking = async (req, res) => {
+  try {
+    const bookingId = req.params.bookingId;
+    const result = await cleaningTaskService.diagnoseAutoAssignForBooking(bookingId, {
+      trigger: req.query.trigger,
+      ignore_existing_task_check:
+        String(req.query.ignore_existing_task_check || "").toLowerCase() === "true",
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Auto-assign diagnostic generated successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error generating auto-assign diagnostic",
+    });
+  }
+};

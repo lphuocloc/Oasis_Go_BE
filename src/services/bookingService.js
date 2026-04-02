@@ -8,16 +8,31 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
-const { autoAssignTaskForBooking } = require("./cleaningTaskService");
+const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
+const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  async _revokeCleanerKeysForBooking(bookingId) {
+    if (!bookingId) return;
+    await OnlineKey.updateMany(
+      {
+        booking_id: String(bookingId),
+        key_type: "CLEANER",
+        is_revoked: false,
+      },
+      {
+        $set: { is_revoked: true },
+      }
+    );
+  }
+
   async _tryAutoAssignCleaningTask(booking, trigger = "UNKNOWN") {
     if (!booking) return;
 
@@ -171,6 +186,9 @@ class BookingService {
           $set: { is_revoked: true },
         }
       );
+
+      // Cancel all open cleaning tasks for this booking
+      await cancelOpenTasksForNoShowBooking(booking.id);
 
       await notificationService.sendToUser(booking.user_id, {
         title: "Phiên sử dụng kết thúc do không check-in",
@@ -527,6 +545,77 @@ class BookingService {
   }
 
   /**
+   * Get cleaner online key for current authenticated cleaner by booking ID
+   * @param {String} bookingId - Booking ID
+   * @param {Object} actor - Authenticated user
+   * @returns {Promise<Object>} Cleaner online key payload
+   */
+  async getMyCleanerKeyByBookingId(bookingId, actor) {
+    const actorRole = String(actor?.role || "").toLowerCase();
+    const actorId = String(actor?._id || actor?.id || "");
+
+    if (!actorId) {
+      const error = new Error("Không xác định được người dùng hiện tại");
+      error.statusCode = 401;
+      throw error;
+    }
+
+    if (actorRole !== "cleaner") {
+      const error = new Error("Chỉ cleaner mới được lấy cleaner key của chính mình");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: bookingId }).select(
+      "id status checkin_state cleaner_access_allowed"
+    );
+    if (!booking) {
+      const error = new Error("Booking not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      const error = new Error("Không được phép lấy cleaner key cho booking NO_SHOW");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!booking.cleaner_access_allowed) {
+      const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const cleanerKey = await OnlineKey.findOne({
+      booking_id: String(bookingId),
+      key_type: "CLEANER",
+      user_id: actorId,
+      is_revoked: false,
+    })
+      .sort({ createdAt: -1 })
+      .select("id booking_id pod_id user_id key_type key_token valid_from valid_to is_revoked createdAt updatedAt");
+
+    if (!cleanerKey) {
+      const error = new Error("Không tìm thấy cleaner key cho booking này");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;
+
+    return {
+      booking_id: String(booking.id),
+      booking_status: booking.status,
+      booking_checkin_state: booking.checkin_state,
+      online_key: {
+        ...keyData,
+        role: "cleaner",
+      },
+    };
+  }
+
+  /**
    * Get bookings by user
    * @param {String} userId - User ID
    * @param {String} status - Optional status filter
@@ -638,6 +727,11 @@ class BookingService {
     });
 
     await booking.save();
+
+    // NO_SHOW has highest priority: cleaner access must be blocked and keys revoked.
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      await this._revokeCleanerKeysForBooking(booking.id);
+    }
 
     if (!previousCleanerAccessAllowed && booking.cleaner_access_allowed === true) {
       await this._tryAutoAssignCleaningTask(booking, "BOOKING_UPDATED_CLEANER_ACCESS_TRUE");
@@ -830,15 +924,25 @@ class BookingService {
         throw error;
       }
 
-      if (booking.status !== "COMPLETED") {
-        const error = new Error("Chỉ có thể vào làm vệ sinh sau khi khách hàng checkout (booking COMPLETED)");
-        error.statusCode = 400;
-        throw error;
-      }
-
       if (!booking.cleaner_access_allowed) {
         const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
         error.statusCode = 403;
+        throw error;
+      }
+
+      const cleanerWindowEnd = booking.end_time
+        ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
+        : null;
+
+      const isInUseUrgentCleaning = booking.status === "IN_USE";
+      const isCompletedCleaningWindow =
+        booking.status === "COMPLETED" && cleanerWindowEnd && now <= cleanerWindowEnd;
+
+      if (!isInUseUrgentCleaning && !isCompletedCleaningWindow) {
+        const error = new Error(
+          `Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED trong ${CLEANER_POST_CHECKOUT_WINDOW_MINUTES} phut sau checkout`
+        );
+        error.statusCode = 400;
         throw error;
       }
 
@@ -955,6 +1059,10 @@ class BookingService {
     booking.cleaner_access_allowed = allowed;
     booking.cleaner_access_updated_at = new Date();
     await booking.save();
+
+    if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+      await this._revokeCleanerKeysForBooking(booking.id);
+    }
 
     if (allowed) {
       await this._tryAutoAssignCleaningTask(booking, "SET_CLEANER_ACCESS_TRUE");

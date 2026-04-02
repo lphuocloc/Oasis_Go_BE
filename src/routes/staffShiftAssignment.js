@@ -40,7 +40,7 @@ const router = express.Router();
  *         required: false
  *         schema:
  *           type: string
- *         description: Comma-separated statuses (ASSIGNED,CHECKED_IN,COMPLETED,ABSENT)
+ *         description: Comma-separated statuses (ASSIGNED,COMPLETED,ABSENT)
  *     responses:
  *       200:
  *         description: My shift assignments retrieved successfully
@@ -107,72 +107,6 @@ router.post(
 	authMiddleware.authorize("admin", "manager"),
 	loadManagerScope,
 	staffShiftAssignmentController.createAssignment
-);
-
-/**
- * @swagger
- * /api/staff-shift-assignments/checkin:
- *   post:
- *     summary: Check in for a shift
- *     description: Record a staff member checking in to start their shift
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               shift_assignment_id:
- *                 type: string
- *                 description: Assignment ID
- *                 example: "123e4567-e89b-12d3-a456-426614174002"
- *             required:
- *               - shift_assignment_id
- *     responses:
- *       200:
- *         description: Check-in successful
- */
-router.post(
-	"/checkin",
-	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
-	staffShiftAssignmentController.checkinWork
-);
-
-/**
- * @swagger
- * /api/staff-shift-assignments/checkout:
- *   post:
- *     summary: Check out from a shift
- *     description: Record a staff member checking out to end their shift
- *     tags: [Attendance]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         application/json:
- *           schema:
- *             type: object
- *             properties:
- *               shift_assignment_id:
- *                 type: string
- *                 description: Assignment ID
- *                 example: "123e4567-e89b-12d3-a456-426614174002"
- *             required:
- *               - shift_assignment_id
- *     responses:
- *       200:
- *         description: Check-out successful
- */
-router.post(
-	"/checkout",
-	authMiddleware.protect,
-	authMiddleware.authorize("admin"),
-	staffShiftAssignmentController.checkoutWork
 );
 
 /**
@@ -278,7 +212,6 @@ router.get(
  *                 type: string
  *                 enum:
  *                   - ASSIGNED
- *                   - CHECKED_IN
  *                   - COMPLETED
  *                   - ABSENT
  *     responses:

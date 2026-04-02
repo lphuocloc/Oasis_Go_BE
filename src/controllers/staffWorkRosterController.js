@@ -48,7 +48,7 @@ const getAllRosters = async (req, res) => {
       }
     }
 
-    const rosters = await staffWorkRosterService.getAllRosters(query);
+    const rosters = await staffWorkRosterService.getAllRosters(query, req.user);
     res.status(200).json({
       success: true,
       count: rosters.length,
@@ -65,6 +65,13 @@ const getAllRosters = async (req, res) => {
 const getRosterById = async (req, res) => {
   try {
     const roster = await staffWorkRosterService.getRosterById(req.params.id);
+
+    if (req.user && req.user.role === "cleaner") {
+      const cleanerId = req.user.id ? String(req.user.id) : "";
+      if (!cleanerId || String(roster.staff_id) !== cleanerId) {
+        return res.status(403).json({ success: false, message: "You can only view your own roster" });
+      }
+    }
 
     if (req.user && req.user.role === "manager") {
       const locShift = await LocationShift.findOne({ id: roster.location_shift_id }).select("location_id").lean();
