@@ -10,6 +10,7 @@ const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
 const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
+const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
@@ -834,6 +835,20 @@ class BookingService {
       }
 
       const updatedBooking = await booking.startUsing();
+
+      // Notify pod device to switch UI from QR screen to keypad screen.
+      const actorName =
+        (actor && (actor.name || actor.full_name || actor.fullName || actor.email)) ||
+        (await User.findOne({ _id: actorId }).select("name email").lean())?.name ||
+        "Unknown";
+
+      emitPodCheckinConfirmed({
+        pod_id: booking.pod_id,
+        booking_id: booking.id,
+        customer_name: actorName,
+        action: "SWITCH_TO_KEYPAD",
+        session_expires_in: 300,
+      });
 
       await BookingAccessSession.create({
         booking_id: booking.id,
