@@ -158,7 +158,9 @@ const updateBooking = async (req, res) => {
 
 
 /**
- * Checkin booking using QR token and key token
+ * Checkin booking
+ * - Customer: qr_token only
+ * - Cleaner: key_token only
  * @route POST /api/bookings/checkin
  * @access Private
  */
@@ -182,14 +184,6 @@ const checkinWithQrAndKey = async (req, res) => {
             success: false,
             message: error.message || "Failed to checkin",
         };
-
-        if (error.remaining_attempts !== undefined) {
-            response.remaining_attempts = error.remaining_attempts;
-        }
-
-        if (error.cooldown_until) {
-            response.cooldown_until = error.cooldown_until;
-        }
 
         res.status(statusCode).json(response);
     }
