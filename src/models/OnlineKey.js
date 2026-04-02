@@ -2,9 +2,6 @@ const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 const Booking = require("./Bookings");
 
-const MAX_FAILED_ATTEMPTS = 5;
-const DEFAULT_COOLDOWN_MINUTES = 5;
-
 const onlineKeySchema = new mongoose.Schema(
     {
         id: {
@@ -54,21 +51,7 @@ const onlineKeySchema = new mongoose.Schema(
             type: Boolean,
             default: false,
             required: true,
-        },
-        failed_attempts: {
-            type: Number,
-            default: 0,
-            min: 0,
-            required: true,
-        },
-        locked_until: {
-            type: Date,
-            default: null,
-        },
-        last_failed_at: {
-            type: Date,
-            default: null,
-        },
+        }
     },
     {
         timestamps: true,
@@ -93,40 +76,15 @@ onlineKeySchema.index(
     }
 );
 
-onlineKeySchema.methods.isLocked = function (now = new Date()) {
-    return Boolean(this.locked_until && this.locked_until.getTime() > now.getTime());
-};
-
 onlineKeySchema.methods.isActiveInTimeWindow = function (now = new Date()) {
     const nowMs = now.getTime();
     return this.valid_from.getTime() <= nowMs && nowMs <= this.valid_to.getTime();
-};
-
-onlineKeySchema.methods.registerFailedAttempt = async function (cooldownMinutes = DEFAULT_COOLDOWN_MINUTES) {
-    this.failed_attempts = (this.failed_attempts || 0) + 1;
-    this.last_failed_at = new Date();
-
-    if (this.failed_attempts >= MAX_FAILED_ATTEMPTS) {
-        this.locked_until = new Date(Date.now() + cooldownMinutes * 60 * 1000);
-    }
-
-    await this.save();
-    return this;
-};
-
-onlineKeySchema.methods.resetAttemptState = async function () {
-    this.failed_attempts = 0;
-    this.locked_until = null;
-    this.last_failed_at = null;
-    await this.save();
-    return this;
 };
 
 onlineKeySchema.statics.validateOnlineKey = async function ({
     pod_id,
     key_type,
     key_token,
-    cooldown_minutes = DEFAULT_COOLDOWN_MINUTES,
 }) {
     const now = new Date();
 
@@ -144,19 +102,9 @@ onlineKeySchema.statics.validateOnlineKey = async function ({
         throw error;
     }
 
-    if (onlineKey.isLocked(now)) {
-        const error = new Error("Too many failed attempts. Please wait for cooldown");
-        error.statusCode = 429;
-        error.cooldown_until = onlineKey.locked_until;
-        throw error;
-    }
-
     if (onlineKey.key_token !== key_token) {
-        await onlineKey.registerFailedAttempt(cooldown_minutes);
         const error = new Error("Invalid online key");
         error.statusCode = 401;
-        error.remaining_attempts = Math.max(0, MAX_FAILED_ATTEMPTS - onlineKey.failed_attempts);
-        error.cooldown_until = onlineKey.locked_until;
         throw error;
     }
 
@@ -179,15 +127,8 @@ onlineKeySchema.statics.validateOnlineKey = async function ({
         }
     }
 
-    if (onlineKey.failed_attempts > 0 || onlineKey.locked_until || onlineKey.last_failed_at) {
-        await onlineKey.resetAttemptState();
-    }
-
     return onlineKey;
 };
-
-onlineKeySchema.statics.MAX_FAILED_ATTEMPTS = MAX_FAILED_ATTEMPTS;
-onlineKeySchema.statics.DEFAULT_COOLDOWN_MINUTES = DEFAULT_COOLDOWN_MINUTES;
 
 const OnlineKey = mongoose.model("OnlineKey", onlineKeySchema);
 
