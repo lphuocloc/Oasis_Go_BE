@@ -13,6 +13,7 @@ module.exports = {
   SupportRequest: require("./SupportRequest"),
   BookingAccessSession: require("./BookingAccessSession"),
   OnlineKey: require("./OnlineKey"),
+  Wallet: require("./Wallet"),
   Incident: require("./Incidents"),
   IncidentPhoto: require("./IncidentPhoto"),
   LostFoundItem: require("./LostFoundItem"),
