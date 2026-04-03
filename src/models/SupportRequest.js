@@ -107,7 +107,7 @@ supportRequestSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      status: { $in: ["PENDING", "PROCESSING"] },
+      status: { $in: ["PENDING", "PROCESSING", "IN_PROGRESS"] },
     },
     name: "uniq_active_support_request_per_booking",
   }
