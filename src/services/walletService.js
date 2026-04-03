@@ -1,5 +1,6 @@
 const bcrypt = require("bcryptjs");
 const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const User = require("../models/User");
 const { generateOTP, sendOTPEmail } = require("../utils/emailService");
 
@@ -47,6 +48,70 @@ class WalletService {
     async getMyWallet(userId) {
         const wallet = await this.getOrCreateWalletByUserId(userId);
         return this.toWalletResponse(wallet);
+    }
+
+    async getMyWalletTransactions(userId, query = {}) {
+        const wallet = await this.getOrCreateWalletByUserId(userId);
+
+        const page = Math.max(parseInt(query.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(query.limit, 10) || 10, 1), 100);
+
+        const filter = { wallet_id: wallet.id };
+
+        if (query.type) {
+            const normalizedType = String(query.type).toUpperCase();
+            const allowedTypes = ["TOPUP", "PAYMENT", "REFUND"];
+
+            if (!allowedTypes.includes(normalizedType)) {
+                const error = new Error("Invalid transaction type. Allowed values: TOPUP, PAYMENT, REFUND");
+                error.statusCode = 400;
+                throw error;
+            }
+
+            filter.type = normalizedType;
+        }
+
+        if (query.startDate || query.endDate) {
+            filter.created_at = {};
+
+            if (query.startDate) {
+                const startDate = new Date(query.startDate);
+                if (Number.isNaN(startDate.getTime())) {
+                    const error = new Error("Invalid startDate");
+                    error.statusCode = 400;
+                    throw error;
+                }
+                filter.created_at.$gte = startDate;
+            }
+
+            if (query.endDate) {
+                const endDate = new Date(query.endDate);
+                if (Number.isNaN(endDate.getTime())) {
+                    const error = new Error("Invalid endDate");
+                    error.statusCode = 400;
+                    throw error;
+                }
+                filter.created_at.$lte = endDate;
+            }
+        }
+
+        const total = await WalletTransaction.countDocuments(filter);
+        const transactions = await WalletTransaction.find(filter)
+            .sort({ created_at: -1 })
+            .skip((page - 1) * limit)
+            .limit(limit)
+            .lean();
+
+        return {
+            wallet: this.toWalletResponse(wallet),
+            pagination: {
+                page,
+                limit,
+                total,
+                totalPages: Math.ceil(total / limit),
+            },
+            data: transactions,
+        };
     }
 
     async createPin(userId, { new_pin, confirm_pin }) {
@@ -100,7 +165,7 @@ class WalletService {
         const isCurrentPinMatch = await bcrypt.compare(currentPin, wallet.pincode_hash);
         if (!isCurrentPinMatch) {
             const error = new Error("Current PIN is incorrect");
-            error.statusCode = 401;
+            error.statusCode = 400;
             throw error;
         }
 
@@ -132,7 +197,7 @@ class WalletService {
         const user = await User.findById(userId).select("email");
         if (!user || !user.email) {
             const error = new Error("User email not found");
-            error.statusCode = 404;
+            error.statusCode = 400;
             throw error;
         }
 
@@ -172,7 +237,7 @@ class WalletService {
         const user = await User.findById(userId).select("resetPasswordOtp resetPasswordOtpExpires");
         if (!user) {
             const error = new Error("User not found");
-            error.statusCode = 404;
+            error.statusCode = 400;
             throw error;
         }
 

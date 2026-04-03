@@ -8,11 +8,14 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const Location = require("../models/Location");
 const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
 const timeSlotService = require("./timeSlotService");
 const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
+const depositPolicyService = require("./depositPolicyService");
 
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
@@ -20,10 +23,66 @@ const HOLD_EXPIRATION_MINUTES = 10;
 const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 const PRICE_UNIT_MULTIPLIER = 10000;
 const REFUND_CANCEL_WINDOW_HOURS = 48;
-const REFUND_RATE_BEFORE_48H = 0.8;
-
+const REFUND_RATE_BEFORE_48H = 1;
 
 class BookingOrderService {
+    async _calculateVolumeBasedDeposit(podCount = 0) {
+        const pricingPolicy = await depositPolicyService.getPolicyForCalculation();
+        const tier1Limit = Number(pricingPolicy.tier_1_pod_limit || 3);
+        const tier2Limit = Number(pricingPolicy.tier_2_pod_limit || 6);
+        const tier1Price = Number(pricingPolicy.tier_1_price || 0);
+        const tier2Price = Number(pricingPolicy.tier_2_price || 0);
+        const tier3Price = Number(pricingPolicy.tier_3_price || 0);
+
+        const normalizedPodCount = Math.max(0, parseInt(podCount, 10) || 0);
+        const tier1Pods = Math.min(normalizedPodCount, tier1Limit);
+        const tier2Pods = Math.min(Math.max(normalizedPodCount - tier1Limit, 0), tier2Limit - tier1Limit);
+        const tier3Pods = Math.max(normalizedPodCount - tier2Limit, 0);
+
+        const tier1Amount = tier1Pods * tier1Price;
+        const tier2Amount = tier2Pods * tier2Price;
+        const tier3Amount = tier3Pods * tier3Price;
+
+        const depositTotal = tier1Amount + tier2Amount + tier3Amount;
+        const depositOriginalTotal = normalizedPodCount * tier1Price;
+        const depositDiscount = Math.max(0, depositOriginalTotal - depositTotal);
+
+        return {
+            pod_count: normalizedPodCount,
+            deposit_original_total: depositOriginalTotal,
+            deposit_discount: depositDiscount,
+            deposit_total: depositTotal,
+            tiers: {
+                tier_1: {
+                    pod_count: tier1Pods,
+                    amount_per_pod: tier1Price,
+                    amount: tier1Amount,
+                },
+                tier_2: {
+                    pod_count: tier2Pods,
+                    amount_per_pod: tier2Price,
+                    amount: tier2Amount,
+                },
+                tier_3: {
+                    pod_count: tier3Pods,
+                    amount_per_pod: tier3Price,
+                    amount: tier3Amount,
+                },
+            },
+            policy: {
+                pricing_model: "VOLUME_BASED_DEPOSIT",
+                tier_1_pod_limit: tier1Limit,
+                tier_2_pod_limit: tier2Limit,
+                tier_1_price: tier1Price,
+                tier_2_price: tier2Price,
+                tier_3_price: tier3Price,
+                pricing_source: pricingPolicy.source || "DEFAULT",
+                partial_cancel_behavior: "KEEP_DEPOSIT_UNCHANGED",
+                settlement_behavior: "PENDING_INSPECTION",
+            },
+        };
+    }
+
     _normalizeIdList(input) {
         if (!input) return [];
 
@@ -96,8 +155,151 @@ class BookingOrderService {
             refundableBaseAmount: Number(refundableBaseAmount.toFixed(2)),
             refundRate: REFUND_RATE_BEFORE_48H,
             refundAmount,
-            policy: `Refund 80% when cancelled at least ${REFUND_CANCEL_WINDOW_HOURS} hours before check-in`,
+            policy: `Refund 100% when cancelled at least ${REFUND_CANCEL_WINDOW_HOURS} hours before check-in`,
         };
+    }
+
+    async _getOrCreateWalletByUserId(userId, session = null) {
+        let wallet = await Wallet.findOne({ user_id: userId }).session(session);
+        if (!wallet) {
+            const createdWallets = await Wallet.create([
+                {
+                    user_id: userId,
+                    balance: 0,
+                    status: "ACTIVE",
+                },
+            ], { session });
+            wallet = createdWallets[0];
+        }
+        return wallet;
+    }
+
+    async _creditWalletWithRefund({
+        session,
+        userId,
+        orderId,
+        rentalRefundAmount = 0,
+        depositRefundAmount = 0,
+        cancelledBookingIds = [],
+        isFullCancel = false,
+        transactionId = null,
+    }) {
+        const rentalAmount = Number(rentalRefundAmount || 0);
+        const depositAmount = Number(depositRefundAmount || 0);
+        const totalAmount = Number((rentalAmount + depositAmount).toFixed(2));
+
+        if (totalAmount <= 0) {
+            return {
+                wallet: null,
+                walletTransactions: [],
+                totalRefundAmount: 0,
+            };
+        }
+
+        const wallet = await this._getOrCreateWalletByUserId(userId, session);
+        const walletBalanceBefore = Number(wallet.balance || 0);
+        const walletBalanceAfter = Number((walletBalanceBefore + totalAmount).toFixed(2));
+
+        wallet.balance = walletBalanceAfter;
+        await wallet.save({ session });
+
+        const walletTransactionsToCreate = [];
+        let runningBefore = walletBalanceBefore;
+
+        if (rentalAmount > 0) {
+            const runningAfter = Number((runningBefore + rentalAmount).toFixed(2));
+            const bookingLabel = cancelledBookingIds.length > 0 ? cancelledBookingIds.join(", ") : "N/A";
+            walletTransactionsToCreate.push({
+                wallet_id: wallet.id,
+                amount: rentalAmount,
+                type: "REFUND",
+                transaction_id: transactionId,
+                reference_id: orderId,
+                description: isFullCancel
+                    ? `Refund tien thue don ${orderId} cho bookings [${bookingLabel}]`
+                    : `Refund tien thue Pod [${bookingLabel}] - Coc giu lai quyet toan sau`,
+                balance_before: runningBefore,
+                balance_after: runningAfter,
+            });
+            runningBefore = runningAfter;
+        }
+
+        if (depositAmount > 0) {
+            const runningAfter = Number((runningBefore + depositAmount).toFixed(2));
+            walletTransactionsToCreate.push({
+                wallet_id: wallet.id,
+                amount: depositAmount,
+                type: "REFUND",
+                transaction_id: transactionId,
+                reference_id: orderId,
+                description: `Hoan 100% tien coc don ${orderId} khi huy toan bo`,
+                balance_before: runningBefore,
+                balance_after: runningAfter,
+            });
+            runningBefore = runningAfter;
+        }
+
+        let createdWalletTransactions = [];
+        if (walletTransactionsToCreate.length > 0) {
+            createdWalletTransactions = await WalletTransaction.create(walletTransactionsToCreate, { session });
+        }
+
+        return {
+            wallet,
+            walletTransactions: createdWalletTransactions,
+            totalRefundAmount: totalAmount,
+            balanceBefore: walletBalanceBefore,
+            balanceAfter: walletBalanceAfter,
+        };
+    }
+
+    async _notifyCancellationAndRefund({
+        userId,
+        orderId,
+        cancellationType,
+        cancelledBookingIds = [],
+        refund = {},
+    }) {
+        const normalizedUserId = String(userId || "").trim();
+        if (!normalizedUserId) return;
+
+        const normalizedOrderId = String(orderId || "").trim();
+        const cancellationKind = cancellationType === "FULL_CANCEL" ? "toan bo" : "mot phan";
+        const bookingCount = Array.isArray(cancelledBookingIds) ? cancelledBookingIds.length : 0;
+
+        await notificationService.sendToUser(normalizedUserId, {
+            title: "Huy dat cho thanh cong",
+            message: `Ban da huy ${cancellationKind} don ${normalizedOrderId} (${bookingCount} pod).`,
+            type: "BOOKING",
+            event_code: "BOOKING_CANCELLED",
+            dedupe_key: `BOOKING_CANCELLED:${normalizedOrderId}:${cancellationType}:${cancelledBookingIds.join(",")}`,
+            data: {
+                type: "BOOKING_CANCELLED",
+                order_id: normalizedOrderId,
+                cancellation_type: cancellationType,
+                cancelled_booking_ids: cancelledBookingIds,
+                cancelled_booking_count: String(bookingCount),
+            },
+        });
+
+        if (Number(refund?.amount || 0) <= 0) return;
+
+        await notificationService.sendToUser(normalizedUserId, {
+            title: "Hoan tien thanh cong",
+            message: `He thong da hoan ${Number(refund.amount || 0).toLocaleString("vi-VN")} VND vao vi cua ban.`,
+            type: "PAYMENT",
+            event_code: "PAYMENT_REFUND_SUCCESS",
+            dedupe_key: `PAYMENT_REFUND_SUCCESS:${normalizedOrderId}:${refund?.refunded_transaction_id || "NO_TX"}`,
+            data: {
+                type: "PAYMENT_REFUND_SUCCESS",
+                order_id: normalizedOrderId,
+                refund_amount: String(refund.amount || 0),
+                rental_amount: String(refund.rental_amount || 0),
+                deposit_amount: String(refund.deposit_amount || 0),
+                refunded_transaction_id: String(refund.refunded_transaction_id || ""),
+                refunded_to_wallet_immediately: String(!!refund.refunded_to_wallet_immediately),
+            },
+        });
     }
 
     /**
@@ -234,11 +436,14 @@ class BookingOrderService {
                 const numberOfSlots = durationMinutes / slotDurationMinutes;
 
                 const pricePerPod = pricePerSlot * numberOfSlots;
-                const totalBasePrice = pricePerPod * pod_count;
+                const selectedPodCount = podsToBook.length;
+                const totalBasePrice = pricePerPod * selectedPodCount;
 
                 // Apply discount
                 const discountAmount = total_discount || 0;
                 const finalTotalPrice = Math.max(0, totalBasePrice - discountAmount);
+                const depositPricing = await this._calculateVolumeBasedDeposit(selectedPodCount);
+                const payableTotalPrice = finalTotalPrice + depositPricing.deposit_total;
 
                 // Create booking order within transaction
                 const bookingOrderArray = await BookingOrder.create([{
@@ -246,6 +451,11 @@ class BookingOrderService {
                     total_base_price: totalBasePrice,
                     total_discount: discountAmount,
                     final_total_price: finalTotalPrice,
+                    deposit_original_total: depositPricing.deposit_original_total,
+                    deposit_discount: depositPricing.deposit_discount,
+                    deposit_total: depositPricing.deposit_total,
+                    payable_total_price: payableTotalPrice,
+                    deposit_settlement_status: "PENDING_INSPECTION",
                     status: 'PENDING'
                 }], { session });
 
@@ -309,6 +519,11 @@ class BookingOrderService {
                         total_base_price: bookingOrder.total_base_price,
                         total_discount: bookingOrder.total_discount,
                         final_total_price: bookingOrder.final_total_price,
+                        deposit_original_total: bookingOrder.deposit_original_total,
+                        deposit_discount: bookingOrder.deposit_discount,
+                        deposit_total: bookingOrder.deposit_total,
+                        payable_total_price: bookingOrder.payable_total_price,
+                        deposit_settlement_status: bookingOrder.deposit_settlement_status,
                         status: bookingOrder.status,
                         created_at: bookingOrder.createdAt,
                     },
@@ -332,14 +547,20 @@ class BookingOrderService {
                         duration_hours: durationHours,
                         slot_duration_minutes: slotDurationMinutes,
                         number_of_slots: numberOfSlots,
-                        pods_booked: pod_count,
+                        pods_booked: selectedPodCount,
                         base_price_modifier: basePriceModifier,
                         price_unit_multiplier: PRICE_UNIT_MULTIPLIER,
                         price_per_slot: pricePerSlot,
                         price_per_pod: pricePerPod,
                         total_base_price: totalBasePrice,
                         total_discount: discountAmount,
-                        final_total_price: finalTotalPrice
+                        final_total_price: finalTotalPrice,
+                        deposit_original_total: depositPricing.deposit_original_total,
+                        deposit_discount: depositPricing.deposit_discount,
+                        deposit_total: depositPricing.deposit_total,
+                        payable_total_price: payableTotalPrice,
+                        deposit_pricing_tiers: depositPricing.tiers,
+                        deposit_policy: depositPricing.policy,
                     }
                 };
             }); // End of withTransaction
@@ -903,7 +1124,7 @@ class BookingOrderService {
         const session = await mongoose.startSession();
 
         try {
-            return await session.withTransaction(async () => {
+            const cancellationResult = await session.withTransaction(async () => {
                 const order = await BookingOrder.findOne({ id: orderId }).session(session);
 
                 if (!order) {
@@ -966,11 +1187,11 @@ class BookingOrderService {
                 }
 
                 const hasStartedOrCompletedBooking = bookings.some(
-                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED"
+                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED" || !!booking.checked_in_at
                 );
 
                 const targetHasStartedOrCompleted = targetBookings.some(
-                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED"
+                    (booking) => booking.status === "IN_USE" || booking.status === "COMPLETED" || !!booking.checked_in_at
                 );
 
                 if (targetHasStartedOrCompleted) {
@@ -1033,8 +1254,23 @@ class BookingOrderService {
 
                 const now = new Date();
                 const refundSummary = this._calculateRefundForBookings(targetBookedBookings, now);
+                const canRefundBefore48h = refundSummary.eligibleBookings.length === targetBookedBookings.length;
 
-                if (refundSummary.refundAmount > 0) {
+                const rentalRefundAmount = canRefundBefore48h ? refundSummary.refundAmount : 0;
+                let depositRefundAmount = 0;
+                if (
+                    allCancelled
+                    && canRefundBefore48h
+                    && Number(order.deposit_total || 0) > 0
+                    && order.deposit_settlement_status === "PENDING_INSPECTION"
+                ) {
+                    depositRefundAmount = Number(order.deposit_total || 0);
+                    order.deposit_settlement_status = "REFUNDED";
+                }
+
+                const totalRefundAmount = Number((rentalRefundAmount + depositRefundAmount).toFixed(2));
+                let refundTransaction = null;
+                if (totalRefundAmount > 0) {
                     const latestCharge = await Transaction.findOne({
                         order_id: orderId,
                         type: "CHARGE",
@@ -1043,31 +1279,63 @@ class BookingOrderService {
                         .sort({ created_at: -1 })
                         .session(session);
 
-                    await Transaction.create([{
+                    const createdRefundTx = await Transaction.create([{
                         order_id: orderId,
-                        amount: refundSummary.refundAmount,
+                        amount: totalRefundAmount,
                         currency: "VND",
                         type: "REFUND",
                         method: "VNPAY",
-                        status: "PENDING",
-                        provider_reference: latestCharge?.provider_reference || "REFUND_REQUESTED_BY_USER",
+                        status: "SUCCESS",
+                        provider_reference: latestCharge?.provider_reference || "AUTO_REFUND_TO_WALLET",
                     }], { session });
+                    refundTransaction = createdRefundTx[0];
+
+                    await this._creditWalletWithRefund({
+                        session,
+                        userId: order.user_id,
+                        orderId,
+                        rentalRefundAmount,
+                        depositRefundAmount,
+                        cancelledBookingIds: targetBookingIds,
+                        isFullCancel: allCancelled,
+                        transactionId: refundTransaction.id,
+                    });
                 }
+
+                await order.save({ session });
 
                 return {
                     order,
                     cancellation_type: allCancelled ? "FULL_CANCEL" : "PARTIAL_CANCEL",
                     cancelled_booking_ids: targetBookingIds,
                     refund: {
-                        applicable: refundSummary.refundAmount > 0,
-                        amount: refundSummary.refundAmount,
+                        applicable: totalRefundAmount > 0,
+                        amount: totalRefundAmount,
+                        rental_amount: rentalRefundAmount,
+                        deposit_amount: depositRefundAmount,
                         refundable_base_amount: refundSummary.refundableBaseAmount,
                         refund_rate: refundSummary.refundRate,
                         eligible_booking_ids: refundSummary.eligibleBookings.map((booking) => booking.id),
+                        refunded_transaction_id: refundTransaction?.id || null,
+                        refunded_to_wallet_immediately: totalRefundAmount > 0,
                         policy: refundSummary.policy,
                     },
                 };
             });
+
+            try {
+                await this._notifyCancellationAndRefund({
+                    userId: cancellationResult?.order?.user_id,
+                    orderId,
+                    cancellationType: cancellationResult?.cancellation_type,
+                    cancelledBookingIds: cancellationResult?.cancelled_booking_ids || [],
+                    refund: cancellationResult?.refund || {},
+                });
+            } catch (notifyError) {
+                console.error("Cancel notification error:", notifyError);
+            }
+
+            return cancellationResult;
         } catch (error) {
             throw error;
         } finally {
@@ -1153,7 +1421,7 @@ class BookingOrderService {
         const orderIds = [...new Set(refunds.map((refund) => String(refund.order_id)).filter(Boolean))];
         const orders = orderIds.length > 0
             ? await BookingOrder.find({ id: { $in: orderIds } })
-                .select("id user_id status final_total_price")
+                .select("id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status")
                 .lean()
             : [];
         const orderMap = orders.reduce((map, order) => {
