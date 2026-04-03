@@ -75,6 +75,54 @@ router.use(protect);
  */
 router.get("/me", walletController.getMyWallet);
 
+/**
+ * @swagger
+ * /api/wallets/getWalletTransaction/me:
+ *   get:
+ *     summary: Get current user's wallet transactions
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: type
+ *         schema:
+ *           type: string
+ *           enum: [TOPUP, PAYMENT, REFUND]
+ *         description: Filter by transaction type
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *           maximum: 100
+ *       - in: query
+ *         name: startDate
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: endDate
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *     responses:
+ *       200:
+ *         description: Wallet transactions fetched successfully
+ *       400:
+ *         description: Invalid query params
+ *       401:
+ *         description: Unauthorized
+ */
+router.get("/getWalletTransaction/me", walletController.getMyWalletTransactions);
+
+
+
 // PIN lifecycle
 /**
  * @swagger

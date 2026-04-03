@@ -3,6 +3,8 @@ const Transaction = require("../models/Transaction");
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
 const OnlineKey = require("../models/OnlineKey");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const { randomInt } = require("crypto");
 const notificationService = require("./notificationService");
 
@@ -71,15 +73,15 @@ class PaymentService {
             keyType === "CLEANER"
               ? new Date(booking.start_time)
               : new Date(
-                  new Date(booking.start_time).getTime() -
-                    CHECKIN_GRACE_PERIOD_MS,
-                ),
+                new Date(booking.start_time).getTime() -
+                CHECKIN_GRACE_PERIOD_MS,
+              ),
           valid_to:
             keyType === "CLEANER"
               ? new Date(
-                  new Date(booking.end_time).getTime() +
-                    CLEANER_EXTRA_MINUTES_MS,
-                )
+                new Date(booking.end_time).getTime() +
+                CLEANER_EXTRA_MINUTES_MS,
+              )
               : new Date(booking.end_time),
           is_revoked: false,
         });
@@ -136,7 +138,8 @@ class PaymentService {
     }
 
     // ✅ SECURITY: Lấy amount từ BookingOrder, không từ request
-    const amount = bookingOrder.final_total_price;
+    const amount =
+      bookingOrder.payable_total_price ?? bookingOrder.final_total_price;
 
     const existingCharge = await Transaction.findOne({
       order_id: orderId,
@@ -209,6 +212,76 @@ class PaymentService {
       paymentUrl,
       status: transaction.status,
       createdAt: transaction.created_at,
+    };
+  }
+
+  async createWalletTopupPayment({ userId, amount, orderInfo, ipAddr }) {
+    if (!userId || !amount || !orderInfo) {
+      const error = new Error("Missing required fields: amount, orderInfo");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const parsedAmount = Number(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      const error = new Error("amount must be a positive number");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const MIN_TOPUP_AMOUNT = 10000;
+    if (parsedAmount < MIN_TOPUP_AMOUNT) {
+      const error = new Error(`Minimum topup amount is ${MIN_TOPUP_AMOUNT} VND`);
+      error.statusCode = 400;
+      throw error;
+    }
+
+    let wallet = await Wallet.findOne({ user_id: String(userId) });
+    if (!wallet) {
+      wallet = await Wallet.create({
+        user_id: String(userId),
+        balance: 0,
+        status: "ACTIVE",
+      });
+    }
+
+    if (wallet.status !== "ACTIVE") {
+      const error = new Error("Wallet is locked");
+      error.statusCode = 423;
+      throw error;
+    }
+
+    const transaction = await Transaction.create({
+      order_id: wallet.id,
+      amount: parsedAmount,
+      currency: "VND",
+      type: "TOPUP",
+      method: "VNPAY",
+      status: "PENDING",
+    });
+
+    const txnRef = `WALLET_TOPUP_${transaction.id}`;
+    const paymentUrl = vnpayService.createPaymentUrl({
+      orderId: wallet.id,
+      amount: parsedAmount,
+      orderInfo,
+      orderType: "other",
+      ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+      locale: "vn",
+      bankCode: "NCB",
+      txnRef,
+    });
+
+    transaction.provider_reference = txnRef;
+    await transaction.save();
+
+    return {
+      transactionId: transaction.id,
+      walletId: wallet.id,
+      amount: transaction.amount,
+      status: transaction.status,
+      paymentUrl,
+      txnRef,
     };
   }
 
@@ -286,7 +359,7 @@ class PaymentService {
 
       await this._ensureOnlineKeysForOrder(orderId);
 
-      const paidOrder = await BookingOrder.findOne({ id: originalOrderId }).select("id user_id final_total_price");
+      const paidOrder = await BookingOrder.findOne({ id: originalOrderId }).select("id user_id final_total_price payable_total_price");
       if (paidOrder?.user_id) {
         await notificationService.sendToUser(paidOrder.user_id, {
           title: "Thanh toán thành công",
@@ -299,7 +372,7 @@ class PaymentService {
             order_id: paidOrder.id,
             transaction_id: transaction.id,
             transaction_no: transactionNo || "",
-            amount: String(paidOrder.final_total_price || amount || 0),
+            amount: String(paidOrder.payable_total_price || paidOrder.final_total_price || amount || 0),
             payment_method: "VNPAY",
           },
         });
@@ -325,6 +398,132 @@ class PaymentService {
       status: transaction.status,
       bankCode,
       paymentDate: payDate || null,
+    };
+  }
+
+  async handleWalletTopupVnpayReturn(vnpayParams) {
+    const verifyResult = vnpayService.verifyReturnUrl({ ...vnpayParams });
+    if (!verifyResult || !verifyResult.isValid) {
+      const error = new Error("Invalid signature");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const txnRef = String(vnpayParams.vnp_TxnRef || "");
+    const responseCode = String(vnpayParams.vnp_ResponseCode || "");
+    const transactionNo = String(vnpayParams.vnp_TransactionNo || "");
+    const paidAmount = Number(vnpayParams.vnp_Amount || 0) / 100;
+
+    if (!txnRef.startsWith("WALLET_TOPUP_")) {
+      const error = new Error("Invalid wallet topup transaction reference");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const transactionId = txnRef.replace("WALLET_TOPUP_", "");
+    const transaction = await Transaction.findOne({
+      id: transactionId,
+      type: "TOPUP",
+      method: "VNPAY",
+    });
+
+    if (!transaction) {
+      const error = new Error("Topup transaction not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (transaction.status !== "PENDING") {
+      return {
+        code: responseCode,
+        message: "Transaction already processed",
+        transactionId: transaction.id,
+        walletId: transaction.order_id,
+        status: transaction.status,
+        amount: transaction.amount,
+      };
+    }
+
+    if (responseCode !== "00") {
+      transaction.status = "FAILED";
+      transaction.provider_reference = transactionNo || transaction.provider_reference;
+      await transaction.save();
+
+      return {
+        code: responseCode,
+        message: "Topup failed",
+        transactionId: transaction.id,
+        walletId: transaction.order_id,
+        status: transaction.status,
+        amount: transaction.amount,
+      };
+    }
+
+    if (Number(transaction.amount) !== paidAmount) {
+      transaction.status = "FAILED";
+      await transaction.save();
+
+      const error = new Error("Amount mismatch in VNPay callback");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const wallet = await Wallet.findOne({ id: transaction.order_id });
+    if (!wallet) {
+      const error = new Error("Wallet not found for topup transaction");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (wallet.status !== "ACTIVE") {
+      const error = new Error("Wallet is locked");
+      error.statusCode = 423;
+      throw error;
+    }
+
+    const existingWalletTopupAudit = await WalletTransaction.findOne({
+      transaction_id: transaction.id,
+      type: "TOPUP",
+    });
+
+    let balanceBefore = wallet.balance;
+    let balanceAfter = wallet.balance;
+
+    if (!existingWalletTopupAudit) {
+      balanceBefore = wallet.balance;
+      balanceAfter = Number(balanceBefore) + Number(transaction.amount);
+      wallet.balance = balanceAfter;
+      await wallet.save();
+
+      await WalletTransaction.create({
+        wallet_id: wallet.id,
+        amount: Number(transaction.amount),
+        type: "TOPUP",
+        transaction_id: transaction.id,
+        reference_id: null,
+        description: "VNPay wallet topup",
+        balance_before: balanceBefore,
+        balance_after: balanceAfter,
+      });
+    } else {
+      balanceBefore = existingWalletTopupAudit.balance_before;
+      balanceAfter = existingWalletTopupAudit.balance_after;
+    }
+
+    transaction.status = "SUCCESS";
+    transaction.provider_reference = transactionNo || transaction.provider_reference;
+    await transaction.save();
+
+    return {
+      code: responseCode,
+      message: "Topup successful",
+      transactionId: transaction.id,
+      walletId: wallet.id,
+      amount: transaction.amount,
+      status: transaction.status,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+      transactionNo,
     };
   }
 
@@ -498,7 +697,7 @@ class PaymentService {
     if (remainingMinutes < 1) {
       const error = new Error(
         `Order is expiring soon (${remainingSeconds} seconds remaining). ` +
-          `Please proceed immediately or create a new order.`,
+        `Please proceed immediately or create a new order.`,
       );
       error.statusCode = 400;
       throw error;
@@ -524,10 +723,13 @@ class PaymentService {
     const paymentExpireMs = Math.min(fourMinutesMs, safeRemainingMs);
     const vnpExpireDate = new Date(now.getTime() + paymentExpireMs);
 
+    const payableAmount =
+      bookingOrder.payable_total_price || bookingOrder.final_total_price;
+
     // Create new Payment URL with custom parameters
     const paymentUrl = vnpayService.createPaymentUrl({
       orderId,
-      amount: bookingOrder.final_total_price,
+      amount: payableAmount,
       orderInfo: `Repay Order #${orderId} - Attempt ${attemptNumber}`,
       orderType: "billpayment",
       ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
@@ -540,7 +742,7 @@ class PaymentService {
     // Create new Transaction record (PENDING status)
     const transaction = await Transaction.create({
       order_id: orderId,
-      amount: bookingOrder.final_total_price,
+      amount: payableAmount,
       currency: "VND",
       type: "CHARGE",
       method: "VNPAY",
@@ -553,7 +755,7 @@ class PaymentService {
       orderId,
       attemptNumber,
       txnRef: newTxnRef,
-      amount: bookingOrder.final_total_price,
+      amount: payableAmount,
       orderExpireAt: orderDeadline.toISOString(),
       paymentExpireAt: vnpExpireDate.toISOString(),
       remainingSeconds,

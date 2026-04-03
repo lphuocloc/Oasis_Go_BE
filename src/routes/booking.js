@@ -494,24 +494,6 @@ router.patch(
  */
 router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFlag);
 
-/**
- * @swagger
- * /api/bookings/{id}/cancel:
- *   post:
- *     summary: Cancel booking
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking cancelled
- */
 router.post("/:id/cancel", protect, bookingController.cancelBooking);
 
 

@@ -31,6 +31,35 @@ const bookingOrderSchema = new mongoose.Schema(
             required: [true, "Final total price is required"],
             min: [0, "Final total price cannot be negative"],
         },
+        deposit_original_total: {
+            type: Number,
+            default: 0,
+            min: [0, "Deposit original total cannot be negative"],
+        },
+        deposit_discount: {
+            type: Number,
+            default: 0,
+            min: [0, "Deposit discount cannot be negative"],
+        },
+        deposit_total: {
+            type: Number,
+            default: 0,
+            min: [0, "Deposit total cannot be negative"],
+        },
+        payable_total_price: {
+            type: Number,
+            required: [true, "Payable total price is required"],
+            min: [0, "Payable total price cannot be negative"],
+            default: 0,
+        },
+        deposit_settlement_status: {
+            type: String,
+            enum: {
+                values: ["PENDING_INSPECTION", "REFUNDED", "PARTIALLY_FORFEITED", "FORFEITED"],
+                message: "{VALUE} is not a valid deposit settlement status",
+            },
+            default: "PENDING_INSPECTION",
+        },
         status: {
             type: String,
             enum: {
@@ -66,12 +95,22 @@ bookingOrderSchema.pre("save", async function () {
     if (!this.isModified("final_total_price") && this.isModified("total_base_price")) {
         this.final_total_price = Math.max(0, this.total_base_price - (this.total_discount || 0));
     }
+
+    // Keep payable_total_price in sync with rental + deposit
+    if (!this.isModified("payable_total_price") && (this.isModified("final_total_price") || this.isModified("deposit_total"))) {
+        this.payable_total_price = Math.max(0, (this.final_total_price || 0) + (this.deposit_total || 0));
+    }
 });
 
 // Instance method to calculate total
 bookingOrderSchema.methods.calculateTotal = function () {
     this.final_total_price = Math.max(0, this.total_base_price - this.total_discount);
     return this.final_total_price;
+};
+
+bookingOrderSchema.methods.calculatePayableTotal = function () {
+    this.payable_total_price = Math.max(0, (this.final_total_price || 0) + (this.deposit_total || 0));
+    return this.payable_total_price;
 };
 
 // Instance method to mark as paid

@@ -15,6 +15,23 @@ exports.getMyWallet = async (req, res) => {
     }
 };
 
+exports.getMyWalletTransactions = async (req, res) => {
+    try {
+        const result = await walletService.getMyWalletTransactions(req.user.id, req.query);
+        res.status(200).json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination,
+            wallet: result.wallet,
+        });
+    } catch (error) {
+        res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Error fetching wallet transactions",
+        });
+    }
+};
+
 exports.createPin = async (req, res) => {
     try {
         const result = await walletService.createPin(req.user.id, req.body);
