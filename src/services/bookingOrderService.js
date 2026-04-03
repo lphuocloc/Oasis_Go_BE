@@ -241,7 +241,10 @@ class BookingOrderService {
 
         let createdWalletTransactions = [];
         if (walletTransactionsToCreate.length > 0) {
-            createdWalletTransactions = await WalletTransaction.create(walletTransactionsToCreate, { session });
+            createdWalletTransactions = await WalletTransaction.create(walletTransactionsToCreate, {
+                session,
+                ordered: true,
+            });
         }
 
         return {
