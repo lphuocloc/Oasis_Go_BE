@@ -6,6 +6,7 @@ const {
   createCleaningTask,
   getAllCleaningTasks,
   getMyCleaningTasks,
+  getMyCleanerKeyByTaskId,
   getCleaningTaskById,
   updateCleaningTask,
   deleteCleaningTask,
@@ -359,6 +360,30 @@ router.get(
   authorize("admin", "manager"),
   debugAutoAssignForBooking
 );
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{id}/my-key:
+ *   get:
+ *     summary: Get cleaner online key by assigned cleaning task
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Cleaner key retrieved successfully
+ *       403:
+ *         description: Not allowed to retrieve key for this task
+ *       404:
+ *         description: Cleaning task or booking not found
+ */
+router.get("/:id/my-key", protect, authorize("cleaner"), getMyCleanerKeyByTaskId);
 
 /**
  * @swagger

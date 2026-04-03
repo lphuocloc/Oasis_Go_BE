@@ -8,7 +8,9 @@ const StaffShift = require("../models/StaffShift");
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
 const Location = require("../models/Location");
+const OnlineKey = require("../models/OnlineKey");
 const mongoose = require("mongoose");
+const { randomInt } = require("crypto");
 
 const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
@@ -24,11 +26,24 @@ const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
 const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
+const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
   err.statusCode = statusCode;
   return err;
+};
+
+const generateUniqueOnlineKeyToken = async () => {
+  const MAX_RETRY = 10;
+
+  for (let attempt = 0; attempt < MAX_RETRY; attempt += 1) {
+    const token = String(randomInt(0, 1000000)).padStart(6, "0");
+    const exists = await OnlineKey.exists({ key_token: token, is_revoked: false });
+    if (!exists) return token;
+  }
+
+  throw createError("Unable to generate unique online key token", 500);
 };
 
 const buildUserIdentityQuery = (identity) => {
@@ -1083,6 +1098,121 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
 
   const tasks = await CleaningTask.find(filter).sort({ created_at: -1 });
   return enrichCleaningTasksWithRelatedData(tasks);
+};
+
+exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
+  const normalizedTaskId = String(taskId || "").trim();
+  if (!normalizedTaskId) {
+    throw createError("task id is required", 400);
+  }
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole !== "cleaner") {
+    throw createError("Only cleaner can retrieve cleaner key", 403);
+  }
+
+  const actorCleanerIds = [...new Set(resolveActorCleanerIds(actor))];
+  if (actorCleanerIds.length === 0) {
+    throw createError("Unable to resolve cleaner id", 400);
+  }
+
+  const task = await CleaningTask.findOne({ id: normalizedTaskId })
+    .select("id booking_id cleaner_id status pod_id")
+    .lean();
+  if (!task) {
+    throw createError("Cleaning task not found", 404);
+  }
+
+  if (!task.booking_id) {
+    throw createError("Cleaning task does not link to any booking", 400);
+  }
+
+  if (!["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "DONE"].includes(String(task.status || ""))) {
+    throw createError("Cleaning task is not eligible for key retrieval", 400);
+  }
+
+  if (!actorCleanerIds.includes(String(task.cleaner_id))) {
+    throw createError("You are not allowed to retrieve key for this task", 403);
+  }
+
+  const booking = await Booking.findOne({ id: String(task.booking_id) })
+    .select("id pod_id start_time end_time status checkin_state cleaner_access_allowed")
+    .lean();
+  if (!booking) {
+    throw createError("Booking not found", 404);
+  }
+
+  if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+    throw createError("Cleaner access is blocked for NO_SHOW booking", 403);
+  }
+
+  if (!booking.cleaner_access_allowed) {
+    throw createError("Cleaner access is not confirmed by user", 403);
+  }
+
+  const now = new Date();
+  const cleanerWindowEnd = booking.end_time
+    ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
+    : null;
+  const isInUseUrgentCleaning = booking.status === "IN_USE";
+  const isCompletedCleaningWindow =
+    booking.status === "COMPLETED" && cleanerWindowEnd && now <= cleanerWindowEnd;
+
+  if (!isInUseUrgentCleaning && !isCompletedCleaningWindow) {
+    throw createError(
+      `Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED trong ${CLEANER_POST_CHECKOUT_WINDOW_MINUTES} phut sau checkout`,
+      400
+    );
+  }
+
+  const actorCleanerId = String(task.cleaner_id);
+  await OnlineKey.updateMany(
+    {
+      booking_id: String(booking.id),
+      key_type: "CLEANER",
+      is_revoked: false,
+      user_id: { $ne: actorCleanerId },
+    },
+    { $set: { is_revoked: true } }
+  );
+
+  let cleanerKey = await OnlineKey.findOne({
+    booking_id: String(booking.id),
+    key_type: "CLEANER",
+    user_id: actorCleanerId,
+    is_revoked: false,
+  })
+    .sort({ createdAt: -1 })
+    .select("id booking_id pod_id user_id key_type key_token valid_from valid_to is_revoked createdAt updatedAt");
+
+  if (!cleanerKey) {
+    cleanerKey = await OnlineKey.create({
+      booking_id: String(booking.id),
+      pod_id: String(booking.pod_id || task.pod_id),
+      user_id: actorCleanerId,
+      key_type: "CLEANER",
+      key_token: await generateUniqueOnlineKeyToken(),
+      valid_from: booking.start_time ? new Date(booking.start_time) : now,
+      valid_to: booking.end_time
+        ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
+        : now,
+      is_revoked: false,
+    });
+  }
+
+  const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;
+
+  return {
+    task_id: String(task.id),
+    booking_id: String(booking.id),
+    cleaner_id: actorCleanerId,
+    booking_status: booking.status,
+    booking_checkin_state: booking.checkin_state,
+    online_key: {
+      ...keyData,
+      role: "cleaner",
+    },
+  };
 };
 
 exports.getCleaningTaskById = async (id) => {

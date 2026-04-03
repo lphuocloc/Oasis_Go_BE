@@ -15,6 +15,15 @@ const incidentSchema = new mongoose.Schema(
       ref: "Pod",
       index: true,
     },
+    incident_type: {
+      type: String,
+      enum: {
+        values: ["OPERATIONAL", "DAMAGE_REPORT"],
+        message: "{VALUE} is not a valid incident type",
+      },
+      default: "OPERATIONAL",
+      index: true,
+    },
     booking_id: {
       type: String,
       default: null,
@@ -25,12 +34,6 @@ const incidentSchema = new mongoose.Schema(
       type: String,
       default: null,
       ref: "CleaningTask",
-      index: true,
-    },
-    shift_assignment_id: {
-      type: String,
-      default: null,
-      ref: "StaffShiftAssignment",
       index: true,
     },
     reported_by: {
@@ -62,10 +65,46 @@ const incidentSchema = new mongoose.Schema(
       default: "PENDING",
       index: true,
     },
-    has_lost_found: {
-      type: Boolean,
-      default: false,
+    item_id: {
+      type: String,
+      default: null,
+      ref: "Item",
       index: true,
+    },
+    item_name_snapshot: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    unit_cost_snapshot: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    quantity_affected: {
+      type: Number,
+      default: null,
+      min: 1,
+    },
+    estimated_item_value: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    estimated_service_fee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    estimated_total_value: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    pricing_source: {
+      type: String,
+      default: null,
+      trim: true,
     },
   },
   {
@@ -75,5 +114,7 @@ const incidentSchema = new mongoose.Schema(
 
 incidentSchema.index({ reported_by: 1, created_at: -1 });
 incidentSchema.index({ cleaning_task_id: 1, created_at: -1 });
+incidentSchema.index({ incident_type: 1, created_at: -1 });
+incidentSchema.index({ item_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("Incident", incidentSchema);

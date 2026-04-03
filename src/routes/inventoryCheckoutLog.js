@@ -46,12 +46,16 @@ const {
  *           example: 2
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE]
+ *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
  *           example: CHECKOUT
  *         reason:
  *           type: string
  *           nullable: true
  *           example: Use for routine cleaning
+ *         actor_id:
+ *           type: string
+ *           nullable: true
+ *           description: Stored automatically from the authenticated actor
  *         created_at:
  *           type: string
  *           format: date-time
@@ -59,7 +63,6 @@ const {
  *       type: object
  *       required:
  *         - inventory_stock_id
- *         - staff_id
  *         - quantity
  *         - action_type
  *       properties:
@@ -68,6 +71,8 @@ const {
  *           example: stock_001
  *         staff_id:
  *           type: string
+ *           nullable: true
+ *           description: Defaults to the authenticated user; managers can override when needed
  *           example: user_001
  *         cleaning_task_id:
  *           type: string
@@ -81,7 +86,7 @@ const {
  *           example: 1
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE]
+ *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
  *           example: RETURN
  *         reason:
  *           type: string

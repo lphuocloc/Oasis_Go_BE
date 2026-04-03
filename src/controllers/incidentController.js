@@ -68,6 +68,66 @@ exports.createIncidentFromCleaningTask = async (req, res) => {
   }
 };
 
+exports.createDamageReport = async (req, res) => {
+  const uploadedPhotos = Array.isArray(req.files)
+    ? req.files
+        .filter((file) => file && file.path)
+        .map((file) => ({
+          url: file.path,
+          public_id: file.filename || null,
+        }))
+    : [];
+
+  try {
+    const incident = await incidentService.createDamageReport(
+      {
+        ...req.body,
+        photo_urls: parsePhotoUrls(req.body.photo_urls),
+        uploaded_photos: uploadedPhotos,
+      },
+      req.user
+    );
+
+    res.status(201).json({
+      success: true,
+      message: "Damage report created successfully",
+      data: incident,
+    });
+  } catch (error) {
+    if (uploadedPhotos.length > 0) {
+      await Promise.all(
+        uploadedPhotos
+          .filter((item) => item.public_id)
+          .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
+      );
+    }
+
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error creating damage report",
+    });
+  }
+};
+
+exports.getDamageReports = async (req, res) => {
+  try {
+    const result = await incidentService.getDamageReports(req.query);
+    res.status(200).json({
+      success: true,
+      count: Array.isArray(result.items) ? result.items.length : 0,
+      data: result.items || [],
+      pagination: result.pagination || undefined,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching damage reports",
+    });
+  }
+};
+
 exports.getIncidents = async (req, res) => {
   try {
     const incidents = await incidentService.getIncidents(req.query);
