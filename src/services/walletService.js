@@ -8,6 +8,16 @@ const PIN_REGEX = /^\d{6}$/;
 const OTP_EXPIRES_MINUTES = 10;
 
 class WalletService {
+    _parseDateOrThrow(value, fieldName) {
+        const parsed = new Date(value);
+        if (Number.isNaN(parsed.getTime())) {
+            const error = new Error(`Invalid ${fieldName}`);
+            error.statusCode = 400;
+            throw error;
+        }
+        return parsed;
+    }
+
     assertPinFormat(pin, fieldName = "PIN") {
         const pinString = String(pin || "").trim();
         if (!PIN_REGEX.test(pinString)) {
@@ -18,11 +28,43 @@ class WalletService {
         return pinString;
     }
 
-    async getOrCreateWalletByUserId(userId) {
-        let wallet = await Wallet.findOne({ user_id: userId });
-        if (!wallet) {
-            wallet = await Wallet.create({ user_id: userId, balance: 0, status: "ACTIVE" });
+    async getOrCreateWalletByUserId(userId, session = null) {
+        let walletQuery = Wallet.findOne({ user_id: userId });
+        if (session) {
+            walletQuery = walletQuery.session(session);
         }
+
+        let wallet = await walletQuery;
+        if (!wallet) {
+            if (session) {
+                const createdWallets = await Wallet.create([{ user_id: userId, balance: 0, status: "ACTIVE" }], { session });
+                wallet = createdWallets[0];
+            } else {
+                wallet = await Wallet.create({ user_id: userId, balance: 0, status: "ACTIVE" });
+            }
+        }
+        return wallet;
+    }
+
+    async verifyPaymentPin(userId, pin, session = null) {
+        const normalizedPin = this.assertPinFormat(pin, "pin");
+        const wallet = await this.getOrCreateWalletByUserId(userId, session);
+
+        this.ensureWalletActive(wallet);
+
+        if (!wallet.pincode_hash) {
+            const error = new Error("Wallet PIN has not been created");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        const isPinMatch = await bcrypt.compare(normalizedPin, wallet.pincode_hash);
+        if (!isPinMatch) {
+            const error = new Error("Wallet PIN is incorrect");
+            error.statusCode = 400;
+            throw error;
+        }
+
         return wallet;
     }
 
@@ -71,27 +113,18 @@ class WalletService {
             filter.type = normalizedType;
         }
 
-        if (query.startDate || query.endDate) {
+        const effectiveStartDate = query.startDate || null;
+        const effectiveEndDate = query.endDate || null;
+
+        if (effectiveStartDate || effectiveEndDate) {
             filter.created_at = {};
 
-            if (query.startDate) {
-                const startDate = new Date(query.startDate);
-                if (Number.isNaN(startDate.getTime())) {
-                    const error = new Error("Invalid startDate");
-                    error.statusCode = 400;
-                    throw error;
-                }
-                filter.created_at.$gte = startDate;
+            if (effectiveStartDate) {
+                filter.created_at.$gte = this._parseDateOrThrow(effectiveStartDate, "startDate");
             }
 
-            if (query.endDate) {
-                const endDate = new Date(query.endDate);
-                if (Number.isNaN(endDate.getTime())) {
-                    const error = new Error("Invalid endDate");
-                    error.statusCode = 400;
-                    throw error;
-                }
-                filter.created_at.$lte = endDate;
+            if (effectiveEndDate) {
+                filter.created_at.$lte = this._parseDateOrThrow(effectiveEndDate, "endDate");
             }
         }
 

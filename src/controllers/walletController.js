@@ -1,4 +1,5 @@
 const walletService = require("../services/walletService");
+const paymentService = require("../services/paymentService");
 
 exports.getMyWallet = async (req, res) => {
     try {
@@ -95,6 +96,49 @@ exports.resetPin = async (req, res) => {
         res.status(error.statusCode || 500).json({
             success: false,
             message: error.message || "Error resetting wallet PIN with OTP",
+        });
+    }
+};
+
+exports.payOrderByWallet = async (req, res) => {
+    try {
+        const { bookingOrderId, pin, orderInfo } = req.body || {};
+
+        if (!bookingOrderId || !pin) {
+            return res.status(400).json({
+                success: false,
+                message: "Missing required fields: bookingOrderId, pin",
+            });
+        }
+
+        const userId = req.user && (req.user._id || req.user.id);
+        const ipAddr =
+            req.headers["x-forwarded-for"] ||
+            req.connection.remoteAddress ||
+            req.socket.remoteAddress ||
+            req.connection.socket.remoteAddress ||
+            "127.0.0.1";
+
+        const result = await paymentService.payOrderByWallet({
+            bookingOrderId,
+            userId,
+            pin,
+            orderInfo,
+            ipAddr,
+        });
+
+        return res.status(200).json({
+            success: true,
+            message:
+                result.mode === "completed"
+                    ? "Order paid successfully by wallet"
+                    : "Wallet payment recorded, remaining amount pending via VNPay",
+            data: result,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Error paying order by wallet",
         });
     }
 };

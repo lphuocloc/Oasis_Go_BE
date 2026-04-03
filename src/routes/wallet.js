@@ -106,11 +106,13 @@ router.get("/me", walletController.getMyWallet);
  *         schema:
  *           type: string
  *           format: date-time
+ *         description: Filter from datetime
  *       - in: query
  *         name: endDate
  *         schema:
  *           type: string
  *           format: date-time
+ *         description: Filter up to datetime
  *     responses:
  *       200:
  *         description: Wallet transactions fetched successfully
@@ -235,5 +237,77 @@ router.post("/pin/forgot/request", walletController.requestForgotPinOtp);
  *         description: Invalid OTP or invalid PIN input
  */
 router.post("/pin/forgot/reset", walletController.resetPin);
+
+/**
+ * @swagger
+ * /api/wallets/pay-order:
+ *   post:
+ *     summary: Pay booking order by wallet (supports hybrid with VNPay)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [bookingOrderId, pin]
+ *             properties:
+ *               bookingOrderId:
+ *                 type: string
+ *                 example: b157661c-c9c1-4da5-9baf-4ec859f4f1ba
+ *               pin:
+ *                 type: string
+ *                 example: "123456"
+ *               orderInfo:
+ *                 type: string
+ *                 example: Thanh toan don booking bang vi
+ *     responses:
+ *       200:
+ *         description: Wallet payment processed
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     mode:
+ *                       type: string
+ *                       enum: [completed, pending_vnpay]
+ *                     orderId:
+ *                       type: string
+ *                     orderTotalAmount:
+ *                       type: number
+ *                       description: Total payable amount of the order
+ *                       example: 850000
+ *                     paidAmountWallet:
+ *                       type: number
+ *                       description: Amount paid from wallet
+ *                       example: 300000
+ *                     remainingAmount:
+ *                       type: number
+ *                       description: Remaining amount to be paid
+ *                       example: 550000
+ *                     paymentUrl:
+ *                       type: string
+ *                       nullable: true
+ *       400:
+ *         description: Invalid request, wrong PIN or invalid order status
+ *       403:
+ *         description: Order does not belong to current user
+ *       404:
+ *         description: Booking order not found
+ *       423:
+ *         description: Wallet is locked
+ */
+router.post("/pay-order", walletController.payOrderByWallet);
 
 module.exports = router;
