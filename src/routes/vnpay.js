@@ -8,7 +8,7 @@ const { protect } = require('../middlewares/authMiddleware');
  * /api/vnpay/create-payment:
  *   post:
  *     summary: Create VNPay payment URL for pending order
- *     description: Create a transaction record and generate a VNPay payment URL. Amount is automatically taken from BookingOrder.final_total_price (server-side security measure).
+ *     description: Create a transaction record and generate a VNPay payment URL. Amount is automatically taken from BookingOrder.payable_total_price (rental + deposit) with fallback to final_total_price for old orders.
  *     tags: [VNPay Payment]
  *     requestBody:
  *       required: true
@@ -54,7 +54,7 @@ const { protect } = require('../middlewares/authMiddleware');
  *                       description: "Same as bookingOrderId"
  *                     amount:
  *                       type: number
- *                       description: "Amount from BookingOrder.final_total_price"
+ *                       description: "Amount from BookingOrder.payable_total_price (rental + deposit)"
  *                       example: 250000
  *                     status:
  *                       type: string
@@ -92,6 +92,85 @@ const { protect } = require('../middlewares/authMiddleware');
  *                   example: "Error creating payment"
  */
 router.post('/create-payment', vnpayController.createPayment);
+
+/**
+ * @swagger
+ * /api/vnpay/wallet-topup/create-payment:
+ *   post:
+ *     summary: Create VNPay payment URL for wallet topup
+ *     description: Create a pending TOPUP transaction and return VNPay payment URL for wallet topup.
+ *     tags: [VNPay Payment]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - amount
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 minimum: 1000
+ *                 description: Topup amount in VND
+ *                 example: 100000
+ *               orderInfo:
+ *                 type: string
+ *                 description: Topup description
+ *                 example: "Nap tien vao vi OASISGO"
+ *     responses:
+ *       200:
+ *         description: Wallet topup payment URL created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 message:
+ *                   type: string
+ *                   example: Payment URL created successfully
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     transactionId:
+ *                       type: string
+ *                       example: 550e8400-e29b-41d4-a716-446655440000
+ *                     amount:
+ *                       type: number
+ *                       example: 100000
+ *                     status:
+ *                       type: string
+ *                       example: PENDING
+ *                     paymentUrl:
+ *                       type: string
+ *                       example: https://sandbox.vnpayment.vn/paymentv2/vpcpay.html?vnp_Amount=10000000&...
+ *       400:
+ *         description: Invalid request body
+ *       401:
+ *         description: Unauthorized
+ *       500:
+ *         description: Internal server error
+ */
+router.post('/wallet-topup/create-payment', protect, vnpayController.createWalletTopupPayment);
+
+/**
+ * @route   GET /api/vnpay/wallet-topup/return
+ * @desc    Wallet topup VNPay return endpoint after payment
+ * @access  Public
+ */
+router.get('/wallet-topup/return', vnpayController.walletTopupReturn);
+
+/**
+ * @route   GET /api/vnpay/wallet-topup/ipn
+ * @desc    Wallet topup VNPay IPN callback
+ * @access  Public
+ */
+router.get('/wallet-topup/ipn', vnpayController.walletTopupIpn);
 
 /**
  * @route   GET /api/vnpay/return

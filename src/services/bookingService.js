@@ -501,7 +501,7 @@ class BookingService {
         .sort({ created_at: -1 })
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
-        .populate("order", "id final_total_price status");
+        .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status");
       return { bookings };
     }
 
@@ -517,7 +517,7 @@ class BookingService {
         .limit(limitNum)
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
-        .populate("order", "id final_total_price status"),
+        .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status"),
       Booking.countDocuments(query),
     ]);
 
@@ -545,7 +545,7 @@ class BookingService {
         "base_price total_price createdAt updatedAt"
       )
       .populate("pod", POD_DETAILS_SELECT)
-      .populate("order", "id final_total_price status payment_method");
+      .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status payment_method");
 
     if (!booking) {
       throw new Error("Booking not found");
