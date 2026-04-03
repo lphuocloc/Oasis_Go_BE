@@ -7,8 +7,110 @@ const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const { randomInt } = require("crypto");
 const notificationService = require("./notificationService");
+const walletService = require("./walletService");
+const mongoose = require("mongoose");
 
 class PaymentService {
+  _parseDateOrThrow(value, fieldName) {
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      const error = new Error(`Invalid ${fieldName}`);
+      error.statusCode = 400;
+      throw error;
+    }
+    return parsed;
+  }
+
+  _resolvePayableAmount(bookingOrder) {
+    return Number(
+      bookingOrder?.payable_total_price ?? bookingOrder?.final_total_price ?? 0,
+    );
+  }
+
+  async _sumSuccessfulChargeByMethod(orderId, method, session = null) {
+    const query = Transaction.find({
+      order_id: orderId,
+      type: "CHARGE",
+      status: "SUCCESS",
+      method,
+    }).select("amount");
+
+    if (session) {
+      query.session(session);
+    }
+
+    const transactions = await query;
+    return transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  }
+
+  async _sumSuccessfulCharges(orderId, session = null) {
+    const query = Transaction.find({
+      order_id: orderId,
+      type: "CHARGE",
+      status: "SUCCESS",
+    }).select("amount");
+
+    if (session) {
+      query.session(session);
+    }
+
+    const transactions = await query;
+    return transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
+  }
+
+  async _settleOrderIfFullyPaid(orderId, session = null) {
+    let bookingOrderQuery = BookingOrder.findOne({ id: orderId });
+    if (session) {
+      bookingOrderQuery = bookingOrderQuery.session(session);
+    }
+
+    const bookingOrder = await bookingOrderQuery;
+    if (!bookingOrder) return null;
+
+    const payableAmount = this._resolvePayableAmount(bookingOrder);
+    const totalCharged = await this._sumSuccessfulCharges(orderId, session);
+
+    if (totalCharged + 0.0001 < payableAmount) {
+      return {
+        bookingOrder,
+        payableAmount,
+        totalCharged,
+        isPaid: false,
+      };
+    }
+
+    const walletCharged = await this._sumSuccessfulChargeByMethod(
+      orderId,
+      "WALLET",
+      session,
+    );
+    const vnpayCharged = await this._sumSuccessfulChargeByMethod(
+      orderId,
+      "VNPAY",
+      session,
+    );
+
+    bookingOrder.status = "PAID";
+    if (walletCharged > 0 && vnpayCharged > 0) {
+      bookingOrder.payment_method = "HYBRID";
+    } else if (walletCharged > 0) {
+      bookingOrder.payment_method = "WALLET";
+    } else {
+      bookingOrder.payment_method = "VNPAY";
+    }
+
+    await bookingOrder.save({ session });
+
+    return {
+      bookingOrder,
+      payableAmount,
+      totalCharged,
+      walletCharged,
+      vnpayCharged,
+      isPaid: true,
+    };
+  }
+
   async _generateOnlineKeyToken() {
     const MAX_RETRY = 10;
 
@@ -215,6 +317,259 @@ class PaymentService {
     };
   }
 
+  async payOrderByWallet({ bookingOrderId, userId, pin, orderInfo, ipAddr }) {
+    if (!bookingOrderId || !userId || !pin) {
+      const error = new Error("Missing required fields: bookingOrderId, pin");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const bookingOrder = await BookingOrder.findOne({ id: bookingOrderId });
+    if (!bookingOrder) {
+      const error = new Error("Không tìm thấy đơn hàng");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const normalizedUserId = String(userId);
+    if (String(bookingOrder.user_id) !== normalizedUserId) {
+      const error = new Error("Chỉ người sở hữu đơn hàng mới có thể thanh toán bằng ví");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (bookingOrder.status !== "PENDING") {
+      const error = new Error(
+        `Không thể thanh toán đơn hàng có trạng thái: ${bookingOrder.status}`,
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const orderTotalAmount = this._resolvePayableAmount(bookingOrder);
+
+    const existingPendingVnpay = await Transaction.findOne({
+      order_id: bookingOrderId,
+      type: "CHARGE",
+      method: "VNPAY",
+      status: "PENDING",
+    }).sort({ created_at: -1 });
+
+    if (existingPendingVnpay) {
+      const paymentUrl = vnpayService.createPaymentUrl({
+        orderId: bookingOrderId,
+        amount: Number(existingPendingVnpay.amount),
+        orderInfo: orderInfo || `Thanh toan phan con lai don ${bookingOrderId}`,
+        orderType: "billpayment",
+        ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+        locale: "vn",
+        bankCode: "NCB",
+        txnRef: existingPendingVnpay.provider_reference || bookingOrderId,
+      });
+
+      return {
+        mode: "pending_vnpay",
+        orderId: bookingOrderId,
+        orderTotalAmount,
+        remainingAmount: Number(existingPendingVnpay.amount),
+        transactionId: existingPendingVnpay.id,
+        paymentUrl,
+      };
+    }
+
+    await walletService.verifyPaymentPin(normalizedUserId, pin);
+
+    const session = await mongoose.startSession();
+    let result;
+
+    try {
+      await session.withTransaction(async () => {
+        const liveOrder = await BookingOrder.findOne({ id: bookingOrderId }).session(
+          session,
+        );
+
+        if (!liveOrder) {
+          const error = new Error("Không tìm thấy đơn hàng");
+          error.statusCode = 404;
+          throw error;
+        }
+
+        if (liveOrder.status !== "PENDING") {
+          const error = new Error(
+            `Không thể thanh toán đơn hàng có trạng thái: ${liveOrder.status}`,
+          );
+          error.statusCode = 400;
+          throw error;
+        }
+
+        const payableAmount = this._resolvePayableAmount(liveOrder);
+        const alreadyCharged = await this._sumSuccessfulCharges(
+          bookingOrderId,
+          session,
+        );
+        const remainingBeforeWallet = Math.max(0, payableAmount - alreadyCharged);
+
+        if (remainingBeforeWallet <= 0) {
+          const settled = await this._settleOrderIfFullyPaid(bookingOrderId, session);
+          result = {
+            mode: "completed",
+            orderId: bookingOrderId,
+            orderTotalAmount: Number(payableAmount),
+            paidAmountWallet: Number(settled?.walletCharged || 0),
+            paidAmountVnpay: Number(settled?.vnpayCharged || 0),
+            remainingAmount: 0,
+          };
+          return;
+        }
+
+        const wallet = await walletService.getOrCreateWalletByUserId(
+          normalizedUserId,
+          session,
+        );
+        walletService.ensureWalletActive(wallet);
+
+        const balanceBefore = Number(wallet.balance || 0);
+        const walletDebitAmount = Math.min(balanceBefore, remainingBeforeWallet);
+
+        let walletCharge = null;
+        if (walletDebitAmount > 0) {
+          wallet.balance = Number((balanceBefore - walletDebitAmount).toFixed(2));
+          await wallet.save({ session });
+
+          walletCharge = await Transaction.create(
+            [
+              {
+                order_id: bookingOrderId,
+                amount: Number(walletDebitAmount.toFixed(2)),
+                currency: "VND",
+                type: "CHARGE",
+                method: "WALLET",
+                status: "SUCCESS",
+                provider_reference: `WALLET_PAY_${bookingOrderId}_${Date.now()}`,
+              },
+            ],
+            { session },
+          );
+
+          await WalletTransaction.create(
+            [
+              {
+                wallet_id: wallet.id,
+                amount: Number(walletDebitAmount.toFixed(2)),
+                type: "PAYMENT",
+                transaction_id: walletCharge[0].id,
+                reference_id: bookingOrderId,
+                description: `Thanh toan vi cho don ${bookingOrderId}`,
+                balance_before: Number(balanceBefore.toFixed(2)),
+                balance_after: Number(wallet.balance.toFixed(2)),
+              },
+            ],
+            { session },
+          );
+        }
+
+        const remainingAmount = Number(
+          Math.max(0, remainingBeforeWallet - walletDebitAmount).toFixed(2),
+        );
+
+        if (remainingAmount <= 0) {
+          const settled = await this._settleOrderIfFullyPaid(bookingOrderId, session);
+          result = {
+            mode: "completed",
+            orderId: bookingOrderId,
+            orderTotalAmount: Number(payableAmount),
+            paidAmountWallet: Number(settled?.walletCharged || walletDebitAmount || 0),
+            paidAmountVnpay: Number(settled?.vnpayCharged || 0),
+            remainingAmount: 0,
+          };
+          return;
+        }
+
+        const pendingTxnRef = `${bookingOrderId}_PARTIAL_${Date.now()}`;
+        const pendingVnpayTransaction = await Transaction.create(
+          [
+            {
+              order_id: bookingOrderId,
+              amount: remainingAmount,
+              currency: "VND",
+              type: "CHARGE",
+              method: "VNPAY",
+              status: "PENDING",
+              provider_reference: pendingTxnRef,
+            },
+          ],
+          { session },
+        );
+
+        liveOrder.payment_method = walletDebitAmount > 0 ? "HYBRID" : "VNPAY";
+        await liveOrder.save({ session });
+
+        result = {
+          mode: "pending_vnpay",
+          orderId: bookingOrderId,
+          orderTotalAmount: Number(payableAmount),
+          paidAmountWallet: Number(walletDebitAmount.toFixed(2)),
+          remainingAmount,
+          transactionId: pendingVnpayTransaction[0].id,
+          txnRef: pendingTxnRef,
+        };
+      });
+    } finally {
+      session.endSession();
+    }
+
+    if (result?.mode === "completed") {
+      await this._ensureOnlineKeysForOrder(bookingOrderId);
+
+      await notificationService.sendToUser(normalizedUserId, {
+        title: "Thanh toán thành công",
+        message: `Đơn ${bookingOrderId} đã thanh toán thành công bằng ví.`,
+        type: "PAYMENT",
+        event_code: "PAYMENT_SUCCESS",
+        dedupe_key: `PAYMENT_SUCCESS:WALLET:${bookingOrderId}`,
+        data: {
+          type: "PAYMENT_SUCCESS",
+          order_id: bookingOrderId,
+          payment_method: "WALLET",
+          amount_wallet: String(result.paidAmountWallet || 0),
+          amount_vnpay: String(result.paidAmountVnpay || 0),
+        },
+      });
+
+      return result;
+    }
+
+    const paymentUrl = vnpayService.createPaymentUrl({
+      orderId: bookingOrderId,
+      amount: Number(result.remainingAmount),
+      orderInfo: orderInfo || `Thanh toan phan con lai don ${bookingOrderId}`,
+      orderType: "billpayment",
+      ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
+      locale: "vn",
+      bankCode: "NCB",
+      txnRef: result.txnRef,
+    });
+
+    await notificationService.sendToUser(normalizedUserId, {
+      title: "Thanh toán còn thiếu",
+      message: `Đơn ${bookingOrderId} cần thanh toán thêm qua VNPay để hoàn tất.`,
+      type: "PAYMENT",
+      event_code: "PAYMENT_PENDING_REMAINING",
+      dedupe_key: `PAYMENT_PENDING_REMAINING:${bookingOrderId}:${result.transactionId}`,
+      data: {
+        type: "PAYMENT_PENDING_REMAINING",
+        order_id: bookingOrderId,
+        amount_wallet_paid: String(result.paidAmountWallet || 0),
+        amount_remaining: String(result.remainingAmount || 0),
+      },
+    });
+
+    return {
+      ...result,
+      paymentUrl,
+    };
+  }
+
   async createWalletTopupPayment({ userId, amount, orderInfo, ipAddr }) {
     if (!userId || !amount || !orderInfo) {
       const error = new Error("Missing required fields: amount, orderInfo");
@@ -251,16 +606,7 @@ class PaymentService {
       throw error;
     }
 
-    const transaction = await Transaction.create({
-      order_id: wallet.id,
-      amount: parsedAmount,
-      currency: "VND",
-      type: "TOPUP",
-      method: "VNPAY",
-      status: "PENDING",
-    });
-
-    const txnRef = `WALLET_TOPUP_${transaction.id}`;
+    const txnRef = `WALLET_TOPUP_${wallet.id}_${Date.now()}`;
     const paymentUrl = vnpayService.createPaymentUrl({
       orderId: wallet.id,
       amount: parsedAmount,
@@ -272,14 +618,11 @@ class PaymentService {
       txnRef,
     });
 
-    transaction.provider_reference = txnRef;
-    await transaction.save();
-
     return {
-      transactionId: transaction.id,
+      transactionId: null,
       walletId: wallet.id,
-      amount: transaction.amount,
-      status: transaction.status,
+      amount: parsedAmount,
+      status: "PENDING",
       paymentUrl,
       txnRef,
     };
@@ -299,21 +642,32 @@ class PaymentService {
       error.statusCode = 400;
       throw error;
     }
-    const vnp_TxnRef = vnpayParams.vnp_TxnRef;
+    const vnp_TxnRef = String(vnpayParams.vnp_TxnRef || "");
     const originalOrderId = vnp_TxnRef.split("_")[0];
 
     // Extract data
-    const orderId = vnpayParams.vnp_TxnRef;
+    const orderId = originalOrderId;
     const responseCode = vnpayParams.vnp_ResponseCode;
     const transactionNo = vnpayParams.vnp_TransactionNo;
     const amount = parseInt(vnpayParams.vnp_Amount) / 100; // VNPay trả về số tiền x100
     const bankCode = vnpayParams.vnp_BankCode;
     const payDate = vnpayParams.vnp_PayDate;
 
-    const transaction = await Transaction.findOne({
-      order_id: originalOrderId, // Dùng ID đã bóc tách
+    let transaction = await Transaction.findOne({
+      provider_reference: vnp_TxnRef,
       type: "CHARGE",
-    }).sort({ created_at: -1 });
+      method: "VNPAY",
+    });
+
+    if (!transaction) {
+      transaction = await Transaction.findOne({
+        order_id: originalOrderId,
+        type: "CHARGE",
+        method: "VNPAY",
+        status: "PENDING",
+      }).sort({ created_at: -1 });
+    }
+
     if (!transaction) {
       const error = new Error("Transaction not found");
       error.statusCode = 404;
@@ -322,7 +676,10 @@ class PaymentService {
 
     if (transaction.status !== "PENDING") {
       if (responseCode === "00" && transaction.status === "SUCCESS") {
-        await this._ensureOnlineKeysForOrder(orderId);
+        const settled = await this._settleOrderIfFullyPaid(originalOrderId);
+        if (settled?.isPaid) {
+          await this._ensureOnlineKeysForOrder(originalOrderId);
+        }
       }
 
       return {
@@ -352,14 +709,12 @@ class PaymentService {
     await transaction.save();
 
     if (newStatus === "SUCCESS") {
-      await BookingOrder.updateOne(
-        { id: originalOrderId, status: "PENDING" },
-        { $set: { status: "PAID" } },
-      );
+      const settled = await this._settleOrderIfFullyPaid(originalOrderId);
+      if (settled?.isPaid) {
+        await this._ensureOnlineKeysForOrder(originalOrderId);
+      }
 
-      await this._ensureOnlineKeysForOrder(orderId);
-
-      const paidOrder = await BookingOrder.findOne({ id: originalOrderId }).select("id user_id final_total_price payable_total_price");
+      const paidOrder = await BookingOrder.findOne({ id: originalOrderId }).select("id user_id final_total_price payable_total_price payment_method");
       if (paidOrder?.user_id) {
         await notificationService.sendToUser(paidOrder.user_id, {
           title: "Thanh toán thành công",
@@ -373,7 +728,7 @@ class PaymentService {
             transaction_id: transaction.id,
             transaction_no: transactionNo || "",
             amount: String(paidOrder.payable_total_price || paidOrder.final_total_price || amount || 0),
-            payment_method: "VNPAY",
+            payment_method: paidOrder.payment_method || "VNPAY",
           },
         });
       }
@@ -420,55 +775,40 @@ class PaymentService {
       throw error;
     }
 
-    const transactionId = txnRef.replace("WALLET_TOPUP_", "");
-    const transaction = await Transaction.findOne({
-      id: transactionId,
-      type: "TOPUP",
-      method: "VNPAY",
-    });
-
-    if (!transaction) {
-      const error = new Error("Topup transaction not found");
-      error.statusCode = 404;
+    const txnRefMatch = txnRef.match(/^WALLET_TOPUP_([^_]+)_\d+$/);
+    if (!txnRefMatch) {
+      const error = new Error("Invalid wallet topup transaction reference");
+      error.statusCode = 400;
       throw error;
     }
 
-    if (transaction.status !== "PENDING") {
-      return {
-        code: responseCode,
-        message: "Transaction already processed",
-        transactionId: transaction.id,
-        walletId: transaction.order_id,
-        status: transaction.status,
-        amount: transaction.amount,
-      };
+    const walletIdFromRef = String(txnRefMatch[1] || "").trim();
+    if (!walletIdFromRef) {
+      const error = new Error("Invalid wallet id in topup transaction reference");
+      error.statusCode = 400;
+      throw error;
     }
 
     if (responseCode !== "00") {
-      transaction.status = "FAILED";
-      transaction.provider_reference = transactionNo || transaction.provider_reference;
-      await transaction.save();
-
       return {
         code: responseCode,
         message: "Topup failed",
-        transactionId: transaction.id,
-        walletId: transaction.order_id,
-        status: transaction.status,
-        amount: transaction.amount,
+        transactionId: null,
+        walletId: walletIdFromRef,
+        status: "FAILED",
+        amount: paidAmount,
+        transactionNo,
+        txnRef,
       };
     }
 
-    if (Number(transaction.amount) !== paidAmount) {
-      transaction.status = "FAILED";
-      await transaction.save();
-
+    if (!Number.isFinite(paidAmount) || paidAmount <= 0) {
       const error = new Error("Amount mismatch in VNPay callback");
       error.statusCode = 400;
       throw error;
     }
 
-    const wallet = await Wallet.findOne({ id: transaction.order_id });
+    const wallet = await Wallet.findOne({ id: walletIdFromRef });
     if (!wallet) {
       const error = new Error("Wallet not found for topup transaction");
       error.statusCode = 404;
@@ -482,7 +822,7 @@ class PaymentService {
     }
 
     const existingWalletTopupAudit = await WalletTransaction.findOne({
-      transaction_id: transaction.id,
+      reference_id: txnRef,
       type: "TOPUP",
     });
 
@@ -491,17 +831,17 @@ class PaymentService {
 
     if (!existingWalletTopupAudit) {
       balanceBefore = wallet.balance;
-      balanceAfter = Number(balanceBefore) + Number(transaction.amount);
+      balanceAfter = Number((Number(balanceBefore) + Number(paidAmount)).toFixed(2));
       wallet.balance = balanceAfter;
       await wallet.save();
 
       await WalletTransaction.create({
         wallet_id: wallet.id,
-        amount: Number(transaction.amount),
+        amount: Number(paidAmount),
         type: "TOPUP",
-        transaction_id: transaction.id,
-        reference_id: null,
-        description: "VNPay wallet topup",
+        transaction_id: null,
+        reference_id: txnRef,
+        description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
         balance_before: balanceBefore,
         balance_after: balanceAfter,
       });
@@ -510,20 +850,17 @@ class PaymentService {
       balanceAfter = existingWalletTopupAudit.balance_after;
     }
 
-    transaction.status = "SUCCESS";
-    transaction.provider_reference = transactionNo || transaction.provider_reference;
-    await transaction.save();
-
     return {
       code: responseCode,
       message: "Topup successful",
-      transactionId: transaction.id,
+      transactionId: null,
       walletId: wallet.id,
-      amount: transaction.amount,
-      status: transaction.status,
+      amount: Number(paidAmount),
+      status: "SUCCESS",
       balance_before: balanceBefore,
       balance_after: balanceAfter,
       transactionNo,
+      txnRef,
     };
   }
 
@@ -868,6 +1205,21 @@ class PaymentService {
     const filter = {
       order_id: { $in: orderIds },
     };
+
+    const effectiveStartDate = options.startDate || null;
+    const effectiveEndDate = options.endDate || null;
+
+    if (effectiveStartDate || effectiveEndDate) {
+      filter.created_at = {};
+
+      if (effectiveStartDate) {
+        filter.created_at.$gte = this._parseDateOrThrow(effectiveStartDate, "startDate");
+      }
+
+      if (effectiveEndDate) {
+        filter.created_at.$lte = this._parseDateOrThrow(effectiveEndDate, "endDate");
+      }
+    }
 
     const [transactions, total] = await Promise.all([
       Transaction.find(filter).sort({ created_at: -1 }).skip(skip).limit(limit),

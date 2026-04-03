@@ -286,6 +286,20 @@ router.get('/transactions', protect, vnpayController.getAllTransactions);
  *           default: 10
  *           maximum: 100
  *         description: Number of records per page
+ *       - in: query
+ *         name: startDate
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter from datetime
+ *       - in: query
+ *         name: endDate
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Filter up to datetime
  *     security:
  *       - bearerAuth: []
  *     responses:

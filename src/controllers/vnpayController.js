@@ -196,9 +196,14 @@ exports.getPaymentsByBookingId = async (req, res) => {
 exports.getMyTransactions = async (req, res) => {
   try {
     const userId = req.user && (req.user._id || req.user.id);
-    const { page, limit } = req.query;
+    const { page, limit, startDate, endDate } = req.query;
 
-    const result = await paymentService.getMyTransactions(userId, { page, limit });
+    const result = await paymentService.getMyTransactions(userId, {
+      page,
+      limit,
+      startDate,
+      endDate,
+    });
 
     res.status(200).json({
       success: true,
