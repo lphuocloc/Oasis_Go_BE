@@ -165,7 +165,7 @@ class WalletService {
         const isCurrentPinMatch = await bcrypt.compare(currentPin, wallet.pincode_hash);
         if (!isCurrentPinMatch) {
             const error = new Error("Current PIN is incorrect");
-            error.statusCode = 401;
+            error.statusCode = 400;
             throw error;
         }
 
@@ -197,7 +197,7 @@ class WalletService {
         const user = await User.findById(userId).select("email");
         if (!user || !user.email) {
             const error = new Error("User email not found");
-            error.statusCode = 404;
+            error.statusCode = 400;
             throw error;
         }
 
@@ -237,7 +237,7 @@ class WalletService {
         const user = await User.findById(userId).select("resetPasswordOtp resetPasswordOtpExpires");
         if (!user) {
             const error = new Error("User not found");
-            error.statusCode = 404;
+            error.statusCode = 400;
             throw error;
         }
 
