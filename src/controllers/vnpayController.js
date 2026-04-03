@@ -48,7 +48,10 @@ exports.createPayment = async (req, res) => {
 // @access  Public
 exports.vnpayReturn = async (req, res) => {
   try {
-    const result = await paymentService.handleVnpayReturn(req.query);
+    const txnRef = String(req.query?.vnp_TxnRef || "");
+    const result = txnRef.startsWith("WALLET_TOPUP_")
+      ? await paymentService.handleWalletTopupVnpayReturn(req.query)
+      : await paymentService.handleVnpayReturn(req.query);
 
     res.status(200).json({
       success: true,
@@ -70,7 +73,10 @@ exports.vnpayReturn = async (req, res) => {
 // @access  Public
 exports.vnpayIpn = async (req, res) => {
   try {
-    const result = await paymentService.handleVnpayReturn(req.query);
+    const txnRef = String(req.query?.vnp_TxnRef || "");
+    const result = txnRef.startsWith("WALLET_TOPUP_")
+      ? await paymentService.handleWalletTopupVnpayReturn(req.query)
+      : await paymentService.handleVnpayReturn(req.query);
 
     // IPN requires specific response format
     if (result.code === "00") {
@@ -190,9 +196,14 @@ exports.getPaymentsByBookingId = async (req, res) => {
 exports.getMyTransactions = async (req, res) => {
   try {
     const userId = req.user && (req.user._id || req.user.id);
-    const { page, limit } = req.query;
+    const { page, limit, startDate, endDate } = req.query;
 
-    const result = await paymentService.getMyTransactions(userId, { page, limit });
+    const result = await paymentService.getMyTransactions(userId, {
+      page,
+      limit,
+      startDate,
+      endDate,
+    });
 
     res.status(200).json({
       success: true,
@@ -239,5 +250,85 @@ exports.getAllTransactions = async (req, res) => {
       success: false,
       message: error.message || "Error fetching transactions",
     });
+  }
+};
+
+// @desc    Create wallet topup VNPay payment URL
+// @route   POST /api/vnpay/wallet-topup/create-payment
+// @access  Private
+exports.createWalletTopupPayment = async (req, res) => {
+  try {
+    const { amount, orderInfo } = req.body;
+
+    if (!amount || !orderInfo) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: amount, orderInfo",
+      });
+    }
+
+    const userId = req.user && (req.user._id || req.user.id);
+    const ipAddr =
+      req.headers["x-forwarded-for"] ||
+      req.connection.remoteAddress ||
+      req.socket.remoteAddress ||
+      req.connection.socket.remoteAddress ||
+      "127.0.0.1";
+
+    const result = await paymentService.createWalletTopupPayment({
+      userId,
+      amount,
+      orderInfo,
+      ipAddr,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Wallet topup payment URL created successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error creating wallet topup payment",
+    });
+  }
+};
+
+// @desc    Wallet topup VNPay return URL handler
+// @route   GET /api/vnpay/wallet-topup/return
+// @access  Public
+exports.walletTopupReturn = async (req, res) => {
+  try {
+    const result = await paymentService.handleWalletTopupVnpayReturn(req.query);
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error processing wallet topup return",
+    });
+  }
+};
+
+// @desc    Wallet topup VNPay IPN callback
+// @route   GET /api/vnpay/wallet-topup/ipn
+// @access  Public
+exports.walletTopupIpn = async (req, res) => {
+  try {
+    const result = await paymentService.handleWalletTopupVnpayReturn(req.query);
+
+    if (result.code === "00") {
+      return res.status(200).json({ RspCode: "00", Message: "success" });
+    }
+    return res.status(200).json({ RspCode: "99", Message: "failed" });
+  } catch (error) {
+    return res.status(200).json({ RspCode: "99", Message: "error" });
   }
 };

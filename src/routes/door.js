@@ -136,6 +136,36 @@ router.post(
 
 /**
  * @swagger
+ * /api/doors/open-door:
+ *   post:
+ *     summary: Open pod door by online key
+ *     tags: [Doors]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [pod_id, key_token]
+ *             properties:
+ *               pod_id:
+ *                 type: string
+ *                 example: 0428be4a-0cb0-4aac-818e-7a4879393b8d
+ *               key_token:
+ *                 type: string
+ *                 example: "123456"
+ *     responses:
+ *       200:
+ *         description: Door unlock request sent successfully
+ *       403:
+ *         description: Invalid or expired key
+ *       409:
+ *         description: Booking has not checked in yet
+ */
+router.post("/open-door", doorController.openDoorWithOnlineKey);
+
+/**
+ * @swagger
  * /api/doors/{id}:
  *   get:
  *     summary: Get door by ID

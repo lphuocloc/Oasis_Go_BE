@@ -140,6 +140,48 @@ const emitDoorUnlockRequest = ({ pod_id, payload = {} }) => {
     return getPodRoomClientCount(pod_id) > 0;
 };
 
+const emitPodCheckinConfirmed = ({
+    pod_id,
+    booking_id,
+    customer_name = "Unknown",
+    action = "SWITCH_TO_KEYPAD",
+    session_expires_in = 300,
+    retry_count = 2,
+    retry_delay_ms = 300,
+}) => {
+    if (!ioInstance || !pod_id || !booking_id) return false;
+
+    const room = getPodRoom(pod_id);
+    const packet = {
+        event: "POD_CHECKIN_CONFIRMED",
+        payload: {
+            pod_id,
+            booking_id,
+            customer_name,
+            action,
+            session_expires_in,
+        },
+    };
+
+    const emitOnce = () => {
+        ioInstance.to(room).emit("POD_CHECKIN_CONFIRMED", packet);
+        return getPodRoomClientCount(pod_id) > 0;
+    };
+
+    const delivered = emitOnce();
+    if (delivered || retry_count <= 0) {
+        return delivered;
+    }
+
+    for (let attempt = 1; attempt <= retry_count; attempt += 1) {
+        setTimeout(() => {
+            emitOnce();
+        }, attempt * retry_delay_ms);
+    }
+
+    return false;
+};
+
 const initSocketServer = (httpServer) => {
     if (ioInstance) return ioInstance;
 
@@ -243,4 +285,5 @@ module.exports = {
     getSocketServer,
     emitQrCodeEvent,
     emitDoorUnlockRequest,
+    emitPodCheckinConfirmed,
 };

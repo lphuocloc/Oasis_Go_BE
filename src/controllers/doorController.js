@@ -66,3 +66,21 @@ exports.deleteDoor = async (req, res) => {
     res.status(statusCode).json({ success: false, message: error.message || "Error deleting door" });
   }
 };
+
+exports.openDoorWithOnlineKey = async (req, res) => {
+  try {
+    const { pod_id, key_token } = req.body;
+    const result = await doorService.openDoorWithOnlineKey({ pod_id, key_token });
+    res.status(200).json({
+      success: true,
+      message: "Door unlock request sent successfully",
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error opening door",
+    });
+  }
+};
