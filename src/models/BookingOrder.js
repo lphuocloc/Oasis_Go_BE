@@ -70,6 +70,15 @@ const bookingOrderSchema = new mongoose.Schema(
             required: true,
             index: true,
         },
+        payment_method: {
+            type: String,
+            enum: {
+                values: ["VNPAY", "WALLET", "HYBRID"],
+                message: "{VALUE} is not a valid payment method",
+            },
+            default: null,
+            index: true,
+        },
     },
     {
         timestamps: true,

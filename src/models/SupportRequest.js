@@ -36,10 +36,19 @@ const supportRequestSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values: ["CLEANING", "MAINTENANCE", "OTHERS"],
+        values: ["MAINTENANCE", "CHANGE_POD"],
         message: "{VALUE} is not a valid support request type",
       },
       required: true,
+      index: true,
+    },
+    severity: {
+      type: String,
+      default: null,
+      enum: {
+        values: ["LOW", "MEDIUM", "HIGH", "CRITICAL", null],
+        message: "{VALUE} is not a valid severity",
+      },
       index: true,
     },
     description: {
@@ -50,7 +59,7 @@ const supportRequestSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "IN_PROGRESS", "RESOLVED"],
+        values: ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"],
         message: "{VALUE} is not a valid support request status",
       },
       default: "PENDING",
@@ -71,6 +80,16 @@ const supportRequestSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    escalation_note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    resolution_note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
   },
   {
     timestamps: true,
@@ -83,6 +102,16 @@ supportRequestSchema.index({ user_id: 1, status: 1, createdAt: -1 });
 supportRequestSchema.index({ booking_id: 1, createdAt: -1 });
 supportRequestSchema.index({ location_id: 1, status: 1, createdAt: -1 });
 supportRequestSchema.index({ pod_id: 1, status: 1, createdAt: -1 });
+supportRequestSchema.index(
+  { booking_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      status: { $in: ["PENDING", "PROCESSING"] },
+    },
+    name: "uniq_active_support_request_per_booking",
+  }
+);
 
 supportRequestSchema.virtual("booking", {
   ref: "Booking",

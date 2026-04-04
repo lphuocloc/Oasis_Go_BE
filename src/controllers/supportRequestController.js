@@ -13,7 +13,7 @@ const createSupportRequest = async (req, res) => {
       data: supportRequest,
     });
   } catch (error) {
-    res.status(error.statusCode || 400).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to create support request",
     });
@@ -35,7 +35,7 @@ const getSupportRequests = async (req, res) => {
       pagination: result.pagination,
     });
   } catch (error) {
-    res.status(error.statusCode || 400).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to retrieve support requests",
     });
@@ -57,9 +57,52 @@ const updateSupportRequestStatus = async (req, res) => {
       data: supportRequest,
     });
   } catch (error) {
-    res.status(error.statusCode || 400).json({
+    res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Failed to update support request status",
+    });
+  }
+};
+
+const getRoomChangeCandidates = async (req, res) => {
+  try {
+    const result = await supportRequestService.getRoomChangeCandidates(
+      req.params.id,
+      req.user,
+      req.managerScope
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Room-change candidates retrieved successfully",
+      data: result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve room-change candidates",
+    });
+  }
+};
+
+const executeRoomChange = async (req, res) => {
+  try {
+    const result = await supportRequestService.executeRoomChange(
+      req.params.id,
+      req.user,
+      req.managerScope,
+      req.body
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Emergency room change completed successfully",
+      data: result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to execute emergency room change",
     });
   }
 };
@@ -68,4 +111,6 @@ module.exports = {
   createSupportRequest,
   getSupportRequests,
   updateSupportRequestStatus,
+  getRoomChangeCandidates,
+  executeRoomChange,
 };

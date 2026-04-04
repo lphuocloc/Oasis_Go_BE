@@ -1,12 +1,15 @@
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
+const BookingSlot = require("../models/BookingSlot");
 const TimeSlot = require("../models/TimeSlot");
 const BookingAccessSession = require("../models/BookingAccessSession");
 const OnlineKey = require("../models/OnlineKey");
 const Door = require("../models/Door");
 const PodDevice = require("../models/PodDevice");
 const Incident = require("../models/Incidents");
+const User = require("../models/User");
+const notificationService = require("./notificationService");
 const podQrCodeService = require("../services/podQrCodeService");
 
 /**
@@ -34,6 +37,158 @@ const generatePodCode = (rowIndex, colIndex, level) => {
 };
 
 class PodService {
+    async _notifyMigrationAlerts({ podId, alerts = [] }) {
+        if (!alerts.length) return;
+
+        const recipients = await User.find({
+            role: { $in: ["admin", "manager"] },
+            isActive: true,
+        }).select("_id").lean();
+
+        if (!recipients.length) return;
+
+        await Promise.all(
+            recipients.map((item) =>
+                notificationService.sendToUser(item._id, {
+                    title: "Auto migration alert",
+                    message: `No replacement pod found for ${alerts.length} future booking(s) on maintenance pod ${podId}`,
+                    type: "POD",
+                    event_code: "POD_AUTO_MIGRATION_ALERT",
+                    dedupe_key: `POD_AUTO_MIGRATION_ALERT:${podId}:${item._id}`,
+                    data: {
+                        pod_id: podId,
+                        alert_count: alerts.length,
+                    },
+                })
+            )
+        );
+    }
+
+    async _findReplacementPodForBooking(booking, candidatePods = []) {
+        for (const candidatePod of candidatePods) {
+            const isAvailable = await Booking.isPodAvailable(
+                candidatePod.id,
+                booking.start_time,
+                booking.end_time,
+                booking.id
+            );
+
+            if (!isAvailable) {
+                continue;
+            }
+
+            const conflictingTimeSlot = await TimeSlot.findOne({
+                pod_id: candidatePod.id,
+                status: "RESERVED",
+                start_time: { $lt: booking.end_time },
+                end_time: { $gt: booking.start_time },
+            })
+                .select("id")
+                .lean();
+
+            if (conflictingTimeSlot) {
+                continue;
+            }
+
+            return candidatePod;
+        }
+
+        return null;
+    }
+
+    async _autoMigrateFutureBookingsForMaintenancePod(pod) {
+        const now = new Date();
+
+        const futureBookings = await Booking.find({
+            pod_id: pod.id,
+            status: "BOOKED",
+            start_time: { $gt: now },
+        }).sort({ start_time: 1 });
+
+        if (futureBookings.length === 0) {
+            return {
+                scanned: 0,
+                migrated_count: 0,
+                alert_count: 0,
+                migrated: [],
+                alerts: [],
+            };
+        }
+
+        const candidatePods = await Pod.find({
+            cluster_id: pod.cluster_id,
+            status: "AVAILABLE",
+            id: { $ne: pod.id },
+        })
+            .select("id code name cluster_id")
+            .lean();
+
+        const migrated = [];
+        const alerts = [];
+
+        for (const booking of futureBookings) {
+            const targetPod = await this._findReplacementPodForBooking(booking, candidatePods);
+
+            if (!targetPod) {
+                alerts.push({
+                    booking_id: booking.id,
+                    reason: "NO_AVAILABLE_POD_IN_CLUSTER",
+                });
+                continue;
+            }
+
+            const oldPodId = booking.pod_id;
+            booking.pod_id = targetPod.id;
+            await booking.save();
+
+            const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).select("time_slot_id").lean();
+            const timeSlotIds = bookingSlots.map((slot) => slot.time_slot_id);
+
+            if (timeSlotIds.length > 0) {
+                await TimeSlot.updateMany(
+                    { id: { $in: timeSlotIds } },
+                    { $set: { pod_id: targetPod.id } }
+                );
+            }
+
+            await OnlineKey.updateMany(
+                { booking_id: booking.id, is_revoked: false },
+                { $set: { pod_id: targetPod.id } }
+            );
+
+            migrated.push({
+                booking_id: booking.id,
+                from_pod_id: oldPodId,
+                to_pod_id: targetPod.id,
+            });
+
+            await notificationService.sendToUser(booking.user_id, {
+                title: "Booking pod updated",
+                message: "Your upcoming booking was moved to another available pod due to maintenance.",
+                type: "BOOKING",
+                event_code: "BOOKING_AUTO_MIGRATED",
+                dedupe_key: `BOOKING_AUTO_MIGRATED:${booking.id}`,
+                data: {
+                    booking_id: booking.id,
+                    old_pod_id: oldPodId,
+                    new_pod_id: targetPod.id,
+                },
+            });
+        }
+
+        if (alerts.length > 0) {
+            await this._notifyMigrationAlerts({ podId: pod.id, alerts });
+        }
+
+        return {
+            scanned: futureBookings.length,
+            migrated_count: migrated.length,
+            alert_count: alerts.length,
+            migrated,
+            alerts,
+        };
+    }
+
     /**
      * Tạo pods (Grid hoặc Single mode)
      */
@@ -377,7 +532,7 @@ class PodService {
     /**
      * Cập nhật trạng thái pod
      */
-    async updatePodStatus(podId, { status, maintenance_status }) {
+    async updatePodStatus(podId, { status, maintenance_status, long_term_maintenance = false, auto_migrate_future_bookings = false }) {
         if (!status) {
             throw new Error("Status is required");
         }
@@ -401,7 +556,21 @@ class PodService {
         await pod.save();
         await pod.populate("cluster");
 
-        return pod;
+        let autoMigration = null;
+        if (
+            status === "MAINTENANCE" &&
+            (auto_migrate_future_bookings === true || String(auto_migrate_future_bookings).toLowerCase() === "true" ||
+                long_term_maintenance === true || String(long_term_maintenance).toLowerCase() === "true")
+        ) {
+            autoMigration = await this._autoMigrateFutureBookingsForMaintenancePod(pod);
+        }
+
+        const result = pod.toObject ? pod.toObject() : pod;
+        if (autoMigration) {
+            result.auto_migration = autoMigration;
+        }
+
+        return result;
     }
 
     /**

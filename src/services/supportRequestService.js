@@ -1,90 +1,378 @@
 const Booking = require("../models/Bookings");
+const BookingSlot = require("../models/BookingSlot");
+const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
+const Location = require("../models/Location");
+const OnlineKey = require("../models/OnlineKey");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const SupportRequest = require("../models/SupportRequest");
+const TimeSlot = require("../models/TimeSlot");
+const User = require("../models/User");
+const notificationService = require("./notificationService");
+
+const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
+const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "ESCALATED", "RESOLVED", "REJECTED"];
+const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
+const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
+
+const createError = (message, statusCode = 400) => {
+  const error = new Error(message);
+  error.statusCode = statusCode;
+  return error;
+};
+
+const normalizeUpper = (value) => String(value || "").trim().toUpperCase();
+
+const normalizeSupportStatus = (status) => {
+  const normalized = normalizeUpper(status);
+  if (normalized === "IN_PROGRESS") {
+    return "PROCESSING";
+  }
+  return normalized;
+};
 
 class SupportRequestService {
+  _getActorId(actor) {
+    return String(actor?._id || actor?.id || "");
+  }
+
+  _getActorRole(actor) {
+    return String(actor?.role || "").toLowerCase();
+  }
+
+  async _resolveTopParentLocationId(locationId) {
+    let currentLocationId = String(locationId || "");
+    if (!currentLocationId) return null;
+
+    let current = await Location.findOne({ id: currentLocationId }).select("id parent_id").lean();
+    if (!current) return null;
+
+    while (current.parent_id) {
+      const parent = await Location.findOne({ id: current.parent_id }).select("id parent_id").lean();
+      if (!parent) break;
+      current = parent;
+    }
+
+    return current?.id ? String(current.id) : null;
+  }
+
+  async _resolveLocationScopeFromParent(parentLocationId) {
+    const rootId = String(parentLocationId || "");
+    if (!rootId) return [];
+
+    const descendants = await Location.getDescendants(rootId);
+    const descendantIds = descendants.map((item) => String(item.id));
+    return [rootId, ...descendantIds];
+  }
+
+  async _resolveCleaningBufferMinutes({ podId, clusterId, locationId }) {
+    const podPolicy = podId
+      ? await CleaningBufferPolicy.findOne({ pod_id: String(podId), is_active: true })
+        .sort({ created_at: -1 })
+        .select("buffer_minutes")
+        .lean()
+      : null;
+
+    if (podPolicy && Number.isInteger(Number(podPolicy.buffer_minutes))) {
+      return Number(podPolicy.buffer_minutes);
+    }
+
+    const clusterPolicy = clusterId
+      ? await CleaningBufferPolicy.findOne({ cluster_id: String(clusterId), is_active: true })
+        .sort({ created_at: -1 })
+        .select("buffer_minutes")
+        .lean()
+      : null;
+
+    if (clusterPolicy && Number.isInteger(Number(clusterPolicy.buffer_minutes))) {
+      return Number(clusterPolicy.buffer_minutes);
+    }
+
+    const locationPolicy = locationId
+      ? await CleaningBufferPolicy.findOne({ location_id: String(locationId), is_active: true })
+        .sort({ created_at: -1 })
+        .select("buffer_minutes")
+        .lean()
+      : null;
+
+    if (locationPolicy && Number.isInteger(Number(locationPolicy.buffer_minutes))) {
+      return Number(locationPolicy.buffer_minutes);
+    }
+
+    return DEFAULT_CLEANING_BUFFER_MINUTES;
+  }
+
+  async _ensureSupportRequestContext(supportRequest) {
+    if (!supportRequest.location_id || !supportRequest.pod_id) {
+      const booking = await Booking.findOne({ id: supportRequest.booking_id }).select("id pod_id");
+      if (!booking) {
+        throw createError("Booking not found for support request", 404);
+      }
+
+      const pod = await Pod.findOne({ id: booking.pod_id }).select("id cluster_id");
+      if (!pod) {
+        throw createError("Pod not found for support request booking", 404);
+      }
+
+      const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id");
+      if (!cluster) {
+        throw createError("Pod cluster not found for support request booking", 404);
+      }
+
+      supportRequest.pod_id = booking.pod_id;
+      supportRequest.location_id = cluster.location_id;
+    }
+
+    return supportRequest;
+  }
+
+  async _assertManagerScopeAccess(supportRequest, managerScope) {
+    const scopedLocationIds = new Set(((managerScope && managerScope.locationIds) || []).map((item) => String(item)));
+    const scopedParentLocationIds = new Set(
+      ((managerScope && managerScope.parentLocationIds) || []).map((item) => String(item))
+    );
+
+    if (!scopedLocationIds.has(String(supportRequest.location_id))) {
+      throw createError("You are not allowed to handle support requests outside your location scope", 403);
+    }
+
+    if (scopedParentLocationIds.size > 0) {
+      const topParentId = await this._resolveTopParentLocationId(supportRequest.location_id);
+      if (topParentId && !scopedParentLocationIds.has(String(topParentId))) {
+        throw createError("You are not allowed to handle support requests outside your parent location scope", 403);
+      }
+    }
+  }
+
+  async _getRoomChangeCandidates(booking, currentPod, currentCluster, managerScope) {
+    const now = new Date();
+    const remainingStart = now;
+
+    const sameParentId = await this._resolveTopParentLocationId(currentCluster.location_id);
+    const allowedLocationIds = sameParentId
+      ? await this._resolveLocationScopeFromParent(sameParentId)
+      : [String(currentCluster.location_id)];
+
+    const relatedClusters = await PodCluster.find({
+      location_id: { $in: allowedLocationIds.map((item) => String(item)) },
+    })
+      .select("id location_id")
+      .lean();
+
+    const sameClusterIds = new Set([String(currentCluster.id)]);
+    const sameParentClusterIds = new Set(relatedClusters.map((item) => String(item.id)));
+    const candidateClusterIds = [...new Set([...sameClusterIds, ...sameParentClusterIds])];
+
+    const scopedPodIds = new Set(((managerScope && managerScope.podIds) || []).map((item) => String(item)));
+    const podQuery = {
+      cluster_id: { $in: candidateClusterIds },
+      status: "AVAILABLE",
+      id: { $ne: String(currentPod.id) },
+    };
+
+    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status").lean();
+    const pods = scopedPodIds.size > 0
+      ? rawPods.filter((item) => scopedPodIds.has(String(item.id)))
+      : rawPods;
+
+    if (pods.length === 0) {
+      return [];
+    }
+
+    const clusterById = new Map(relatedClusters.map((item) => [String(item.id), item]));
+    clusterById.set(String(currentCluster.id), {
+      id: String(currentCluster.id),
+      location_id: String(currentCluster.location_id),
+    });
+
+    const candidates = [];
+    for (const pod of pods) {
+      const podCluster = clusterById.get(String(pod.cluster_id));
+      if (!podCluster) continue;
+
+      const bufferMinutes = await this._resolveCleaningBufferMinutes({
+        podId: pod.id,
+        clusterId: pod.cluster_id,
+        locationId: podCluster.location_id,
+      });
+
+      const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
+      if (remainingStart >= bufferedEnd) {
+        continue;
+      }
+
+      const isBookingAvailable = await Booking.isPodAvailable(
+        pod.id,
+        remainingStart,
+        bufferedEnd,
+        booking.id
+      );
+
+      if (!isBookingAvailable) {
+        continue;
+      }
+
+      const conflictingTimeSlot = await TimeSlot.findOne({
+        pod_id: pod.id,
+        status: "RESERVED",
+        start_time: { $lt: bufferedEnd },
+        end_time: { $gt: remainingStart },
+      })
+        .select("id")
+        .lean();
+
+      if (conflictingTimeSlot) {
+        continue;
+      }
+
+      candidates.push({
+        pod_id: pod.id,
+        pod_code: pod.code,
+        pod_name: pod.name,
+        cluster_id: String(pod.cluster_id),
+        location_id: String(podCluster.location_id),
+        scope_level: String(pod.cluster_id) === String(currentCluster.id) ? "SAME_CLUSTER" : "SAME_PARENT_LOCATION",
+        buffer_minutes_applied: bufferMinutes,
+        remaining_time_start: remainingStart,
+        remaining_time_end_with_buffer: bufferedEnd,
+      });
+    }
+
+    candidates.sort((a, b) => {
+      if (a.scope_level === b.scope_level) return 0;
+      return a.scope_level === "SAME_CLUSTER" ? -1 : 1;
+    });
+
+    return candidates;
+  }
+
+  async _notifyAdminsForEscalation(supportRequest, booking) {
+    const admins = await User.find({ role: "admin", isActive: true }).select("_id").lean();
+    if (!admins || admins.length === 0) {
+      return;
+    }
+
+    await Promise.all(
+      admins.map((admin) =>
+        notificationService.sendToUser(admin._id, {
+          title: "Yeu cau ho tro can xu ly",
+          message: "Manager da escalate yeu cau MAINTENANCE muc do cao.",
+          type: "SUPPORT",
+          event_code: "SUPPORT_ESCALATED",
+          dedupe_key: `SUPPORT_ESCALATED:${supportRequest.id}:${admin._id}`,
+          data: {
+            support_request_id: supportRequest.id,
+            booking_id: booking ? booking.id : supportRequest.booking_id,
+            severity: supportRequest.severity || "UNKNOWN",
+            status: supportRequest.status,
+          },
+        })
+      )
+    );
+  }
+
   async createSupportRequest(actor, payload = {}) {
-    const actorId = String(actor?._id || actor?.id || "");
+    const actorId = this._getActorId(actor);
+    const actorRole = this._getActorRole(actor);
     if (!actorId) {
-      const error = new Error("Unauthorized");
-      error.statusCode = 401;
-      throw error;
+      throw createError("Unauthorized", 401);
+    }
+
+    if (actorRole !== "user") {
+      throw createError("Only user can create support requests", 403);
     }
 
     const { booking_id, type, description, images = [] } = payload;
+    const normalizedType = normalizeUpper(type);
 
-    if (!booking_id || !type || !description) {
-      const error = new Error("booking_id, type and description are required");
-      error.statusCode = 400;
-      throw error;
+    if (!booking_id || !normalizedType || !description) {
+      throw createError("booking_id, type and description are required", 400);
+    }
+
+    if (!SUPPORT_TYPES.includes(normalizedType)) {
+      throw createError(`type must be one of ${SUPPORT_TYPES.join(", ")}`, 400);
     }
 
     if (!Array.isArray(images)) {
-      const error = new Error("images must be an array of URL strings");
-      error.statusCode = 400;
-      throw error;
+      throw createError("images must be an array of URL strings", 400);
     }
+
+    const normalizedImages = images.map((item) => String(item || "").trim()).filter(Boolean);
 
     const booking = await Booking.findOne({ id: booking_id }).select(
       "id user_id pod_id status start_time end_time"
     );
 
     if (!booking) {
-      const error = new Error("Booking not found");
-      error.statusCode = 404;
-      throw error;
+      throw createError("Booking not found", 404);
     }
 
     if (String(booking.user_id) !== actorId) {
-      const error = new Error("You can only create support requests for your own booking");
-      error.statusCode = 403;
-      throw error;
+      throw createError("You can only create support requests for your own booking", 403);
     }
 
-    if (!["IN_USE", "COMPLETED"].includes(booking.status)) {
-      const error = new Error("Support requests are only allowed for bookings that are in use or completed");
-      error.statusCode = 400;
-      throw error;
+    if (normalizeUpper(booking.status) !== "IN_USE") {
+      throw createError("Support request can only be created when booking is IN_USE", 400);
     }
+
+    const activeRequest = await SupportRequest.findOne({
+      booking_id: String(booking_id),
+      status: { $in: ACTIVE_SUPPORT_STATUSES },
+    })
+      .select("id status")
+      .lean();
+
+    if (activeRequest) {
+      throw createError("This booking already has an active support request", 409);
+    }
+
+    if (normalizedType === "MAINTENANCE" && normalizedImages.length === 0) {
+      throw createError("Maintenance request requires at least one evidence image", 400);
+    }
+
 
     const pod = await Pod.findOne({ id: booking.pod_id }).select("id cluster_id");
     if (!pod) {
-      const error = new Error("Pod not found for this booking");
-      error.statusCode = 404;
-      throw error;
+      throw createError("Pod not found for this booking", 404);
     }
 
     const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id");
     if (!cluster) {
-      const error = new Error("Pod cluster not found for this booking");
-      error.statusCode = 404;
-      throw error;
+      throw createError("Pod cluster not found for this booking", 404);
     }
 
-    const supportRequest = await SupportRequest.create({
-      booking_id,
-      pod_id: booking.pod_id,
-      location_id: cluster.location_id,
-      user_id: actorId,
-      type,
-      description,
-      images,
-      status: "PENDING",
-    });
+    try {
+      const supportRequest = await SupportRequest.create({
+        booking_id,
+        pod_id: booking.pod_id,
+        location_id: cluster.location_id,
+        user_id: actorId,
+        type: normalizedType,
+        description,
+        images: normalizedImages,
+        status: "PENDING",
+      });
 
-    return supportRequest;
+      return supportRequest;
+    } catch (error) {
+      if (error && error.code === 11000) {
+        throw createError("This booking already has an active support request", 409);
+      }
+      throw error;
+    }
   }
 
   async getSupportRequests(actor, managerScope, filters = {}) {
-    const role = String(actor?.role || "");
-    const actorId = String(actor?._id || actor?.id || "");
-    const { status, type, booking_id, page = 1, limit = 20 } = filters;
+    const role = this._getActorRole(actor);
+    const actorId = this._getActorId(actor);
+    const { status, type, severity, booking_id, page = 1, limit = 20 } = filters;
 
     const query = {};
 
-    if (status) query.status = String(status).toUpperCase();
-    if (type) query.type = String(type).toUpperCase();
+    if (status) query.status = normalizeSupportStatus(status);
+    if (type) query.type = normalizeUpper(type);
+    if (severity) query.severity = normalizeUpper(severity);
     if (booking_id) query.booking_id = String(booking_id);
 
     if (role === "user") {
@@ -92,6 +380,8 @@ class SupportRequestService {
     } else if (role === "manager") {
       const locationIds = (managerScope && managerScope.locationIds) || [];
       query.location_id = { $in: locationIds.map((item) => String(item)) };
+    } else {
+      throw createError("Not authorized to view support requests", 403);
     }
 
     const pageNum = Math.max(parseInt(page, 10) || 1, 1);
@@ -104,7 +394,8 @@ class SupportRequestService {
         .skip(skip)
         .limit(limitNum)
         .populate("booking", "id user_id pod_id status start_time end_time")
-        .populate("handler", "_id name email role"),
+        .populate("handler", "_id name email role")
+        .populate("user", "_id id name email role"),
       SupportRequest.countDocuments(query),
     ]);
 
@@ -120,82 +411,336 @@ class SupportRequestService {
   }
 
   async updateSupportRequestStatus(requestId, actor, managerScope, payload = {}) {
-    const actorId = String(actor?._id || actor?.id || "");
-    const actorRole = String(actor?.role || "");
-    const { status } = payload;
+    const actorId = this._getActorId(actor);
+    const actorRole = this._getActorRole(actor);
+    const { status, severity, escalation_note, resolution_note } = payload;
 
     if (actorRole !== "manager") {
-      const error = new Error("Only manager can handle support request status");
-      error.statusCode = 403;
-      throw error;
+      throw createError("Only manager can handle support request status", 403);
     }
 
     if (!status) {
-      const error = new Error("status is required");
-      error.statusCode = 400;
-      throw error;
+      throw createError("status is required", 400);
     }
 
-    const normalizedStatus = String(status).toUpperCase();
-    if (!["PENDING", "IN_PROGRESS", "RESOLVED"].includes(normalizedStatus)) {
-      const error = new Error("status must be one of PENDING, IN_PROGRESS, RESOLVED");
-      error.statusCode = 400;
-      throw error;
+    const normalizedStatus = normalizeSupportStatus(status);
+    if (!SUPPORT_STATUSES.includes(normalizedStatus)) {
+      throw createError(`status must be one of ${SUPPORT_STATUSES.join(", ")}`, 400);
     }
 
     const supportRequest = await SupportRequest.findOne({ id: requestId });
     if (!supportRequest) {
-      const error = new Error("Support request not found");
-      error.statusCode = 404;
-      throw error;
+      throw createError("Support request not found", 404);
     }
 
-    if (!supportRequest.location_id || !supportRequest.pod_id) {
-      const booking = await Booking.findOne({ id: supportRequest.booking_id }).select("id pod_id");
-      if (!booking) {
-        const error = new Error("Booking not found for support request");
-        error.statusCode = 404;
-        throw error;
-      }
+    await this._ensureSupportRequestContext(supportRequest);
+    await this._assertManagerScopeAccess(supportRequest, managerScope);
 
-      const pod = await Pod.findOne({ id: booking.pod_id }).select("id cluster_id");
-      if (!pod) {
-        const error = new Error("Pod not found for support request booking");
-        error.statusCode = 404;
-        throw error;
-      }
+    const currentStatus = normalizeSupportStatus(supportRequest.status);
+    const allowedTransitions = {
+      PENDING: ["PROCESSING", "REJECTED"],
+      PROCESSING: ["ESCALATED", "RESOLVED", "REJECTED"],
+      ESCALATED: ["PROCESSING", "RESOLVED", "REJECTED"],
+      RESOLVED: [],
+      REJECTED: [],
+    };
 
-      const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id");
-      if (!cluster) {
-        const error = new Error("Pod cluster not found for support request booking");
-        error.statusCode = 404;
-        throw error;
+    if (currentStatus !== normalizedStatus) {
+      const transitions = allowedTransitions[currentStatus] || [];
+      if (!transitions.includes(normalizedStatus)) {
+        throw createError(`Cannot change support request status from ${currentStatus} to ${normalizedStatus}`, 400);
       }
-
-      supportRequest.pod_id = booking.pod_id;
-      supportRequest.location_id = cluster.location_id;
     }
 
-    const locationIds = (managerScope && managerScope.locationIds) || [];
-    const canAccess = locationIds.map((item) => String(item)).includes(String(supportRequest.location_id));
-    if (!canAccess) {
-      const error = new Error("You are not allowed to handle support requests outside your location scope");
-      error.statusCode = 403;
-      throw error;
+    const normalizedSeverity = severity ? normalizeUpper(severity) : null;
+    if (normalizedSeverity) {
+      if (normalizeUpper(supportRequest.type) !== "MAINTENANCE") {
+        throw createError("severity is only supported for MAINTENANCE requests", 400);
+      }
+      if (!MAINTENANCE_SEVERITIES.includes(normalizedSeverity)) {
+        throw createError(`severity must be one of ${MAINTENANCE_SEVERITIES.join(", ")}`, 400);
+      }
+      supportRequest.severity = normalizedSeverity;
     }
 
-    if (normalizedStatus === "IN_PROGRESS" || normalizedStatus === "RESOLVED") {
+    const effectiveSeverity = normalizeUpper(supportRequest.severity || normalizedSeverity || "");
+    if (normalizedStatus === "ESCALATED") {
+      if (normalizeUpper(supportRequest.type) !== "MAINTENANCE") {
+        throw createError("Only MAINTENANCE request can be escalated", 400);
+      }
+      if (!["HIGH", "CRITICAL"].includes(effectiveSeverity)) {
+        throw createError("Escalated MAINTENANCE request requires severity HIGH or CRITICAL", 400);
+      }
+      if (!String(escalation_note || "").trim()) {
+        throw createError("escalation_note is required when status is ESCALATED", 400);
+      }
+      supportRequest.escalation_note = String(escalation_note).trim();
+    }
+
+    if (["RESOLVED", "REJECTED"].includes(normalizedStatus) && !String(resolution_note || "").trim()) {
+      throw createError("resolution_note is required when status is RESOLVED or REJECTED", 400);
+    }
+
+    if (["PROCESSING", "ESCALATED", "RESOLVED", "REJECTED"].includes(normalizedStatus)) {
       supportRequest.handled_by = actorId;
       supportRequest.handled_at = new Date();
-    } else if (normalizedStatus === "PENDING") {
-      supportRequest.handled_by = null;
-      supportRequest.handled_at = null;
+    }
+
+    if (resolution_note !== undefined) {
+      supportRequest.resolution_note = String(resolution_note || "").trim() || null;
     }
 
     supportRequest.status = normalizedStatus;
     await supportRequest.save();
 
+    if (normalizedStatus === "ESCALATED") {
+      const booking = await Booking.findOne({ id: supportRequest.booking_id }).select("id").lean();
+      await this._notifyAdminsForEscalation(supportRequest, booking);
+    }
+
     return supportRequest;
+  }
+
+  async getRoomChangeCandidates(requestId, actor, managerScope) {
+    if (this._getActorRole(actor) !== "manager") {
+      throw createError("Only manager can view room-change candidates", 403);
+    }
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId });
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    await this._ensureSupportRequestContext(supportRequest);
+    await this._assertManagerScopeAccess(supportRequest, managerScope);
+
+    if (!SUPPORT_TYPES.includes(normalizeUpper(supportRequest.type))) {
+      throw createError("Support request type does not support room-change operation", 400);
+    }
+
+    const booking = await Booking.findOne({ id: supportRequest.booking_id }).select(
+      "id user_id pod_id start_time end_time status"
+    );
+    if (!booking) {
+      throw createError("Booking not found for support request", 404);
+    }
+
+    if (normalizeUpper(booking.status) !== "IN_USE") {
+      throw createError("Room change is only allowed when booking is IN_USE", 400);
+    }
+
+    const currentPod = await Pod.findOne({ id: booking.pod_id }).select("id code name cluster_id status");
+
+    if (!currentPod) {
+      throw createError("Current booking pod not found", 404);
+    }
+
+    const resolvedCurrentCluster = await PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id");
+    if (!resolvedCurrentCluster) {
+      throw createError("Current pod cluster not found", 404);
+    }
+
+    const candidates = await this._getRoomChangeCandidates(booking, currentPod, resolvedCurrentCluster, managerScope);
+
+    return {
+      request: supportRequest,
+      booking,
+      current_pod: currentPod,
+      candidates,
+    };
+  }
+
+  async executeRoomChange(requestId, actor, managerScope, payload = {}) {
+    if (this._getActorRole(actor) !== "manager") {
+      throw createError("Only manager can execute room change", 403);
+    }
+
+    const targetPodId = String(payload.target_pod_id || "").trim();
+    if (!targetPodId) {
+      throw createError("target_pod_id is required", 400);
+    }
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId });
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    await this._ensureSupportRequestContext(supportRequest);
+    await this._assertManagerScopeAccess(supportRequest, managerScope);
+
+    const requestType = normalizeUpper(supportRequest.type);
+    if (!SUPPORT_TYPES.includes(requestType)) {
+      throw createError("Support request type does not support room-change operation", 400);
+    }
+
+    const currentStatus = normalizeSupportStatus(supportRequest.status);
+    if (!["PENDING", "PROCESSING", "ESCALATED"].includes(currentStatus)) {
+      throw createError(`Cannot execute room change when request status is ${currentStatus}`, 400);
+    }
+
+    const booking = await Booking.findOne({ id: supportRequest.booking_id });
+    if (!booking) {
+      throw createError("Booking not found for support request", 404);
+    }
+
+    if (normalizeUpper(booking.status) !== "IN_USE") {
+      throw createError("Room change is only allowed when booking is IN_USE", 400);
+    }
+
+    const [currentPod, nextPod] = await Promise.all([
+      Pod.findOne({ id: booking.pod_id }).select("id code name cluster_id status maintenance_status"),
+      Pod.findOne({ id: targetPodId }).select("id code name cluster_id status"),
+    ]);
+
+    if (!currentPod) {
+      throw createError("Current booking pod not found", 404);
+    }
+
+    if (!nextPod) {
+      throw createError("Target pod not found", 404);
+    }
+
+    if (normalizeUpper(nextPod.status) !== "AVAILABLE") {
+      throw createError("Target pod must be AVAILABLE", 400);
+    }
+
+    const [currentCluster, nextCluster] = await Promise.all([
+      PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id"),
+      PodCluster.findOne({ id: nextPod.cluster_id }).select("id location_id"),
+    ]);
+
+    if (!currentCluster || !nextCluster) {
+      throw createError("Pod cluster not found", 404);
+    }
+
+    const currentParent = await this._resolveTopParentLocationId(currentCluster.location_id);
+    const nextParent = await this._resolveTopParentLocationId(nextCluster.location_id);
+
+    const isSameCluster = String(currentCluster.id) === String(nextCluster.id);
+    const isSameParentLocation = Boolean(currentParent) && String(currentParent) === String(nextParent);
+    if (!isSameCluster && !isSameParentLocation) {
+      throw createError("Target pod must be in same cluster or same parent location", 400);
+    }
+
+    const scopePodIds = new Set(((managerScope && managerScope.podIds) || []).map((item) => String(item)));
+    if (scopePodIds.size > 0 && !scopePodIds.has(String(nextPod.id))) {
+      throw createError("You are not allowed to move booking to this pod", 403);
+    }
+
+    const bufferMinutes = await this._resolveCleaningBufferMinutes({
+      podId: nextPod.id,
+      clusterId: nextCluster.id,
+      locationId: nextCluster.location_id,
+    });
+    const remainingStart = new Date();
+    const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
+
+    if (remainingStart >= bufferedEnd) {
+      throw createError("Booking remaining time is invalid for room change", 400);
+    }
+
+    const isAvailable = await Booking.isPodAvailable(nextPod.id, remainingStart, bufferedEnd, booking.id);
+    if (!isAvailable) {
+      throw createError("Target pod is not available for the remaining booking window", 409);
+    }
+
+    const conflictingTimeSlot = await TimeSlot.findOne({
+      pod_id: nextPod.id,
+      status: "RESERVED",
+      start_time: { $lt: bufferedEnd },
+      end_time: { $gt: remainingStart },
+    }).select("id");
+
+    if (conflictingTimeSlot) {
+      throw createError("Target pod has conflicting reserved slots in remaining booking window", 409);
+    }
+
+    booking.pod_id = nextPod.id;
+    await booking.save();
+
+    const bookingSlots = await BookingSlot.find({ booking_id: booking.id }).select("time_slot_id");
+    const timeSlotIds = bookingSlots.map((slot) => slot.time_slot_id);
+
+    if (timeSlotIds.length > 0) {
+      await TimeSlot.updateMany(
+        { id: { $in: timeSlotIds } },
+        { $set: { pod_id: nextPod.id } }
+      );
+    }
+
+    await OnlineKey.updateMany(
+      { booking_id: booking.id, is_revoked: false },
+      { $set: { pod_id: nextPod.id } }
+    );
+
+    const oldPodNextStatusRaw = String(payload.old_pod_next_status || "").trim().toUpperCase();
+    const oldPodNextStatus = ["MAINTENANCE", "NEEDS_CLEANING"].includes(oldPodNextStatusRaw)
+      ? oldPodNextStatusRaw
+      : requestType === "MAINTENANCE"
+        ? "MAINTENANCE"
+        : "NEEDS_CLEANING";
+
+    currentPod.status = oldPodNextStatus;
+    if (oldPodNextStatus === "MAINTENANCE") {
+      currentPod.maintenance_status = String(payload.old_pod_reason || supportRequest.description || "") || null;
+    }
+    await currentPod.save();
+
+    supportRequest.pod_id = nextPod.id;
+    supportRequest.location_id = nextCluster.location_id;
+
+    const actorId = this._getActorId(actor);
+    supportRequest.handled_by = actorId;
+    supportRequest.handled_at = new Date();
+
+    const effectiveSeverity = normalizeUpper(payload.severity || supportRequest.severity || "");
+    if (requestType === "MAINTENANCE" && !["HIGH", "CRITICAL"].includes(effectiveSeverity)) {
+      throw createError("MAINTENANCE room change is only allowed for severity HIGH or CRITICAL", 400);
+    }
+
+    if (requestType === "MAINTENANCE" && MAINTENANCE_SEVERITIES.includes(effectiveSeverity)) {
+      supportRequest.severity = effectiveSeverity;
+    }
+
+    if (requestType === "MAINTENANCE" && ["HIGH", "CRITICAL"].includes(normalizeUpper(supportRequest.severity))) {
+      supportRequest.status = "ESCALATED";
+      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Escalated to admin after emergency room change";
+    } else {
+      supportRequest.status = "RESOLVED";
+    }
+
+    supportRequest.resolution_note =
+      String(payload.resolution_note || "").trim() ||
+      `Room changed from pod ${currentPod.code || currentPod.id} to ${nextPod.code || nextPod.id}`;
+
+    await supportRequest.save();
+
+    if (supportRequest.status === "ESCALATED") {
+      await this._notifyAdminsForEscalation(supportRequest, booking);
+    }
+
+    await notificationService.sendToUser(booking.user_id, {
+      title: "Support request room changed",
+      message: "Manager moved your booking to a new pod. Please check updated details.",
+      type: "SUPPORT",
+      event_code: "SUPPORT_ROOM_CHANGED",
+      dedupe_key: `SUPPORT_ROOM_CHANGED:${supportRequest.id}:${booking.id}`,
+      data: {
+        support_request_id: supportRequest.id,
+        booking_id: booking.id,
+        old_pod_id: currentPod.id,
+        new_pod_id: nextPod.id,
+      },
+    });
+
+    return {
+      support_request: supportRequest,
+      booking,
+      old_pod: currentPod,
+      new_pod: nextPod,
+      buffer_minutes_applied: bufferMinutes,
+      escalated_to_admin: supportRequest.status === "ESCALATED",
+    };
   }
 }
 
