@@ -107,10 +107,53 @@ const executeRoomChange = async (req, res) => {
   }
 };
 
+const getSupportRequestById = async (req, res) => {
+  try {
+    const supportRequest = await supportRequestService.getSupportRequestById(
+      req.params.id,
+      req.user,
+      req.managerScope
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Support request details retrieved successfully",
+      data: supportRequest,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve support request details",
+    });
+  }
+};
+
+const cancelSupportRequest = async (req, res) => {
+  try {
+    const supportRequest = await supportRequestService.cancelSupportRequest(
+      req.params.id,
+      req.user
+    );
+
+    res.status(200).json({
+      success: true,
+      message: "Support request canceled successfully",
+      data: supportRequest,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to cancel support request",
+    });
+  }
+};
+
 module.exports = {
   createSupportRequest,
   getSupportRequests,
+  getSupportRequestById,
   updateSupportRequestStatus,
   getRoomChangeCandidates,
   executeRoomChange,
+  cancelSupportRequest,
 };
