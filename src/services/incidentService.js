@@ -4,7 +4,7 @@ const CleaningTask = require("../models/CleaningTask");
 const Pod = require("../models/Pod");
 const User = require("../models/User");
 
-const INCIDENT_STATUSES = ["PENDING", "INVESTIGATING", "RESOLVED", "CLOSED"];
+const INCIDENT_STATUSES = ["PENDING", "INVESTIGATING", "ESCALATED", "RESOLVED", "CLOSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 
 const createError = (message, statusCode) => {
@@ -204,8 +204,10 @@ exports.createIncidentFromCleaningTask = async (
   );
 };
 
-exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
+exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
+  const { status, resolution_note, escalation_note } = payload;
   const normalizedStatus = normalizeStatus(status);
+  
   if (!INCIDENT_STATUSES.includes(normalizedStatus)) {
     throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
   }
@@ -227,8 +229,52 @@ exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
     }
   }
 
-  incident.status = normalizedStatus;
-  await incident.save();
+  const currentStatus = incident.status;
+  
+  const allowedTransitions = {
+    PENDING: ["INVESTIGATING", "ESCALATED", "CLOSED"],
+    INVESTIGATING: ["ESCALATED", "RESOLVED", "CLOSED"],
+    ESCALATED: ["RESOLVED", "CLOSED"],
+    RESOLVED: ["CLOSED"],
+    CLOSED: [],
+  };
+
+  if (currentStatus !== normalizedStatus) {
+    if (!allowedTransitions[currentStatus]?.includes(normalizedStatus)) {
+      throw createError(`Cannot change incident status from ${currentStatus} to ${normalizedStatus}`, 400);
+    }
+
+    if (normalizedStatus === "ESCALATED") {
+      const note = String(escalation_note || "").trim();
+      if (!note) {
+        throw createError("Escalation note is required when escalating incident", 400);
+      }
+      incident.escalation_note = note;
+    }
+
+    if (normalizedStatus === "RESOLVED") {
+      const note = String(resolution_note || "").trim();
+      if (!note) {
+        throw createError("Resolution note is required when resolving incident", 400);
+      }
+      incident.resolution_note = note;
+
+      const pod = await Pod.findOne({ id: incident.pod_id }).select("id status");
+      if (pod && pod.status === "MAINTENANCE") {
+        pod.status = "NEEDS_CLEANING";
+        pod.maintenance_status = null;
+        await pod.save();
+      }
+    }
+
+    incident.status = normalizedStatus;
+    await incident.save();
+  } else {
+    // If just updating notes on the same status
+    if (escalation_note !== undefined) incident.escalation_note = String(escalation_note).trim();
+    if (resolution_note !== undefined) incident.resolution_note = String(resolution_note).trim();
+    await incident.save();
+  }
 
   return incident;
 };

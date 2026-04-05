@@ -44,7 +44,14 @@ class SupportRequestService {
     let current = await Location.findOne({ id: currentLocationId }).select("id parent_id").lean();
     if (!current) return null;
 
+    const visited = new Set([currentLocationId]);
+
     while (current.parent_id) {
+      if (visited.has(String(current.parent_id))) {
+        break;
+      }
+      visited.add(String(current.parent_id));
+
       const parent = await Location.findOne({ id: current.parent_id }).select("id parent_id").lean();
       if (!parent) break;
       current = parent;
@@ -183,9 +190,11 @@ class SupportRequestService {
     });
 
     const candidates = [];
-    for (const pod of pods) {
+    
+    // Process all pods concurrently to avoid N+1 query stalling
+    const podPromises = pods.map(async (pod) => {
       const podCluster = clusterById.get(String(pod.cluster_id));
-      if (!podCluster) continue;
+      if (!podCluster) return null;
 
       const bufferMinutes = await this._resolveCleaningBufferMinutes({
         podId: pod.id,
@@ -195,7 +204,7 @@ class SupportRequestService {
 
       const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
       if (remainingStart >= bufferedEnd) {
-        continue;
+        return null; // Time exhausted
       }
 
       const isBookingAvailable = await Booking.isPodAvailable(
@@ -206,7 +215,7 @@ class SupportRequestService {
       );
 
       if (!isBookingAvailable) {
-        continue;
+        return null;
       }
 
       const conflictingTimeSlot = await TimeSlot.findOne({
@@ -219,10 +228,10 @@ class SupportRequestService {
         .lean();
 
       if (conflictingTimeSlot) {
-        continue;
+        return null;
       }
 
-      candidates.push({
+      return {
         pod_id: pod.id,
         pod_code: pod.code,
         pod_name: pod.name,
@@ -232,7 +241,12 @@ class SupportRequestService {
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
-      });
+      };
+    });
+
+    const results = await Promise.all(podPromises);
+    for (const res of results) {
+       if (res) candidates.push(res);
     }
 
     candidates.sort((a, b) => {
@@ -534,10 +548,12 @@ class SupportRequestService {
     return supportRequest;
   }
 
-  async getRoomChangeCandidates(requestId, actor, managerScope) {
+  async getRoomChangeCandidates(requestId, actor, managerScope, filters = {}) {
     if (this._getActorRole(actor) !== "manager") {
       throw createError("Only manager can view room-change candidates", 403);
     }
+
+    const { page = 1, limit = 20 } = filters;
 
     const supportRequest = await SupportRequest.findOne({ id: requestId });
     if (!supportRequest) {
@@ -574,12 +590,25 @@ class SupportRequestService {
     }
 
     const candidates = await this._getRoomChangeCandidates(booking, currentPod, resolvedCurrentCluster, managerScope);
+    const total = candidates.length;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedCandidates = candidates.slice(startIndex, endIndex);
 
     return {
       request: supportRequest,
       booking,
       current_pod: currentPod,
-      candidates,
+      candidates: paginatedCandidates,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        total_pages: Math.ceil(total / limitNum) || 1,
+      }
     };
   }
 

@@ -56,7 +56,7 @@ const incidentSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "INVESTIGATING", "RESOLVED", "CLOSED"],
+        values: ["PENDING", "INVESTIGATING", "ESCALATED", "RESOLVED", "CLOSED"],
         message: "{VALUE} is not a valid status",
       },
       default: "PENDING",
@@ -66,6 +66,16 @@ const incidentSchema = new mongoose.Schema(
       type: Boolean,
       default: false,
       index: true,
+    },
+    resolution_note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    escalation_note: {
+      type: String,
+      default: null,
+      trim: true,
     },
   },
   {

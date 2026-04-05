@@ -69,7 +69,8 @@ const getRoomChangeCandidates = async (req, res) => {
     const result = await supportRequestService.getRoomChangeCandidates(
       req.params.id,
       req.user,
-      req.managerScope
+      req.managerScope,
+      req.query
     );
 
     res.status(200).json({
