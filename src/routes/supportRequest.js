@@ -53,7 +53,7 @@ router.post("/", protect, authorize("user"), supportRequestController.createSupp
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, PROCESSING, ESCALATED, RESOLVED, REJECTED]
+ *           enum: [PENDING, PROCESSING, IN_PROGRESS, ESCALATED, RESOLVED, REJECTED]
  *       - in: query
  *         name: type
  *         schema:
@@ -115,7 +115,7 @@ router.get(
  *             properties:
  *               status:
  *                 type: string
- *                 enum: [PENDING, PROCESSING, ESCALATED, RESOLVED, REJECTED]
+ *                 enum: [PENDING, PROCESSING, IN_PROGRESS, ESCALATED, RESOLVED, REJECTED]
  *     responses:
  *       200:
  *         description: Support request updated

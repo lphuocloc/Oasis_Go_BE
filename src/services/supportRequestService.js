@@ -11,7 +11,7 @@ const User = require("../models/User");
 const notificationService = require("./notificationService");
 
 const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
-const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "ESCALATED", "RESOLVED", "REJECTED"];
+const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"];
 const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
 const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
@@ -24,13 +24,7 @@ const createError = (message, statusCode = 400) => {
 
 const normalizeUpper = (value) => String(value || "").trim().toUpperCase();
 
-const normalizeSupportStatus = (status) => {
-  const normalized = normalizeUpper(status);
-  if (normalized === "IN_PROGRESS") {
-    return "PROCESSING";
-  }
-  return normalized;
-};
+const normalizeSupportStatus = (status) => normalizeUpper(status);
 
 class SupportRequestService {
   _getActorId(actor) {
@@ -439,8 +433,9 @@ class SupportRequestService {
     const currentStatus = normalizeSupportStatus(supportRequest.status);
     const allowedTransitions = {
       PENDING: ["PROCESSING", "REJECTED"],
-      PROCESSING: ["ESCALATED", "RESOLVED", "REJECTED"],
-      ESCALATED: ["PROCESSING", "RESOLVED", "REJECTED"],
+      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED"],
+      IN_PROGRESS: ["ESCALATED", "RESOLVED", "REJECTED"],
+      ESCALATED: ["IN_PROGRESS", "RESOLVED", "REJECTED"],
       RESOLVED: [],
       REJECTED: [],
     };
@@ -481,7 +476,7 @@ class SupportRequestService {
       throw createError("resolution_note is required when status is RESOLVED or REJECTED", 400);
     }
 
-    if (["PROCESSING", "ESCALATED", "RESOLVED", "REJECTED"].includes(normalizedStatus)) {
+    if (["IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"].includes(normalizedStatus)) {
       supportRequest.handled_by = actorId;
       supportRequest.handled_at = new Date();
     }
@@ -574,7 +569,7 @@ class SupportRequestService {
     }
 
     const currentStatus = normalizeSupportStatus(supportRequest.status);
-    if (!["PENDING", "PROCESSING", "ESCALATED"].includes(currentStatus)) {
+    if (!["IN_PROGRESS", "ESCALATED"].includes(currentStatus)) {
       throw createError(`Cannot execute room change when request status is ${currentStatus}`, 400);
     }
 
