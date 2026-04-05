@@ -1,13 +1,38 @@
 const admin = require("firebase-admin");
 const path = require("path");
 
+const buildEnvCredential = () => {
+  const projectId = process.env.FIREBASE_PROJECT_ID;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n");
+
+  if (!projectId || !clientEmail || !privateKey) {
+    return null;
+  }
+
+  return {
+    projectId,
+    clientEmail,
+    privateKey,
+  };
+};
+
 // Initialize Firebase Admin SDK
 const initializeFirebase = () => {
   try {
     // Kiểm tra xem đã initialize chưa
     if (admin.apps.length === 0) {
-      // Option 1: Dùng service account key file (recommended for production)
-      if (process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
+      const envCredential = buildEnvCredential();
+
+      // Option 1: Environment variables (recommended for Render/production)
+      if (envCredential) {
+        admin.initializeApp({
+          credential: admin.credential.cert(envCredential),
+        });
+        console.log("✅ Firebase Admin initialized with environment variables");
+      }
+      // Option 2: Local service account file (development only)
+      else if (process.env.NODE_ENV !== "production" && process.env.FIREBASE_SERVICE_ACCOUNT_PATH) {
         // Dùng path.resolve để biến đường dẫn từ .env thành đường dẫn tuyệt đối
         // Tính từ gốc của dự án (process.cwd())
         const serviceAccountPath = path.resolve(
@@ -19,18 +44,7 @@ const initializeFirebase = () => {
         admin.initializeApp({
           credential: admin.credential.cert(serviceAccount),
         });
-        console.log("✅ Firebase Admin initialized with service account");
-      }
-      // Option 2: Dùng environment variables (cho testing)
-      else if (process.env.FIREBASE_PROJECT_ID) {
-        admin.initializeApp({
-          credential: admin.credential.cert({
-            projectId: process.env.FIREBASE_PROJECT_ID,
-            clientEmail: process.env.FIREBASE_CLIENT_EMAIL,
-            privateKey: process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, "\n"),
-          }),
-        });
-        console.log("✅ Firebase Admin initialized with environment variables");
+        console.log("✅ Firebase Admin initialized with service account file");
       }
       // Option 3: Không có config - warning mode
       else {

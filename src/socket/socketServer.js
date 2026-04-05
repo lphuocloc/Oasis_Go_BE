@@ -15,13 +15,15 @@ const createToken = () => randomBytes(16).toString("hex").toUpperCase();
 const getPodRoom = (podId) => `pod:${podId}`;
 
 const normalizeCorsOrigins = () => {
-    const envOrigins = process.env.SOCKET_CORS_ORIGIN;
+    const envOrigins = process.env.SOCKET_CORS_ORIGIN || process.env.ALLOWED_ORIGINS;
     if (!envOrigins) return true;
 
-    return envOrigins
+    const normalizedOrigins = envOrigins
         .split(",")
         .map((origin) => origin.trim())
         .filter(Boolean);
+
+    return normalizedOrigins.length > 0 ? normalizedOrigins : true;
 };
 
 const toQrPayload = (qrCode) => ({
