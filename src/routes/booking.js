@@ -200,7 +200,7 @@ router.post("/", protect, bookingController.createBooking);
  * @swagger
  * /api/bookings/checkin:
  *   post:
- *     summary: Checkin booking using qr_token and key_token
+ *     summary: Checkin booking (customer uses qr_token, cleaner uses key_token)
  *     tags: [Bookings]
  *     security:
  *       - bearerAuth: []
@@ -210,28 +210,25 @@ router.post("/", protect, bookingController.createBooking);
  *         application/json:
  *           schema:
  *             type: object
- *             required:
- *               - qr_token
- *               - key_token
+ *             description: Provide either qr_token (customer flow) or key_token (cleaner flow)
  *             properties:
  *               qr_token:
  *                 type: string
+ *                 description: Required for customer check-in
  *               key_token:
  *                 type: string
- *                 description: Customer key token
+ *                 description: Required for cleaner check-in
  *     responses:
  *       200:
  *         description: Checkin successful
  *       400:
- *         description: Invalid request or booking status
+ *         description: Invalid request body or booking status
  *       401:
- *         description: Invalid key token
+ *         description: Unauthorized
  *       403:
- *         description: QR expired, wrong user key, or checkin not allowed
+ *         description: QR expired, wrong key owner, or checkin not allowed
  *       404:
- *         description: QR or booking not found
- *       429:
- *         description: Too many invalid attempts, cooldown is active
+ *         description: QR/key or booking not found
  */
 router.post("/checkin", protect, bookingController.checkinWithQrAndKey);
 
@@ -497,24 +494,6 @@ router.patch(
  */
 router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFlag);
 
-/**
- * @swagger
- * /api/bookings/{id}/cancel:
- *   post:
- *     summary: Cancel booking
- *     tags: [Bookings]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Booking cancelled
- */
 router.post("/:id/cancel", protect, bookingController.cancelBooking);
 
 

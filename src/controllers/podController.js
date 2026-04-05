@@ -160,8 +160,14 @@ exports.updatePodStatus = async (req, res) => {
   try {
     const { status } = req.body;
     const { maintenance_status } = req.body;
+    const { long_term_maintenance, auto_migrate_future_bookings } = req.body;
     
-    const pod = await podService.updatePodStatus(req.params.id, { status, maintenance_status });
+    const pod = await podService.updatePodStatus(req.params.id, {
+      status,
+      maintenance_status,
+      long_term_maintenance,
+      auto_migrate_future_bookings,
+    });
     
     res.status(200).json({
       success: true,

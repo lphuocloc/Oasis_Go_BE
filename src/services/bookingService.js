@@ -15,6 +15,7 @@ const {
   getMyCleanerKeyByTaskId,
 } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
+const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
@@ -489,7 +490,16 @@ class BookingService {
       query.pod_id = { $in: ids };
     }
     if (order_id) query.order_id = order_id;
-    if (status) query.status = status;
+    if (status) {
+      const statusValues = (Array.isArray(status) ? status : String(status).split(","))
+        .map((item) => String(item || "").trim().toUpperCase())
+        .filter(Boolean);
+
+      const hasAllStatus = statusValues.includes("ALL");
+      if (!hasAllStatus && statusValues.length > 0) {
+        query.status = statusValues.length === 1 ? statusValues[0] : { $in: statusValues };
+      }
+    }
 
     if (start_date || end_date) {
       query.start_time = {};
@@ -503,7 +513,7 @@ class BookingService {
         .sort({ created_at: -1 })
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
-        .populate("order", "id final_total_price status");
+        .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status");
       return { bookings };
     }
 
@@ -519,7 +529,7 @@ class BookingService {
         .limit(limitNum)
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
-        .populate("order", "id final_total_price status"),
+        .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status"),
       Booking.countDocuments(query),
     ]);
 
@@ -539,7 +549,7 @@ class BookingService {
    * @param {String} bookingId - Booking ID
    * @returns {Promise<Object>} Booking details
    */
-  async getBookingById(bookingId) {
+  async getBookingById(bookingId, viewerRole = null) {
     const booking = await Booking.findOne({ id: bookingId })
       .select(
         "id order_id user_id pod_id start_time end_time actual_end_time status " +
@@ -547,13 +557,14 @@ class BookingService {
         "base_price total_price createdAt updatedAt"
       )
       .populate("pod", POD_DETAILS_SELECT)
-      .populate("order", "id final_total_price status payment_method");
+      .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status payment_method");
 
     if (!booking) {
       throw new Error("Booking not found");
     }
 
-    return booking;
+    const [bookingWithKeys] = await this._attachOnlineKeys([booking], viewerRole);
+    return bookingWithKeys || booking;
   }
 
   /**
@@ -734,9 +745,9 @@ class BookingService {
 
 
   /**
-   * Checkin by qr_token and key_token (or key_token only for cleaners)
-   * - CUSTOMER: Requires both QR token and online key token
-   * - CLEANER: Only requires online key token (no QR needed)
+   * Checkin business rules:
+   * - CUSTOMER: Uses qr_token only (online key is not required for check-in)
+   * - CLEANER: Uses key_token only for cleaner access check-in
    * @param {Object} params
    * @returns {Promise<Object>} Updated booking or booking info
    */
@@ -746,18 +757,10 @@ class BookingService {
     }
 
     const actorId = String(actor?._id || actor?.id || "");
-
-    // Find online key by key_token first (works for both CUSTOMER and CLEANER)
-    const onlineKey = await OnlineKey.findOne({
-      key_token,
-      is_revoked: false,
-    });
-
-    if (!onlineKey) {
-      throw this._createError("Khóa không hợp lệ hoặc không hoạt động", 404, "ONLINE_KEY_NOT_FOUND");
+    if (!actorId) {
+      throw this._createError("Không xác định được người dùng hiện tại", 401, "ONLINE_KEY_NOT_FOUND");
     }
 
-    // Validate key is in valid time window
     const now = new Date();
     if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
       throw this._createError("Khóa đã hết hạn hoặc chưa có hiệu lực", 403, "ONLINE_KEY_OUT_OF_WINDOW");
@@ -812,23 +815,28 @@ class BookingService {
         throw this._createError("QR code đã hết hạn", 403, "QR_CODE_EXPIRED");
       }
 
-      // Validate QR pod matches booking pod
-      if (String(qrCode.pod_id) !== String(booking.pod_id)) {
-        throw this._createError("QR code không khớp với pod của booking", 403, "QR_POD_MISMATCH");
+      const candidateBookings = await Booking.find({
+        user_id: actorId,
+        pod_id: String(qrCode.pod_id),
+        status: { $in: ["BOOKED", "IN_USE"] },
+      }).sort({ start_time: -1, createdAt: -1 });
+
+      if (!candidateBookings.length) {
+        throw this._createError("Không tìm thấy booking hợp lệ để check-in", 404, "QR_POD_MISMATCH");
       }
 
-      // Validate booking belongs to customer
-      if (String(booking.user_id) !== actorId) {
-        throw this._createError("Booking này không thuộc về người dùng hiện tại.", 403, "BOOKING_NOT_OWNED");
+      let booking = candidateBookings.find((item) => item.status === "BOOKED");
+      if (!booking) {
+        booking = candidateBookings.find((item) => item.status === "IN_USE") || candidateBookings[0];
+      }
+
+      if (booking.checkin_state === "NO_SHOW") {
+        const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");
+        error.statusCode = 400;
+        throw error;
       }
 
       if (booking.status === "IN_USE") {
-        if (booking.checkin_state === "NO_SHOW") {
-          const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");
-          error.statusCode = 400;
-          throw error;
-        }
-
         const needsManualSync =
           booking.checkin_state !== "MANUAL_CHECKED_IN" ||
           !booking.checked_in_at ||
@@ -850,10 +858,22 @@ class BookingService {
         throw error;
       }
 
-      // Start using and log access
       const updatedBooking = await booking.startUsing();
 
-      // Create booking access session for customer manual check-in
+      // Notify pod device to switch UI from QR screen to keypad screen.
+      const actorName =
+        (actor && (actor.name || actor.full_name || actor.fullName || actor.email)) ||
+        (await User.findOne({ _id: actorId }).select("name email").lean())?.name ||
+        "Unknown";
+
+      emitPodCheckinConfirmed({
+        pod_id: booking.pod_id,
+        booking_id: booking.id,
+        customer_name: actorName,
+        action: "SWITCH_TO_KEYPAD",
+        session_expires_in: 300,
+      });
+
       await BookingAccessSession.create({
         booking_id: booking.id,
         pod_id: booking.pod_id,
@@ -882,52 +902,83 @@ class BookingService {
       return updatedBooking;
     }
 
-    // ============= CLEANER CHECK-IN =============
-    if (isCleanerAccess) {
-      // CLEANER doesn't need QR code, only online key
-
-      // Validate cleaner access requirements
-      if (booking.checkin_state === "NO_SHOW") {
-        throw this._createError("Không được phép vào làm vệ sinh cho booking NO_SHOW", 403, "BOOKING_NO_SHOW");
-      }
-
-      if (booking.status === "IN_USE" && !booking.cleaner_access_allowed) {
-        throw this._createError(
-          "Chủ nhân phòng chưa cho phép truy cập làm vệ sinh",
-          403,
-          "CLEANER_ACCESS_NOT_ALLOWED"
-        );
-      }
-
-      const isInUseUrgentCleaning = booking.status === "IN_USE";
-      const isCompletedCleaning = booking.status === "COMPLETED";
-
-      if (!isInUseUrgentCleaning && !isCompletedCleaning) {
-        const error = new Error(
-          "Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED"
-        );
-        error.statusCode = 400;
-        throw error;
-      }
-
-      // Create booking access session for cleaner manual check-in (NO QR code needed)
-      await BookingAccessSession.create({
-        booking_id: booking.id,
-        pod_id: booking.pod_id,
-        user_id: actorId,
-        checkin_at: new Date(),
-        checkin_source: "MANUAL",
-        access_reason: "CLEANER_ACCESS",
-        key_type: "CLEANER",
-      });
-
-      return booking;
+    // ============= CLEANER CHECK-IN (KEY ONLY) =============
+    if (!key_token) {
+      const error = new Error("QR token là bắt buộc cho customer check-in");
+      error.statusCode = 400;
+      throw error;
     }
 
-    // Should not reach here if key_type is recognized
-    const error = new Error("Loại khóa không hợp lệ");
-    error.statusCode = 400;
-    throw error;
+    const onlineKey = await OnlineKey.findOne({
+      key_token,
+      is_revoked: false,
+      key_type: "CLEANER",
+    });
+
+    if (!onlineKey) {
+      const error = new Error("Cleaner key không hợp lệ hoặc không hoạt động");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
+      const error = new Error("Cleaner key đã hết hạn hoặc chưa có hiệu lực");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (String(onlineKey.user_id) !== actorId) {
+      const error = new Error("Khóa này không thuộc về người dùng hiện tại.");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const booking = await Booking.findOne({ id: onlineKey.booking_id });
+    if (!booking) {
+      const error = new Error("Không tìm thấy đặt chỗ cho khóa này");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (booking.checkin_state === "NO_SHOW") {
+      const error = new Error("Không được phép vào làm vệ sinh cho booking NO_SHOW");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    if (!booking.cleaner_access_allowed) {
+      const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const cleanerWindowEnd = booking.end_time
+      ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
+      : null;
+
+    const isInUseUrgentCleaning = booking.status === "IN_USE";
+    const isCompletedCleaningWindow =
+      booking.status === "COMPLETED" && cleanerWindowEnd && now <= cleanerWindowEnd;
+
+    if (!isInUseUrgentCleaning && !isCompletedCleaningWindow) {
+      const error = new Error(
+        `Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED trong ${CLEANER_POST_CHECKOUT_WINDOW_MINUTES} phut sau checkout`
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+
+    await BookingAccessSession.create({
+      booking_id: booking.id,
+      pod_id: booking.pod_id,
+      user_id: actorId,
+      checkin_at: new Date(),
+      checkin_source: "MANUAL",
+      access_reason: "CLEANER_ACCESS",
+      key_type: "CLEANER",
+    });
+
+    return booking;
   }
 
 
@@ -1112,8 +1163,10 @@ class BookingService {
       throw error;
     }
 
-    if (nextPod.status === "MAINTENANCE") {
-      const error = new Error("Cannot move booking to a pod under maintenance");
+    if (String(nextPod.status || "").toUpperCase() !== "AVAILABLE") {
+      const error = new Error(
+        `Target pod must be AVAILABLE for change pod action (current status: ${nextPod.status || "UNKNOWN"})`
+      );
       error.statusCode = 400;
       throw error;
     }

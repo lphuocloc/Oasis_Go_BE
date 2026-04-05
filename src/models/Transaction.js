@@ -29,7 +29,7 @@ const transactionSchema = new mongoose.Schema(
         type: {
             type: String,
             enum: {
-                values: ["CHARGE", "REFUND", "PENALTY"],
+                values: ["CHARGE", "REFUND", "PENALTY", "TOPUP"],
                 message: "{VALUE} is not a valid transaction type",
             },
             default: "CHARGE",
@@ -39,7 +39,7 @@ const transactionSchema = new mongoose.Schema(
         method: {
             type: String,
             enum: {
-                values: ["VNPAY"],
+                values: ["VNPAY", "WALLET"],
                 message: "{VALUE} is not a valid payment method",
             },
             default: "VNPAY",

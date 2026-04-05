@@ -71,6 +71,8 @@ const lostFoundRouter = require("./routes/lostFound");
 const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
 const cleaningBufferPolicyRouter = require("./routes/cleaningBufferPolicy");
+const walletRouter = require("./routes/wallet");
+const depositPolicyRouter = require("./routes/depositPolicy");
 const app = express();
 
 // Middlewares
@@ -117,6 +119,8 @@ app.use("/api/lost-found-items", lostFoundRouter);
 app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/cleaning-buffer-policies", cleaningBufferPolicyRouter);
+app.use("/api/wallets", walletRouter);
+app.use("/api/deposit-policies", depositPolicyRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

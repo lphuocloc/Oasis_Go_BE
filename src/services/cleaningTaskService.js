@@ -1,9 +1,11 @@
 const CleaningTask = require("../models/CleaningTask");
+const CleaningPhoto = require("../models/CleaningPhoto");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
 const User = require("../models/User");
 const LocationShift = require("../models/LocationShift");
+const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const StaffShift = require("../models/StaffShift");
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
@@ -383,6 +385,65 @@ const getCleanerIdentity = (user) => {
   if (user.id !== undefined && user.id !== null && String(user.id).trim() !== "") return String(user.id);
   if (user._id !== undefined && user._id !== null && String(user._id).trim() !== "") return String(user._id);
   return null;
+};
+
+const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime = new Date()) => {
+  const normalizedCleanerId = String(cleanerId || "").trim();
+  const normalizedLocationId = String(locationId || "").trim();
+
+  if (!normalizedCleanerId || !normalizedLocationId) {
+    return false;
+  }
+
+  const locationShifts = await LocationShift.find({ location_id: normalizedLocationId })
+    .select("id")
+    .lean();
+
+  const locationShiftIds = locationShifts.map((item) => item.id);
+  if (locationShiftIds.length === 0) {
+    return false;
+  }
+
+  const assignments = await StaffShiftAssignment.find({
+    staff_id: normalizedCleanerId,
+    location_shift_id: { $in: locationShiftIds },
+    start_date: { $lte: referenceTime },
+    end_date: { $gte: referenceTime },
+  })
+    .select("id status")
+    .lean();
+
+  if (assignments.length === 0) {
+    return false;
+  }
+
+  if (assignments.some((item) => String(item.status || "").toUpperCase() === "CHECKED_IN")) {
+    return true;
+  }
+
+  const assignmentIds = assignments.map((item) => item.id);
+  const attendanceLogs = await StaffAttendanceLog.find({
+    shift_assignment_id: { $in: assignmentIds },
+  })
+    .sort({ created_at: -1 })
+    .select("shift_assignment_id action")
+    .lean();
+
+  const latestActionByAssignment = new Map();
+  for (const log of attendanceLogs) {
+    const key = String(log.shift_assignment_id);
+    if (!latestActionByAssignment.has(key)) {
+      latestActionByAssignment.set(key, String(log.action || "").toUpperCase());
+    }
+  }
+
+  for (const assignmentId of assignmentIds) {
+    if (latestActionByAssignment.get(String(assignmentId)) === "CHECKIN") {
+      return true;
+    }
+  }
+
+  return false;
 };
 
 const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
@@ -1262,7 +1323,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
       : task.reassigned_from_cleaner_id;
 
   const [pod, booking, cleaner, assignment, reassignedCleaner] = await Promise.all([
-    Pod.findOne({ id: nextPodId }).select("id").lean(),
+    Pod.findOne({ id: nextPodId }).select("id cluster_id").lean(),
     nextBookingId ? Booking.findOne({ id: nextBookingId }).select("id").lean() : Promise.resolve(null),
     User.findOne(buildUserIdentityQuery(nextCleanerId)).select("_id id role isActive").lean(),
     nextShiftAssignmentId
@@ -1286,6 +1347,29 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   }
   if (reassignedCleaner && reassignedCleaner.role !== "cleaner") {
     throw createError("reassigned_from_cleaner_id must have cleaner role", 400);
+  }
+
+  if (["ACCEPTED", "IN_PROGRESS", "DONE"].includes(nextStatus)) {
+    const podCluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id").lean();
+    if (!podCluster) {
+      throw createError("Pod cluster not found", 404);
+    }
+
+    const checkedInAtLocation = await isCleanerCheckedInAtLocation(nextCleanerId, podCluster.location_id);
+    if (!checkedInAtLocation) {
+      throw createError("Cleaner must be CHECKED_IN at this location before handling task", 403);
+    }
+  }
+
+  if (nextStatus === "DONE") {
+    const afterPhotoCount = await CleaningPhoto.countDocuments({
+      cleaning_task_id: String(task.id),
+      type: "AFTER",
+    });
+
+    if (afterPhotoCount < 1) {
+      throw createError('At least one "AFTER" photo is required before completing task', 400);
+    }
   }
 
   const previousStatus = task.status;
