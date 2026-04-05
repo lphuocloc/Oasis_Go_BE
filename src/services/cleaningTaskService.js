@@ -28,9 +28,10 @@ const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 
-const createError = (message, statusCode) => {
+const createError = (message, statusCode, errorCode = null) => {
   const err = new Error(message);
   err.statusCode = statusCode;
+  if (errorCode) err.errorCode = errorCode;
   return err;
 };
 
@@ -1103,65 +1104,62 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
 exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
   const normalizedTaskId = String(taskId || "").trim();
   if (!normalizedTaskId) {
-    throw createError("task id is required", 400);
+    throw createError("task id is required", 400, "TASK_ID_REQUIRED");
   }
 
   const actorRole = String(actor?.role || "").toLowerCase();
   if (actorRole !== "cleaner") {
-    throw createError("Only cleaner can retrieve cleaner key", 403);
+    throw createError("Only cleaner can retrieve cleaner key", 403, "CLEANER_ONLY");
   }
 
   const actorCleanerIds = [...new Set(resolveActorCleanerIds(actor))];
   if (actorCleanerIds.length === 0) {
-    throw createError("Unable to resolve cleaner id", 400);
+    throw createError("Unable to resolve cleaner id", 400, "AUTH_USER_NOT_RESOLVED");
   }
 
   const task = await CleaningTask.findOne({ id: normalizedTaskId })
     .select("id booking_id cleaner_id status pod_id")
     .lean();
   if (!task) {
-    throw createError("Cleaning task not found", 404);
+    throw createError("Cleaning task not found", 404, "CLEANING_TASK_NOT_FOUND");
   }
 
   if (!task.booking_id) {
-    throw createError("Cleaning task does not link to any booking", 400);
+    throw createError("Cleaning task does not link to any booking", 400, "TASK_BOOKING_LINK_MISSING");
   }
 
   if (!["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "DONE"].includes(String(task.status || ""))) {
-    throw createError("Cleaning task is not eligible for key retrieval", 400);
+    throw createError("Cleaning task is not eligible for key retrieval", 400, "TASK_NOT_ELIGIBLE_FOR_KEY");
   }
 
   if (!actorCleanerIds.includes(String(task.cleaner_id))) {
-    throw createError("You are not allowed to retrieve key for this task", 403);
+    throw createError("You are not allowed to retrieve key for this task", 403, "TASK_NOT_ASSIGNED_TO_CLEANER");
   }
 
   const booking = await Booking.findOne({ id: String(task.booking_id) })
     .select("id pod_id start_time end_time status checkin_state cleaner_access_allowed")
     .lean();
   if (!booking) {
-    throw createError("Booking not found", 404);
+    throw createError("Booking not found", 404, "BOOKING_NOT_FOUND");
   }
 
   if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
-    throw createError("Cleaner access is blocked for NO_SHOW booking", 403);
+    throw createError("Cleaner access is blocked for NO_SHOW booking", 403, "BOOKING_NO_SHOW");
   }
 
-  if (!booking.cleaner_access_allowed) {
-    throw createError("Cleaner access is not confirmed by user", 403);
+  if (booking.status === "IN_USE" && !booking.cleaner_access_allowed) {
+    throw createError("Cleaner access is not confirmed by user", 403, "CLEANER_ACCESS_NOT_ALLOWED");
   }
 
   const now = new Date();
-  const cleanerWindowEnd = booking.end_time
-    ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
-    : null;
   const isInUseUrgentCleaning = booking.status === "IN_USE";
-  const isCompletedCleaningWindow =
-    booking.status === "COMPLETED" && cleanerWindowEnd && now <= cleanerWindowEnd;
+  const isCompletedCleaning = booking.status === "COMPLETED";
 
-  if (!isInUseUrgentCleaning && !isCompletedCleaningWindow) {
+  if (!isInUseUrgentCleaning && !isCompletedCleaning) {
     throw createError(
-      `Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED trong ${CLEANER_POST_CHECKOUT_WINDOW_MINUTES} phut sau checkout`,
-      400
+      "Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED",
+      400,
+      "BOOKING_STATUS_NOT_ELIGIBLE"
     );
   }
 
@@ -1194,8 +1192,13 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
       key_token: await generateUniqueOnlineKeyToken(),
       valid_from: booking.start_time ? new Date(booking.start_time) : now,
       valid_to: booking.end_time
-        ? new Date(new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000)
-        : now,
+        ? new Date(
+          Math.max(
+            new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
+            now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
+          )
+        )
+        : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000),
       is_revoked: false,
     });
   }

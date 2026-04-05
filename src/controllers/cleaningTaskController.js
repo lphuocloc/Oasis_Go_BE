@@ -43,6 +43,7 @@ exports.getMyCleanerKeyByTaskId = async (req, res) => {
     res.status(statusCode).json({
       success: false,
       message: error.message || "Error fetching cleaner key by task",
+      error_code: error.errorCode || "CLEANER_KEY_RETRIEVAL_FAILED",
     });
   }
 };

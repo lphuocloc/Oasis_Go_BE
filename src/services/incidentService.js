@@ -388,16 +388,6 @@ exports.createIncidentFromCleaningTask = async (
   if (!reporter.isActive) throw createError("Reporter is inactive", 403);
   if (!pod) throw createError("Pod not found", 404);
 
-  const incident = await Incident.create({
-    pod_id: task.pod_id,
-    booking_id: task.booking_id || null,
-    cleaning_task_id: task.id,
-    reported_by: reporterId,
-    description: normalizedDescription,
-    severity: normalizedSeverity,
-    status: "PENDING",
-  });
-
   const normalizedPhotoUrls = Array.isArray(photo_urls)
     ? photo_urls.map((url) => String(url || "").trim()).filter(Boolean)
     : [];
@@ -424,26 +414,54 @@ exports.createIncidentFromCleaningTask = async (
       return acc;
     }, []);
 
-  if (photoRecords.length > 0) {
-    await IncidentPhoto.insertMany(
-      photoRecords.map((item) => ({
-        incident_id: incident.id,
-        photo_url: item.url,
-        photo_public_id: item.public_id,
-      }))
-    );
-  }
+  const session = await mongoose.startSession();
+  let incident;
 
-  if (["HIGH", "CRITICAL"].includes(normalizedSeverity)) {
-    await Pod.updateOne(
-      { id: task.pod_id },
-      {
-        $set: {
-          status: "MAINTENANCE",
-          maintenance_status: normalizedDescription.slice(0, 255),
-        },
+  try {
+    incident = await session.withTransaction(async () => {
+      const [createdIncident] = await Incident.create(
+        [
+          {
+            pod_id: task.pod_id,
+            booking_id: task.booking_id || null,
+            cleaning_task_id: task.id,
+            reported_by: reporterId,
+            description: normalizedDescription,
+            severity: normalizedSeverity,
+            status: "PENDING",
+          },
+        ],
+        { session }
+      );
+
+      if (photoRecords.length > 0) {
+        await IncidentPhoto.insertMany(
+          photoRecords.map((item) => ({
+            incident_id: createdIncident.id,
+            photo_url: item.url,
+            photo_public_id: item.public_id,
+          })),
+          { session }
+        );
       }
-    );
+
+      if (["HIGH", "CRITICAL"].includes(normalizedSeverity)) {
+        await Pod.updateOne(
+          { id: task.pod_id },
+          {
+            $set: {
+              status: "MAINTENANCE",
+              maintenance_status: normalizedDescription.slice(0, 255),
+            },
+          },
+          { session }
+        );
+      }
+
+      return createdIncident;
+    });
+  } finally {
+    session.endSession();
   }
 
   return toIncidentView(
@@ -515,25 +533,6 @@ exports.createDamageReport = async (
   if (!reporter) throw createError("Reporter not found", 404);
   if (!reporter.isActive) throw createError("Reporter is inactive", 403);
 
-  const incident = await Incident.create({
-    pod_id: resolvedPodId,
-    booking_id: resolvedBookingId,
-    cleaning_task_id: taskContext ? taskContext.id : null,
-    reported_by: reporterId,
-    incident_type: "DAMAGE_REPORT",
-    description: normalizedDescription,
-    severity: normalizedSeverity,
-    status: "PENDING",
-    item_id: pricing.item.id,
-    item_name_snapshot: pricing.item.name,
-    unit_cost_snapshot: pricing.unitCostSnapshot,
-    quantity_affected: pricing.affectedQuantity,
-    estimated_item_value: pricing.estimatedItemValue,
-    estimated_service_fee: pricing.serviceFee,
-    estimated_total_value: pricing.estimatedTotalValue,
-    pricing_source: "ITEM_UNIT_COST",
-  });
-
   const normalizedPhotoUrls = Array.isArray(photo_urls)
     ? photo_urls.map((url) => String(url || "").trim()).filter(Boolean)
     : [];
@@ -560,14 +559,50 @@ exports.createDamageReport = async (
       return acc;
     }, []);
 
-  if (photoRecords.length > 0) {
-    await IncidentPhoto.insertMany(
-      photoRecords.map((item) => ({
-        incident_id: incident.id,
-        photo_url: item.url,
-        photo_public_id: item.public_id,
-      }))
-    );
+  const session = await mongoose.startSession();
+  let incident;
+
+  try {
+    incident = await session.withTransaction(async () => {
+      const [createdIncident] = await Incident.create(
+        [
+          {
+            pod_id: resolvedPodId,
+            booking_id: resolvedBookingId,
+            cleaning_task_id: taskContext ? taskContext.id : null,
+            reported_by: reporterId,
+            incident_type: "DAMAGE_REPORT",
+            description: normalizedDescription,
+            severity: normalizedSeverity,
+            status: "PENDING",
+            item_id: pricing.item.id,
+            item_name_snapshot: pricing.item.name,
+            unit_cost_snapshot: pricing.unitCostSnapshot,
+            quantity_affected: pricing.affectedQuantity,
+            estimated_item_value: pricing.estimatedItemValue,
+            estimated_service_fee: pricing.serviceFee,
+            estimated_total_value: pricing.estimatedTotalValue,
+            pricing_source: "ITEM_UNIT_COST",
+          },
+        ],
+        { session }
+      );
+
+      if (photoRecords.length > 0) {
+        await IncidentPhoto.insertMany(
+          photoRecords.map((item) => ({
+            incident_id: createdIncident.id,
+            photo_url: item.url,
+            photo_public_id: item.public_id,
+          })),
+          { session }
+        );
+      }
+
+      return createdIncident;
+    });
+  } finally {
+    session.endSession();
   }
 
   return toDamageReportView(
