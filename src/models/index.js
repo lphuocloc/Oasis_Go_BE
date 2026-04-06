@@ -35,4 +35,6 @@ module.exports = {
   CleaningTask: require("./CleaningTask"),
   CleaningPhoto: require("./CleaningPhoto"),
   MaintenanceTask: require("./MaintenanceTask"),
+  Voucher: require("./Voucher"),
+  BookingVoucher: require("./BookingVoucher"),
 };

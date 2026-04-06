@@ -6,6 +6,8 @@ const Pod = require("../models/Pod");
 const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
+const BookingVoucher = require("../models/BookingVoucher");
+const Voucher = require("../models/Voucher");
 const Location = require("../models/Location");
 const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
@@ -26,6 +28,70 @@ const REFUND_CANCEL_WINDOW_HOURS = 48;
 const REFUND_RATE_BEFORE_48H = 1;
 
 class BookingOrderService {
+    _createError(message, statusCode) {
+        const error = new Error(message);
+        error.statusCode = statusCode;
+        return error;
+    }
+
+    _normalizeVoucherCode(code) {
+        return String(code || "").trim().toUpperCase();
+    }
+
+    _calculateVoucherDiscountAmount(order, voucher) {
+        const totalBasePrice = Number(order?.total_base_price || 0);
+        const discountType = String(voucher?.discount_type || "").toUpperCase();
+        const discountValue = Number(voucher?.discount_value || 0);
+
+        let discountAmount = 0;
+        if (discountType === "FIXED") {
+            discountAmount = discountValue;
+        } else if (discountType === "PERCENT") {
+            discountAmount = totalBasePrice * (discountValue / 100);
+            if (voucher.max_discount !== null && voucher.max_discount !== undefined) {
+                discountAmount = Math.min(discountAmount, Number(voucher.max_discount || 0));
+            }
+        }
+
+        if (!Number.isFinite(discountAmount) || discountAmount < 0) {
+            discountAmount = 0;
+        }
+
+        return Math.min(discountAmount, totalBasePrice);
+    }
+
+    _assertVoucherEligibility(order, voucher, now = new Date()) {
+        if (!voucher) {
+            throw this._createError("Voucher not found", 404);
+        }
+
+        if (!voucher.is_active) {
+            throw this._createError("Voucher is inactive", 400);
+        }
+
+        if (voucher.valid_from && now < new Date(voucher.valid_from)) {
+            throw this._createError("Voucher is not active yet", 400);
+        }
+
+        if (voucher.valid_to && now > new Date(voucher.valid_to)) {
+            throw this._createError("Voucher has expired", 400);
+        }
+
+        if (voucher.usage_limit !== null && voucher.usage_limit !== undefined) {
+            if (Number(voucher.usage_count || 0) >= Number(voucher.usage_limit || 0)) {
+                throw this._createError("Voucher usage limit has been reached", 400);
+            }
+        }
+
+        const minBookingValue = Number(voucher.min_booking_value || 0);
+        if (Number(order.total_base_price || 0) < minBookingValue) {
+            throw this._createError(
+                `Order does not meet minimum booking value ${minBookingValue}`,
+                400
+            );
+        }
+    }
+
     async _calculateVolumeBasedDeposit(podCount = 0) {
         const pricingPolicy = await depositPolicyService.getPolicyForCalculation();
         const tier1Limit = Number(pricingPolicy.tier_1_pod_limit || 3);
@@ -318,6 +384,7 @@ class BookingOrderService {
             start_time,
             end_time,
             total_discount = 0,
+            voucher_code = null,
             pod_count = 1,
             require_adjacent = false,
             floor_preference = null,
@@ -443,7 +510,34 @@ class BookingOrderService {
                 const totalBasePrice = pricePerPod * selectedPodCount;
 
                 // Apply discount
-                const discountAmount = total_discount || 0;
+                let appliedVoucher = null;
+                let discountAmount = Number(total_discount || 0);
+
+                const normalizedVoucherCode = this._normalizeVoucherCode(voucher_code);
+                if (normalizedVoucherCode) {
+                    const voucher = await Voucher.findOne({ code: normalizedVoucherCode }).session(session);
+                    this._assertVoucherEligibility({ total_base_price: totalBasePrice }, voucher);
+
+                    discountAmount = this._calculateVoucherDiscountAmount(
+                        { total_base_price: totalBasePrice },
+                        voucher
+                    );
+
+                    appliedVoucher = {
+                        id: voucher.id,
+                        code: voucher.code,
+                        discount_type: voucher.discount_type,
+                        discount_value: voucher.discount_value,
+                        max_discount: voucher.max_discount,
+                        discount_amount: discountAmount,
+                    };
+                }
+
+                if (!Number.isFinite(discountAmount) || discountAmount < 0) {
+                    discountAmount = 0;
+                }
+
+                discountAmount = Math.min(discountAmount, totalBasePrice);
                 const finalTotalPrice = Math.max(0, totalBasePrice - discountAmount);
                 const depositPricing = await this._calculateVolumeBasedDeposit(selectedPodCount);
                 const payableTotalPrice = finalTotalPrice + depositPricing.deposit_total;
@@ -463,6 +557,17 @@ class BookingOrderService {
                 }], { session });
 
                 const bookingOrder = bookingOrderArray[0];
+
+                if (appliedVoucher) {
+                    await BookingVoucher.create([
+                        {
+                            order_id: bookingOrder.id,
+                            voucher_id: appliedVoucher.id,
+                            discount_amount: appliedVoucher.discount_amount,
+                            applied_at: new Date(),
+                        },
+                    ], { session, ordered: true });
+                }
 
                 // Create individual bookings for each pod within transaction
                 const bookings = [];
@@ -564,7 +669,17 @@ class BookingOrderService {
                         payable_total_price: payableTotalPrice,
                         deposit_pricing_tiers: depositPricing.tiers,
                         deposit_policy: depositPricing.policy,
-                    }
+                    },
+                    applied_voucher: appliedVoucher
+                        ? {
+                            voucher_id: appliedVoucher.id,
+                            code: appliedVoucher.code,
+                            discount_type: appliedVoucher.discount_type,
+                            discount_value: appliedVoucher.discount_value,
+                            max_discount: appliedVoucher.max_discount,
+                            discount_amount: appliedVoucher.discount_amount,
+                        }
+                        : null,
                 };
             }); // End of withTransaction
 
@@ -1501,6 +1616,128 @@ class BookingOrderService {
             refund,
             decision: action,
         };
+    }
+
+    async applyVoucherToOrder(orderId, actor, payload = {}) {
+        const code = this._normalizeVoucherCode(payload.code);
+        if (!code) {
+            throw this._createError("Voucher code is required", 400);
+        }
+
+        const order = await BookingOrder.findOne({ id: orderId });
+        if (!order) {
+            throw this._createError("Booking order not found", 404);
+        }
+
+        const actorId = String(actor?._id || actor?.id || "");
+        const isOwner = actorId && actorId === String(order.user_id);
+        if (!isOwner) {
+            throw this._createError("Only order owner can apply voucher", 403);
+        }
+
+        if (order.status !== "PENDING") {
+            throw this._createError("Voucher can only be applied to PENDING order", 400);
+        }
+
+        const existedRecord = await BookingVoucher.findOne({ order_id: order.id }).select("id").lean();
+        if (existedRecord) {
+            throw this._createError("This order already has a voucher", 409);
+        }
+
+        const voucher = await Voucher.findOne({ code });
+        this._assertVoucherEligibility(order, voucher);
+
+        const discountAmount = this._calculateVoucherDiscountAmount(order, voucher);
+
+        const session = await mongoose.startSession();
+        try {
+            const txResult = await session.withTransaction(async () => {
+                const currentOrder = await BookingOrder.findOne({ id: order.id }).session(session);
+                if (!currentOrder) {
+                    throw this._createError("Booking order not found", 404);
+                }
+
+                const duplicate = await BookingVoucher.findOne({ order_id: currentOrder.id })
+                    .session(session)
+                    .select("id")
+                    .lean();
+                if (duplicate) {
+                    throw this._createError("This order already has a voucher", 409);
+                }
+
+                const bookingVoucher = await BookingVoucher.create([
+                    {
+                        order_id: currentOrder.id,
+                        voucher_id: voucher.id,
+                        discount_amount: discountAmount,
+                        applied_at: new Date(),
+                    },
+                ], { session });
+
+                currentOrder.total_discount = discountAmount;
+                currentOrder.calculateTotal();
+                currentOrder.calculatePayableTotal();
+                await currentOrder.save({ session });
+
+                return {
+                    order: currentOrder,
+                    booking_voucher: bookingVoucher[0],
+                    voucher,
+                };
+            });
+
+            return txResult;
+        } finally {
+            session.endSession();
+        }
+    }
+
+    async removeVoucherFromOrder(orderId, actor) {
+        const order = await BookingOrder.findOne({ id: orderId });
+        if (!order) {
+            throw this._createError("Booking order not found", 404);
+        }
+
+        const actorId = String(actor?._id || actor?.id || "");
+        const isOwner = actorId && actorId === String(order.user_id);
+        if (!isOwner) {
+            throw this._createError("Only order owner can remove voucher", 403);
+        }
+
+        if (order.status !== "PENDING") {
+            throw this._createError("Voucher can only be removed from PENDING order", 400);
+        }
+
+        const session = await mongoose.startSession();
+        try {
+            const txResult = await session.withTransaction(async () => {
+                const currentOrder = await BookingOrder.findOne({ id: order.id }).session(session);
+                if (!currentOrder) {
+                    throw this._createError("Booking order not found", 404);
+                }
+
+                const existing = await BookingVoucher.findOne({ order_id: currentOrder.id }).session(session);
+                if (!existing) {
+                    throw this._createError("Order has no voucher to remove", 404);
+                }
+
+                await BookingVoucher.deleteOne({ id: existing.id }).session(session);
+
+                currentOrder.total_discount = 0;
+                currentOrder.calculateTotal();
+                currentOrder.calculatePayableTotal();
+                await currentOrder.save({ session });
+
+                return {
+                    order: currentOrder,
+                    removed_booking_voucher_id: existing.id,
+                };
+            });
+
+            return txResult;
+        } finally {
+            session.endSession();
+        }
     }
 
     /**
