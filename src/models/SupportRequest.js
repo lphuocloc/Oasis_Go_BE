@@ -13,7 +13,6 @@ const supportRequestSchema = new mongoose.Schema(
       type: String,
       required: [true, "Booking ID is required"],
       ref: "Booking",
-      index: true,
     },
     pod_id: {
       type: String,
@@ -107,7 +106,7 @@ supportRequestSchema.index(
   {
     unique: true,
     partialFilterExpression: {
-      status: { $in: ["PENDING", "PROCESSING"] },
+      status: { $in: ["PENDING", "PROCESSING", "IN_PROGRESS"] },
     },
     name: "uniq_active_support_request_per_booking",
   }
