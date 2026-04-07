@@ -5,6 +5,93 @@ const voucherController = require("../controllers/voucherController");
 
 /**
  * @swagger
+ * components:
+ *   schemas:
+ *     Voucher:
+ *       type: object
+ *       properties:
+ *         id:
+ *           type: string
+ *           example: 2ecba5cd-8ec1-458f-8a91-9f8d5e7f95fd
+ *         code:
+ *           type: string
+ *           example: VC-260407-PCT
+ *         description:
+ *           type: string
+ *           nullable: true
+ *           example: Voucher for weekend promo
+ *         discount_type:
+ *           type: string
+ *           enum: [PERCENT, FIXED]
+ *           example: PERCENT
+ *         discount_value:
+ *           type: number
+ *           example: 20
+ *         max_discount:
+ *           type: number
+ *           nullable: true
+ *           example: 100000
+ *         min_booking_value:
+ *           type: number
+ *           example: 200000
+ *         valid_from:
+ *           type: string
+ *           format: date-time
+ *           example: 2026-04-07T00:00:00.000Z
+ *         valid_to:
+ *           type: string
+ *           format: date-time
+ *           example: 2026-04-30T23:59:59.000Z
+ *         usage_limit:
+ *           type: integer
+ *           nullable: true
+ *           example: 500
+ *         usage_count:
+ *           type: integer
+ *           example: 0
+ *         is_active:
+ *           type: boolean
+ *           example: true
+ *         created_at:
+ *           type: string
+ *           format: date-time
+ *           example: 2026-04-07T08:00:00.000Z
+ *         updated_at:
+ *           type: string
+ *           format: date-time
+ *           example: 2026-04-07T08:00:00.000Z
+ *
+ *     VoucherItemResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         data:
+ *           $ref: '#/components/schemas/Voucher'
+ *
+ *     VoucherStatusActionResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: true
+ *         message:
+ *           type: string
+ *           example: Voucher activated successfully
+ *         data:
+ *           $ref: '#/components/schemas/Voucher'
+ *
+ *     VoucherErrorResponse:
+ *       type: object
+ *       properties:
+ *         success:
+ *           type: boolean
+ *           example: false
+ *         message:
+ *           type: string
+ *           example: Voucher not found
+ *
  * tags:
  *   name: Vouchers
  *   description: Voucher management (phase 1)
@@ -97,6 +184,25 @@ router.get("/code/:code", protect, authorize("admin"), voucherController.getVouc
  *     tags: [Vouchers]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Voucher retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherItemResponse'
+ *       404:
+ *         description: Voucher not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherErrorResponse'
  *   put:
  *     summary: Update voucher
  *     tags: [Vouchers]
@@ -114,6 +220,25 @@ router.put("/:id", protect, authorize("admin"), voucherController.updateVoucher)
  *     tags: [Vouchers]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Voucher activated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherStatusActionResponse'
+ *       404:
+ *         description: Voucher not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherErrorResponse'
  */
 router.patch("/:id/activate", protect, authorize("admin"), voucherController.activateVoucher);
 
@@ -125,6 +250,25 @@ router.patch("/:id/activate", protect, authorize("admin"), voucherController.act
  *     tags: [Vouchers]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Voucher deactivated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherStatusActionResponse'
+ *       404:
+ *         description: Voucher not found
+ *         content:
+ *           application/json:
+ *             schema:
+ *               $ref: '#/components/schemas/VoucherErrorResponse'
  */
 router.patch("/:id/deactivate", protect, authorize("admin"), voucherController.deactivateVoucher);
 
