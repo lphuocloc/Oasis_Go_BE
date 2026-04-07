@@ -4,6 +4,9 @@ const InventoryStock = require("../models/InventoryStock");
 const CleaningTask = require("../models/CleaningTask");
 const MaintenanceTask = require("../models/MaintenanceTask");
 const User = require("../models/User");
+const Item = require("../models/Item");
+const Warehouse = require("../models/Warehouse");
+const notificationService = require("./notificationService");
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -198,7 +201,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
   const resolvedParticipants = resolveCheckoutParticipants({ actor: effectiveActor, staffId: staff_id });
 
   const [stock, staff] = await Promise.all([
-    InventoryStock.findOne({ id: inventory_stock_id }).select("id quantity_available").lean(),
+    InventoryStock.findOne({ id: inventory_stock_id }).select("id quantity_available item_id warehouse_id").lean(),
     findStaffUser(resolvedParticipants.staff_id),
     validateTaskReference(normalizedCleaningTaskId, CleaningTask, "Cleaning task not found"),
     validateTaskReference(normalizedMaintenanceTaskId, MaintenanceTask, "Maintenance task not found"),
@@ -233,6 +236,31 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
     );
 
     await session.commitTransaction();
+
+    if (String(staff.role || "").toLowerCase() === "cleaner" && normalizedActionType === "CHECKOUT") {
+      const [item, warehouse] = await Promise.all([
+        Item.findOne({ id: stock.item_id }).select("id name").lean(),
+        Warehouse.findOne({ id: stock.warehouse_id }).select("id name").lean(),
+      ]);
+
+      await notificationService.sendToUser(staff._id, {
+        title: "Xac nhan xuat kho",
+        message: `Ban da xuat ${normalizedQuantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+        type: "INVENTORY",
+        event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+        dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${createdLog.id}:${String(staff._id)}`,
+        data: {
+          checkout_log_id: createdLog.id,
+          inventory_stock_id,
+          quantity: String(normalizedQuantity),
+          item_id: stock.item_id || null,
+          item_name: item?.name || null,
+          warehouse_id: stock.warehouse_id || null,
+          warehouse_name: warehouse?.name || null,
+        },
+      });
+    }
+
     return createdLog;
   } catch (error) {
     await session.abortTransaction();

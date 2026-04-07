@@ -21,6 +21,7 @@ const bookingService = require("./services/bookingService");
 bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
 
 const cleaningTaskService = require("./services/cleaningTaskService");
+const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
 if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
   cleaningTaskService.startBackfillJob(
     Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
@@ -30,6 +31,20 @@ if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCas
       limit: Number(process.env.CLEANING_TASK_BACKFILL_LIMIT || 200),
       dry_run: String(process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false").toLowerCase() === "true",
     }
+  );
+}
+
+if (String(process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+  cleaningTaskService.startSlaReminderJob(
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_JOB_INTERVAL_MINUTES || 5),
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15)
+  );
+}
+
+if (String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+  staffShiftAssignmentService.startShiftReminderJob(
+    Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
+    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30)
   );
 }
 
@@ -67,6 +82,7 @@ const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const staffAttendanceLogRouter = require("./routes/staffAttendanceLog");
 const usersRouter = require("./routes/users");
 const incidentRouter = require("./routes/incident");
+const damageServiceCatalogRouter = require("./routes/damageServiceCatalog");
 const lostFoundRouter = require("./routes/lostFound");
 const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
@@ -115,6 +131,7 @@ app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/api/staff-attendance-logs", staffAttendanceLogRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/incidents", incidentRouter);
+app.use("/api/damage-service-catalogs", damageServiceCatalogRouter);
 app.use("/api/lost-found-items", lostFoundRouter);
 app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);

@@ -36,7 +36,7 @@ const supportRequestSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values: ["MAINTENANCE", "CHANGE_POD"],
+        values: ["MAINTENANCE", "CHANGE_POD", "CLEANING"],
         message: "{VALUE} is not a valid support request type",
       },
       required: true,

@@ -4,6 +4,48 @@ const Location = require("../models/Location");
 const StaffShift = require("../models/StaffShift");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const notificationService = require("./notificationService");
+
+const toDateRangeText = (startDate, endDate) => {
+  const start = new Date(startDate);
+  const end = new Date(endDate);
+
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+    return "khong xac dinh";
+  }
+
+  const startText = start.toLocaleDateString("vi-VN", {
+    weekday: "long",
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+  const endText = end.toLocaleDateString("vi-VN", {
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+  });
+
+  if (start.toDateString() === end.toDateString()) {
+    return startText;
+  }
+
+  return `${startText} den ${endText}`;
+};
+
+const combineDateAndTime = (dateValue, timeValue) => {
+  const date = new Date(dateValue);
+  const timeText = String(timeValue || "").trim();
+
+  if (Number.isNaN(date.getTime()) || !timeText) return null;
+
+  const parts = timeText.split(":").map((part) => Number(part));
+  if (parts.some((part) => !Number.isFinite(part))) return null;
+
+  const [hours, minutes, seconds] = [parts[0] || 0, parts[1] || 0, parts[2] || 0];
+  date.setHours(hours, minutes, seconds, 0);
+  return date;
+};
 
 class StaffShiftAssignmentService {
   async getMyAssignments({ user, work_date, from_date, to_date, start_date, end_date, status }) {
@@ -245,6 +287,31 @@ class StaffShiftAssignmentService {
         status: "ASSIGNED",
       });
 
+      if (String(staff.role || "").toLowerCase() === "cleaner") {
+        const location = await Location.findOne({ id: locationShift.location_id }).select("id name").lean();
+        const dayText = toDateRangeText(startDate, endDate);
+
+        await notificationService.sendToUser(staff._id, {
+          title: "Ban co lich lam viec moi",
+          message: `Ban da co lich lam viec moi vao ${dayText} tai cum ${location?.name || "Unknown"}.`,
+          type: "SHIFT",
+          event_code: "SHIFT_ASSIGNED",
+          dedupe_key: `SHIFT_ASSIGNED:${assignment.id}:${String(staff._id)}`,
+          data: {
+            assignment_id: assignment.id,
+            location_shift_id: assignment.location_shift_id,
+            location_id: locationShift.location_id,
+            location_name: location?.name || null,
+            shift_id: shift.id,
+            shift_name: shift.shift_name,
+            start_date: assignment.start_date,
+            end_date: assignment.end_date,
+            start_time: assignment.start_time,
+            end_time: assignment.end_time,
+          },
+        });
+      }
+
       return assignment;
     } catch (error) {
       if (error && error.code === 11000) {
@@ -366,6 +433,125 @@ class StaffShiftAssignmentService {
     const assignment = await this.getAssignmentById(id);
     await StaffShiftAssignment.deleteOne({ id });
     return assignment;
+  }
+
+  async sendShiftStartReminders(options = {}) {
+    const leadMinutesRaw = Number(options.lead_minutes || 30);
+    const leadMinutes = Number.isFinite(leadMinutesRaw) ? Math.max(30, leadMinutesRaw) : 30;
+
+    const now = new Date();
+    const threshold = new Date(now.getTime() + leadMinutes * 60 * 1000);
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const assignments = await StaffShiftAssignment.find({
+      status: "ASSIGNED",
+      start_date: { $lte: endOfDay },
+      end_date: { $gte: startOfDay },
+    })
+      .select("id staff_id location_shift_id start_date end_date start_time end_time")
+      .lean();
+
+    if (!assignments || assignments.length === 0) {
+      return { scanned: 0, reminded: 0, lead_minutes: leadMinutes };
+    }
+
+    const locationShiftIds = [...new Set(assignments.map((item) => String(item.location_shift_id || "")).filter(Boolean))];
+    const staffIds = [...new Set(assignments.map((item) => String(item.staff_id || "")).filter(Boolean))];
+
+    const [locationShifts, users, shifts, locations] = await Promise.all([
+      LocationShift.find({ id: { $in: locationShiftIds } }).select("id shift_id location_id").lean(),
+      User.find({
+        isActive: true,
+        role: "cleaner",
+        $or: [
+          { id: { $in: staffIds } },
+          { _id: { $in: staffIds.filter((id) => mongoose.Types.ObjectId.isValid(id)) } },
+        ],
+      })
+        .select("_id id")
+        .lean(),
+      StaffShift.find({ is_active: true }).select("id shift_name start_time end_time").lean(),
+      Location.find({}).select("id name").lean(),
+    ]);
+
+    const locationShiftMap = new Map(locationShifts.map((item) => [String(item.id), item]));
+    const shiftMap = new Map(shifts.map((item) => [String(item.id), item]));
+    const locationMap = new Map(locations.map((item) => [String(item.id), item]));
+
+    const cleanerByIdentity = new Map();
+    users.forEach((item) => {
+      cleanerByIdentity.set(String(item._id), item);
+      if (item.id) cleanerByIdentity.set(String(item.id), item);
+    });
+
+    let reminded = 0;
+
+    for (const assignment of assignments) {
+      const cleaner = cleanerByIdentity.get(String(assignment.staff_id || ""));
+      if (!cleaner) continue;
+
+      const locationShift = locationShiftMap.get(String(assignment.location_shift_id || ""));
+      if (!locationShift) continue;
+
+      const shift = shiftMap.get(String(locationShift.shift_id || ""));
+      const location = locationMap.get(String(locationShift.location_id || ""));
+      const shiftStart = combineDateAndTime(now, assignment.start_time || shift?.start_time);
+      if (!shiftStart) continue;
+
+      if (shiftStart < now || shiftStart > threshold) {
+        continue;
+      }
+
+      await notificationService.sendToUser(cleaner._id, {
+        title: `Nhac gio vao ca ${shift?.shift_name || ""}`,
+        message: `Ca lam viec ${shift?.shift_name || ""} cua ban bat dau sau 30 phut. Dung quen Check-in!`,
+        type: "SHIFT",
+        event_code: "SHIFT_START_REMINDER",
+        dedupe_key: `SHIFT_START_REMINDER:${assignment.id}:${shiftStart.toISOString().slice(0, 16)}`,
+        data: {
+          assignment_id: assignment.id,
+          shift_name: shift?.shift_name || null,
+          start_time: assignment.start_time || shift?.start_time || null,
+          location_name: location?.name || null,
+          reminder_minutes: String(leadMinutes),
+        },
+      });
+
+      reminded += 1;
+    }
+
+    return {
+      scanned: assignments.length,
+      reminded,
+      lead_minutes: leadMinutes,
+    };
+  }
+
+  startShiftReminderJob(intervalMinutes = 5, leadMinutes = 30) {
+    const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 5);
+
+    console.log(
+      `Starting shift reminder job (interval: ${safeIntervalMinutes} minute(s), lead: ${leadMinutes} minute(s))`
+    );
+
+    const runReminders = async () => {
+      try {
+        const result = await this.sendShiftStartReminders({ lead_minutes: leadMinutes });
+        if (result.reminded > 0) {
+          console.log(
+            `Shift reminder job result: scanned=${result.scanned}, reminded=${result.reminded}, lead=${result.lead_minutes}`
+          );
+        }
+      } catch (error) {
+        console.error("Shift reminder job error:", error);
+      }
+    };
+
+    runReminders().catch(() => null);
+    setInterval(runReminders, safeIntervalMinutes * 60 * 1000);
   }
 
 

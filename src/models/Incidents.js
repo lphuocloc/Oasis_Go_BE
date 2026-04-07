@@ -42,6 +42,12 @@ const incidentSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
+    handled_by: {
+      type: String,
+      default: null,
+      ref: "User",
+      index: true,
+    },
     description: {
       type: String,
       required: [true, "description is required"],
@@ -59,37 +65,11 @@ const incidentSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "INVESTIGATING", "RESOLVED", "CLOSED"],
+        values: ["PENDING", "RESOLVED", "DISMISSED"],
         message: "{VALUE} is not a valid status",
       },
       default: "PENDING",
       index: true,
-    },
-    item_id: {
-      type: String,
-      default: null,
-      ref: "Item",
-      index: true,
-    },
-    item_name_snapshot: {
-      type: String,
-      default: null,
-      trim: true,
-    },
-    unit_cost_snapshot: {
-      type: Number,
-      default: null,
-      min: 0,
-    },
-    quantity_affected: {
-      type: Number,
-      default: null,
-      min: 1,
-    },
-    estimated_item_value: {
-      type: Number,
-      default: null,
-      min: 0,
     },
     estimated_service_fee: {
       type: Number,
@@ -113,8 +93,8 @@ const incidentSchema = new mongoose.Schema(
 );
 
 incidentSchema.index({ reported_by: 1, created_at: -1 });
+incidentSchema.index({ handled_by: 1, created_at: -1 });
 incidentSchema.index({ cleaning_task_id: 1, created_at: -1 });
 incidentSchema.index({ incident_type: 1, created_at: -1 });
-incidentSchema.index({ item_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("Incident", incidentSchema);

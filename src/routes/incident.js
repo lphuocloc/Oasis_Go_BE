@@ -4,6 +4,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
 const { loadManagerScope, applyManagerPodScope } = require("../middlewares/managerScopeMiddleware");
 const { uploadIncidentPhoto } = require("../config/cloudinary");
 const {
+  createIncident,
   createIncidentFromCleaningTask,
   createDamageReport,
   getDamageReports,
@@ -52,32 +53,38 @@ const {
  *           example: HIGH
  *         status:
  *           type: string
- *           enum: [PENDING, INVESTIGATING, RESOLVED, CLOSED]
+ *           enum: [PENDING, RESOLVED, DISMISSED]
  *           example: PENDING
  *         incident_type:
  *           type: string
  *           enum: [OPERATIONAL, DAMAGE_REPORT]
  *           example: DAMAGE_REPORT
- *         item_id:
- *           type: string
- *           nullable: true
- *           example: 2f9e6d3c-7f54-4f7f-a2c0-dc7bf6e4a1f1
- *         item_name_snapshot:
- *           type: string
- *           nullable: true
- *           example: Glass Cup
- *         unit_cost_snapshot:
- *           type: number
- *           nullable: true
- *           example: 25000
- *         quantity_affected:
- *           type: number
- *           nullable: true
- *           example: 2
- *         estimated_item_value:
- *           type: number
- *           nullable: true
- *           example: 50000
+ *         details:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [ITEM, SERVICE]
+ *               item_id:
+ *                 type: string
+ *                 nullable: true
+ *               service_catalog_id:
+ *                 type: string
+ *                 nullable: true
+ *               name_snapshot:
+ *                 type: string
+ *                 nullable: true
+ *               unit_cost_snapshot:
+ *                 type: number
+ *               quantity:
+ *                 type: integer
+ *               total_cost:
+ *                 type: number
+ *               note:
+ *                 type: string
+ *                 nullable: true
  *         estimated_service_fee:
  *           type: number
  *           nullable: true
@@ -89,7 +96,7 @@ const {
  *         pricing_source:
  *           type: string
  *           nullable: true
- *           example: ITEM_UNIT_COST
+ *           example: ITEM_SUMMARY_SNAPSHOT
  *         photo_urls:
  *           type: array
  *           items:
@@ -134,7 +141,6 @@ const {
  *     DamageReportCreateInput:
  *       type: object
  *       required:
- *         - item_id
  *         - description
  *       properties:
  *         cleaning_task_id:
@@ -148,13 +154,53 @@ const {
  *         booking_id:
  *           type: string
  *           nullable: true
- *         item_id:
- *           type: string
- *           example: 2f9e6d3c-7f54-4f7f-a2c0-dc7bf6e4a1f1
- *         quantity_affected:
- *           type: number
- *           minimum: 1
- *           default: 1
+ *         details:
+ *           type: array
+ *           description: Canonical payload. Supports both ITEM and SERVICE lines in a single report.
+ *           minItems: 1
+ *           items:
+ *             type: object
+ *             required:
+ *               - type
+ *               - quantity
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [ITEM, SERVICE]
+ *                 example: ITEM
+ *               item_id:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Required when type = ITEM.
+ *               service_catalog_id:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Optional when type = SERVICE. If sent, must exist and be active.
+ *               name_snapshot:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Required when type = SERVICE and service_catalog_id is not provided.
+ *               unit_cost_snapshot:
+ *                 type: number
+ *                 nullable: true
+ *                 minimum: 0
+ *                 description: Required when type = SERVICE and no base price can be resolved from catalog.
+ *               quantity:
+ *                 type: integer
+ *                 minimum: 1
+ *                 default: 1
+ *               note:
+ *                 type: string
+ *                 nullable: true
+ *           example:
+ *             - type: ITEM
+ *               item_id: 2f9e6d3c-7f54-4f7f-a2c0-dc7bf6e4a1f1
+ *               quantity: 2
+ *               note: Vo be ly
+ *             - type: SERVICE
+ *               service_catalog_id: 7c32c3cc-32b1-4f5a-90f1-20d8f5e3961a
+ *               quantity: 1
+ *               note: Phi khu mui thuoc la
  *         estimated_service_fee:
  *           type: number
  *           minimum: 0
@@ -186,7 +232,7 @@ const {
  *           enum: [DAMAGE_REPORT]
  *         status:
  *           type: string
- *           enum: [PENDING, INVESTIGATING, RESOLVED, CLOSED]
+ *           enum: [PENDING, RESOLVED, DISMISSED]
  *         severity:
  *           type: string
  *           enum: [LOW, MEDIUM, HIGH, CRITICAL]
@@ -217,17 +263,33 @@ const {
  *             cleaner_name:
  *               type: string
  *               nullable: true
- *         item:
- *           type: object
- *           properties:
- *             item_id:
- *               type: string
- *             item_name_snapshot:
- *               type: string
- *             unit_cost_snapshot:
- *               type: number
- *             quantity_affected:
- *               type: number
+ *         details:
+ *           type: array
+ *           description: Canonical incident detail lines persisted in incident_details.
+ *           items:
+ *             type: object
+ *             properties:
+ *               type:
+ *                 type: string
+ *                 enum: [ITEM, SERVICE]
+ *               item_id:
+ *                 type: string
+ *                 nullable: true
+ *               service_catalog_id:
+ *                 type: string
+ *                 nullable: true
+ *               name_snapshot:
+ *                 type: string
+ *                 nullable: true
+ *               unit_cost_snapshot:
+ *                 type: number
+ *               quantity:
+ *                 type: integer
+ *               total_cost:
+ *                 type: number
+ *               note:
+ *                 type: string
+ *                 nullable: true
  *         pricing:
  *           type: object
  *           properties:
@@ -242,7 +304,7 @@ const {
  *               example: VND
  *             pricing_source:
  *               type: string
- *               example: ITEM_UNIT_COST
+ *               example: ITEM_SUMMARY_SNAPSHOT
  *         photo_urls:
  *           type: array
  *           items:
@@ -261,8 +323,8 @@ const {
  *       properties:
  *         status:
  *           type: string
- *           enum: [PENDING, INVESTIGATING, RESOLVED, CLOSED]
- *           example: INVESTIGATING
+ *           enum: [PENDING, RESOLVED, DISMISSED]
+ *           example: RESOLVED
  */
 
 /**
@@ -303,7 +365,7 @@ const {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, INVESTIGATING, RESOLVED, CLOSED]
+ *           enum: [PENDING, RESOLVED, DISMISSED]
  *     responses:
  *       200:
  *         description: Incident list retrieved successfully
@@ -322,6 +384,47 @@ const {
  *                     $ref: '#/components/schemas/Incident'
  */
 router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, applyManagerPodScope, getIncidents);
+
+/**
+ * @swagger
+ * /api/incidents:
+ *   post:
+ *     summary: Create incident (canonical endpoint)
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             $ref: '#/components/schemas/DamageReportCreateInput'
+ *     responses:
+ *       201:
+ *         description: Incident created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/DamageReportResponse'
+ *       400:
+ *         description: Invalid input
+ *       404:
+ *         description: Pod, item, service catalog, or cleaning task not found
+ */
+router.post(
+  "/",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  uploadIncidentPhoto.array("photos", 8),
+  createIncident
+);
 
 /**
  * @swagger
@@ -365,7 +468,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *         name: status
  *         schema:
  *           type: string
- *           enum: [PENDING, INVESTIGATING, RESOLVED, CLOSED]
+ *           enum: [PENDING, RESOLVED, DISMISSED]
  *       - in: query
  *         name: from
  *         schema:
@@ -448,7 +551,8 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  * @swagger
  * /api/incidents/cleaning-task:
  *   post:
- *     summary: Cleaner reports incident from a cleaning task
+ *     summary: "[Deprecated] Create incident via legacy cleaning-task endpoint"
+ *     deprecated: true
  *     tags: [Incidents]
  *     security:
  *       - bearerAuth: []
@@ -457,7 +561,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *       content:
  *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/IncidentCreateFromCleaningTaskInput'
+ *             $ref: '#/components/schemas/DamageReportCreateInput'
  *     responses:
  *       201:
  *         description: Incident created successfully
@@ -471,11 +575,11 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *                 message:
  *                   type: string
  *                 data:
- *                   $ref: '#/components/schemas/Incident'
+ *                   $ref: '#/components/schemas/DamageReportResponse'
  *       400:
  *         description: Invalid input
- *       403:
- *         description: Cleaner is not allowed for this task
+ *       404:
+ *         description: Pod, item, service catalog, or cleaning task not found
  */
 router.post(
   "/cleaning-task",
@@ -489,7 +593,8 @@ router.post(
  * @swagger
  * /api/incidents/damage-report:
  *   post:
- *     summary: Create damage report with item price snapshot
+ *     summary: "[Deprecated] Create incident via legacy damage-report endpoint"
+ *     deprecated: true
  *     tags: [Incidents]
  *     security:
  *       - bearerAuth: []
@@ -505,7 +610,7 @@ router.post(
  *       400:
  *         description: Invalid input
  *       404:
- *         description: Pod, item, or cleaning task not found
+ *         description: Pod, item, service catalog, or cleaning task not found
  */
 router.post(
   "/damage-report",
@@ -541,6 +646,7 @@ router.post(
  *       404:
  *         description: Incident not found
  */
-router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, updateIncidentStatus);
+router.patch("/:id/status", protect, authorize("admin", "manager"), loadManagerScope, updateIncidentStatus);
 
 module.exports = router;
+

@@ -18,6 +18,8 @@ module.exports = {
   WalletTransaction: require("./WalletTransaction"),
   Incident: require("./Incidents"),
   IncidentPhoto: require("./IncidentPhoto"),
+  IncidentDetail: require("./IncidentDetail"),
+  DamageServiceCatalog: require("./DamageServiceCatalog"),
   LostFoundItem: require("./LostFoundItem"),
   Transaction: require("./Transaction"),
   TimeSlot: require("./TimeSlot"),

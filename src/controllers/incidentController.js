@@ -26,57 +26,29 @@ const parsePhotoUrls = (raw) => {
   return [];
 };
 
-exports.createIncidentFromCleaningTask = async (req, res) => {
-  const uploadedPhotos = Array.isArray(req.files)
-    ? req.files
-        .filter((file) => file && file.path)
-        .map((file) => ({
-          url: file.path,
-          public_id: file.filename || null,
-        }))
-    : [];
+const buildUploadedPhotos = (files) => {
+  if (!Array.isArray(files)) return [];
 
-  try {
-    const incident = await incidentService.createIncidentFromCleaningTask(
-      {
-        ...req.body,
-        photo_urls: parsePhotoUrls(req.body.photo_urls),
-        uploaded_photos: uploadedPhotos,
-      },
-      req.user
-    );
-
-    res.status(201).json({
-      success: true,
-      message: "Incident created successfully",
-      data: incident,
-    });
-  } catch (error) {
-    if (uploadedPhotos.length > 0) {
-      await Promise.all(
-        uploadedPhotos
-          .filter((item) => item.public_id)
-          .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
-      );
-    }
-
-    const statusCode = error.statusCode || 500;
-    res.status(statusCode).json({
-      success: false,
-      message: error.message || "Error creating incident",
-    });
-  }
+  return files
+    .filter((file) => file && file.path)
+    .map((file) => ({
+      url: file.path,
+      public_id: file.filename || null,
+    }));
 };
 
-exports.createDamageReport = async (req, res) => {
-  const uploadedPhotos = Array.isArray(req.files)
-    ? req.files
-        .filter((file) => file && file.path)
-        .map((file) => ({
-          url: file.path,
-          public_id: file.filename || null,
-        }))
-    : [];
+const cleanupUploadedPhotos = async (uploadedPhotos = []) => {
+  if (!Array.isArray(uploadedPhotos) || uploadedPhotos.length === 0) return;
+
+  await Promise.all(
+    uploadedPhotos
+      .filter((item) => item.public_id)
+      .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
+  );
+};
+
+const createDamageIncident = async (req, res, { successMessage = "Incident created successfully" } = {}) => {
+  const uploadedPhotos = buildUploadedPhotos(req.files);
 
   try {
     const incident = await incidentService.createDamageReport(
@@ -90,25 +62,35 @@ exports.createDamageReport = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Damage report created successfully",
+      message: successMessage,
       data: incident,
     });
   } catch (error) {
-    if (uploadedPhotos.length > 0) {
-      await Promise.all(
-        uploadedPhotos
-          .filter((item) => item.public_id)
-          .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
-      );
-    }
+    await cleanupUploadedPhotos(uploadedPhotos);
 
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error creating damage report",
+      message: error.message || "Error creating incident",
     });
   }
 };
+
+exports.createIncidentFromCleaningTask = async (req, res) => {
+  res.set("X-API-Deprecated", "true");
+  res.set("X-API-Replacement", "/api/incidents");
+  return createDamageIncident(req, res, {
+    successMessage: "Incident created successfully",
+  });
+};
+
+exports.createDamageReport = async (req, res) => createDamageIncident(req, res, {
+  successMessage: "Damage report created successfully",
+});
+
+exports.createIncident = async (req, res) => createDamageIncident(req, res, {
+  successMessage: "Incident created successfully",
+});
 
 exports.getDamageReports = async (req, res) => {
   try {

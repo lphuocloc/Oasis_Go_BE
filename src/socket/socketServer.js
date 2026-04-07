@@ -1,8 +1,10 @@
 const { Server } = require("socket.io");
 const { randomBytes } = require("crypto");
+const jwt = require("jsonwebtoken");
 const PodQrCode = require("../models/PodQrCode");
 const PodDevice = require("../models/PodDevice");
 const Pod = require("../models/Pod");
+const User = require("../models/User");
 
 let ioInstance = null;
 const qrRotationTimers = new Map();
@@ -13,6 +15,7 @@ const QR_ROTATION_INTERVAL_SECONDS = Number(process.env.QR_ROTATION_INTERVAL_SEC
 
 const createToken = () => randomBytes(16).toString("hex").toUpperCase();
 const getPodRoom = (podId) => `pod:${podId}`;
+const getCleanerRoom = (userId) => `cleaner:${userId}`;
 
 const normalizeCorsOrigins = () => {
     const envOrigins = process.env.SOCKET_CORS_ORIGIN;
@@ -22,6 +25,48 @@ const normalizeCorsOrigins = () => {
         .split(",")
         .map((origin) => origin.trim())
         .filter(Boolean);
+};
+
+const extractTokenFromHandshake = (socket) => {
+    const authToken = String(socket?.handshake?.auth?.token || "").trim();
+    if (authToken) {
+        return authToken.startsWith("Bearer ") ? authToken.slice(7).trim() : authToken;
+    }
+
+    const headerAuth = String(socket?.handshake?.headers?.authorization || "").trim();
+    if (headerAuth) {
+        return headerAuth.startsWith("Bearer ") ? headerAuth.slice(7).trim() : headerAuth;
+    }
+
+    const queryToken = String(socket?.handshake?.query?.token || "").trim();
+    if (queryToken) {
+        return queryToken.startsWith("Bearer ") ? queryToken.slice(7).trim() : queryToken;
+    }
+
+    return null;
+};
+
+const resolveSocketAuthUser = async (socket) => {
+    const token = extractTokenFromHandshake(socket);
+    if (!token) {
+        return null;
+    }
+
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    if (!decoded?.id) {
+        return null;
+    }
+
+    const user = await User.findById(decoded.id).select("_id role isActive id").lean();
+    if (!user || !user.isActive) {
+        return null;
+    }
+
+    return {
+        id: String(user._id),
+        role: String(user.role || "").toLowerCase(),
+        public_id: user.id ? String(user.id) : null,
+    };
 };
 
 const toQrPayload = (qrCode) => ({
@@ -55,6 +100,12 @@ const sendLatestQrToSocket = async (socket, podId) => {
 const getPodRoomClientCount = (podId) => {
     if (!ioInstance || !podId) return 0;
     const room = ioInstance.sockets.adapter.rooms.get(getPodRoom(podId));
+    return room ? room.size : 0;
+};
+
+const getCleanerRoomClientCount = (userId) => {
+    if (!ioInstance || !userId) return 0;
+    const room = ioInstance.sockets.adapter.rooms.get(getCleanerRoom(userId));
     return room ? room.size : 0;
 };
 
@@ -182,6 +233,21 @@ const emitPodCheckinConfirmed = ({
     return false;
 };
 
+const emitCleanerNotificationEvent = ({ user_id, notification = {} }) => {
+    if (!ioInstance || !user_id || !notification || typeof notification !== "object") {
+        return false;
+    }
+
+    const room = getCleanerRoom(user_id);
+    ioInstance.to(room).emit("cleaner:notification", {
+        user_id,
+        sent_at: new Date().toISOString(),
+        ...notification,
+    });
+
+    return getCleanerRoomClientCount(user_id) > 0;
+};
+
 const initSocketServer = (httpServer) => {
     if (ioInstance) return ioInstance;
 
@@ -195,6 +261,8 @@ const initSocketServer = (httpServer) => {
     ioInstance.on("connection", (socket) => {
         let registeredDeviceId = null;
         let registeredPodId = null;
+        let registeredCleanerId = null;
+        let authenticatedUser = null;
 
         const registerDevice = async ({ device_id, pod_id } = {}) => {
             if (!device_id && !pod_id) {
@@ -233,6 +301,45 @@ const initSocketServer = (httpServer) => {
             });
         };
 
+        const registerCleaner = async ({ cleaner_id, user_id } = {}) => {
+            if (!authenticatedUser) {
+                authenticatedUser = await resolveSocketAuthUser(socket);
+            }
+
+            if (!authenticatedUser) {
+                socket.emit("socket:error", { message: "Unauthorized cleaner subscription" });
+                return;
+            }
+
+            if (authenticatedUser.role !== "cleaner") {
+                socket.emit("socket:error", { message: "Only cleaner role can subscribe cleaner room" });
+                return;
+            }
+
+            const requestedCleanerId = String(cleaner_id || user_id || "").trim();
+            if (
+                requestedCleanerId &&
+                requestedCleanerId !== authenticatedUser.id &&
+                requestedCleanerId !== String(authenticatedUser.public_id || "")
+            ) {
+                socket.emit("socket:error", { message: "Cleaner room subscription mismatch" });
+                return;
+            }
+
+            const resolvedCleanerId = authenticatedUser.id;
+
+            if (registeredCleanerId && registeredCleanerId !== resolvedCleanerId) {
+                socket.leave(getCleanerRoom(registeredCleanerId));
+            }
+
+            registeredCleanerId = resolvedCleanerId;
+            socket.join(getCleanerRoom(registeredCleanerId));
+
+            socket.emit("cleaner:subscribed", {
+                user_id: registeredCleanerId,
+            });
+        };
+
         const handshakeData = {
             ...(socket.handshake.auth || {}),
             ...(socket.handshake.query || {}),
@@ -241,6 +348,13 @@ const initSocketServer = (httpServer) => {
         if (handshakeData.device_id || handshakeData.pod_id) {
             registerDevice(handshakeData).catch((error) => {
                 socket.emit("socket:error", { message: error.message || "Failed to register device" });
+            });
+        }
+
+        if (handshakeData.cleaner_id || handshakeData.user_id) {
+            registerCleaner(handshakeData).catch((error) => {
+                socket.emit("socket:error", { message: error.message || "Failed to subscribe cleaner room" });
+                socket.disconnect(true);
             });
         }
 
@@ -259,6 +373,12 @@ const initSocketServer = (httpServer) => {
         socket.on("pod_qr_code:request_latest", ({ pod_id } = {}) => {
             sendLatestQrToSocket(socket, pod_id).catch((error) => {
                 socket.emit("socket:error", { message: error.message || "Failed to fetch latest QR" });
+            });
+        });
+
+        socket.on("cleaner:subscribe", (data = {}) => {
+            registerCleaner(data).catch((error) => {
+                socket.emit("socket:error", { message: error.message || "Failed to subscribe cleaner room" });
             });
         });
 
@@ -286,4 +406,5 @@ module.exports = {
     emitQrCodeEvent,
     emitDoorUnlockRequest,
     emitPodCheckinConfirmed,
+    emitCleanerNotificationEvent,
 };
