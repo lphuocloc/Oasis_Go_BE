@@ -808,53 +808,86 @@ class PaymentService {
       throw error;
     }
 
-    const wallet = await Wallet.findOne({ id: walletIdFromRef });
-    if (!wallet) {
-      const error = new Error("Wallet not found for topup transaction");
-      error.statusCode = 404;
-      throw error;
-    }
+    let walletId = walletIdFromRef;
+    let balanceBefore = 0;
+    let balanceAfter = 0;
 
-    if (wallet.status !== "ACTIVE") {
-      const error = new Error("Wallet is locked");
-      error.statusCode = 423;
-      throw error;
-    }
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const wallet = await Wallet.findOne({ id: walletIdFromRef }).session(session);
+        if (!wallet) {
+          const error = new Error("Wallet not found for topup transaction");
+          error.statusCode = 404;
+          throw error;
+        }
 
-    const existingWalletTopupAudit = await WalletTransaction.findOne({
-      reference_id: txnRef,
-      type: "TOPUP",
-    });
+        if (wallet.status !== "ACTIVE") {
+          const error = new Error("Wallet is locked");
+          error.statusCode = 423;
+          throw error;
+        }
 
-    let balanceBefore = wallet.balance;
-    let balanceAfter = wallet.balance;
+        walletId = wallet.id;
 
-    if (!existingWalletTopupAudit) {
-      balanceBefore = wallet.balance;
-      balanceAfter = Number((Number(balanceBefore) + Number(paidAmount)).toFixed(2));
-      wallet.balance = balanceAfter;
-      await wallet.save();
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        }).session(session);
 
-      await WalletTransaction.create({
-        wallet_id: wallet.id,
-        amount: Number(paidAmount),
-        type: "TOPUP",
-        transaction_id: null,
-        reference_id: txnRef,
-        description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
+        if (existingWalletTopupAudit) {
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+          return;
+        }
+
+        balanceBefore = Number(wallet.balance || 0);
+        balanceAfter = Number((balanceBefore + Number(paidAmount)).toFixed(2));
+        wallet.balance = balanceAfter;
+        await wallet.save({ session });
+
+        await WalletTransaction.create(
+          [
+            {
+              wallet_id: wallet.id,
+              amount: Number(paidAmount),
+              type: "TOPUP",
+              transaction_id: null,
+              reference_id: txnRef,
+              description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
+              balance_before: balanceBefore,
+              balance_after: balanceAfter,
+            },
+          ],
+          { session },
+        );
       });
-    } else {
-      balanceBefore = existingWalletTopupAudit.balance_before;
-      balanceAfter = existingWalletTopupAudit.balance_after;
+    } catch (error) {
+      if (error?.code === 11000) {
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        });
+
+        if (existingWalletTopupAudit) {
+          walletId = existingWalletTopupAudit.wallet_id || walletIdFromRef;
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    } finally {
+      session.endSession();
     }
 
     return {
       code: responseCode,
       message: "Topup successful",
       transactionId: null,
-      walletId: wallet.id,
+      walletId,
       amount: Number(paidAmount),
       status: "SUCCESS",
       balance_before: balanceBefore,

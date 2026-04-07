@@ -13,7 +13,6 @@ const supportRequestSchema = new mongoose.Schema(
       type: String,
       required: [true, "Booking ID is required"],
       ref: "Booking",
-      index: true,
     },
     pod_id: {
       type: String,
