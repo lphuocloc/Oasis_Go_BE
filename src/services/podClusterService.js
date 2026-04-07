@@ -1,9 +1,15 @@
 const PodCluster = require("../models/PodCluster");
 const PodClusterImage = require("../models/PodClusterImage");
 const Location = require("../models/Location");
+const Review = require("../models/Review");
 const { LEAF_TYPES } = require("./locationService");
 
 const ALLOWED_SLOT_DURATIONS = [30, 60, 90, 120];
+const DEFAULT_RATING_STATS = {
+    avgRating: 0,
+    totalReviews: 0,
+    ratingCounts: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+};
 
 class PodClusterService {
     /**
@@ -47,6 +53,52 @@ class PodClusterService {
             .sort({ createdAt: -1 })
             .lean();
 
+        const ratingStats = await Review.aggregate([
+            {
+                $match: {
+                    cluster_id: { $in: clusterIds },
+                    is_rejected: false,
+                    rating: { $ne: null },
+                },
+            },
+            {
+                $group: {
+                    _id: "$cluster_id",
+                    avgRating: { $avg: "$rating" },
+                    totalReviews: { $sum: 1 },
+                    rating1: { $sum: { $cond: [{ $eq: ["$rating", 1] }, 1, 0] } },
+                    rating2: { $sum: { $cond: [{ $eq: ["$rating", 2] }, 1, 0] } },
+                    rating3: { $sum: { $cond: [{ $eq: ["$rating", 3] }, 1, 0] } },
+                    rating4: { $sum: { $cond: [{ $eq: ["$rating", 4] }, 1, 0] } },
+                    rating5: { $sum: { $cond: [{ $eq: ["$rating", 5] }, 1, 0] } },
+                },
+            },
+            {
+                $project: {
+                    _id: 0,
+                    cluster_id: "$_id",
+                    avgRating: { $round: ["$avgRating", 2] },
+                    totalReviews: 1,
+                    ratingCounts: {
+                        1: "$rating1",
+                        2: "$rating2",
+                        3: "$rating3",
+                        4: "$rating4",
+                        5: "$rating5",
+                    },
+                },
+            },
+        ]);
+
+        const ratingMap = ratingStats.reduce((map, stat) => {
+            map[stat.cluster_id] = {
+                avgRating: stat.avgRating,
+                totalReviews: stat.totalReviews,
+                ratingCounts: stat.ratingCounts,
+            };
+            return map;
+        }, {});
+
         const imageMap = images.reduce((map, image) => {
             if (!map[image.cluster_id]) {
                 map[image.cluster_id] = [];
@@ -58,6 +110,7 @@ class PodClusterService {
         const podClustersWithImages = podClusters.map(cluster => {
             const clusterObj = cluster.toObject();
             clusterObj.images = imageMap[cluster.id] || [];
+            clusterObj.rating = ratingMap[cluster.id] || DEFAULT_RATING_STATS;
             return clusterObj;
         });
 
@@ -85,6 +138,7 @@ class PodClusterService {
         // Thêm images vào object trả về
         const podClusterObj = podCluster.toObject();
         podClusterObj.images = images;
+        podClusterObj.rating = await Review.getClusterStats(clusterId);
 
         return podClusterObj;
     }
