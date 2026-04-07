@@ -9,7 +9,7 @@ const {
   requireManagerClusterAccess,
 } = require("../middlewares/managerScopeMiddleware");
 const { uploadPodClusterImage } = require("../config/cloudinary");
-
+router.get("/recommendations", podClusterController.getRecommendations);
 /**
  * @swagger
  * tags:
