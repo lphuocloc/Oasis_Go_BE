@@ -17,6 +17,7 @@ const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
@@ -302,6 +303,62 @@ class BookingService {
     };
   }
 
+  async notifyUpcomingCheckoutBookings(leadMinutes = CHECKOUT_REMINDER_LEAD_MINUTES) {
+    const safeLeadMinutes = Math.max(1, Number(leadMinutes) || CHECKOUT_REMINDER_LEAD_MINUTES);
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + safeLeadMinutes * 60 * 1000);
+
+    // Only remind bookings that were manually checked in by user.
+    const upcomingBookings = await Booking.find({
+      status: "IN_USE",
+      checkin_state: "MANUAL_CHECKED_IN",
+      end_time: { $gt: now, $lte: windowEnd },
+    }).select("id user_id pod_id order_id end_time checkin_state status");
+
+    if (upcomingBookings.length === 0) {
+      return { found: 0, reminded: 0, failed: 0, lead_minutes: safeLeadMinutes };
+    }
+
+    let remindedCount = 0;
+    let failedCount = 0;
+
+    for (const booking of upcomingBookings) {
+      try {
+        await notificationService.sendToUser(booking.user_id, {
+          title: "Nhắc nhở sắp checkout",
+          message: `Phiên sử dụng sẽ kết thúc trong khoảng ${safeLeadMinutes} phút nữa. Vui lòng chuẩn bị checkout đúng giờ.`,
+          type: "BOOKING",
+          event_code: "BOOKING_REMINDER",
+          dedupe_key: `BOOKING_CHECKOUT_REMINDER_${safeLeadMinutes}M:${booking.id}`,
+          data: {
+            type: "BOOKING_CHECKOUT_REMINDER",
+            booking_id: booking.id,
+            order_id: booking.order_id,
+            pod_id: booking.pod_id,
+            end_time: booking.end_time,
+            minutes_left: String(safeLeadMinutes),
+            reminder_type: `CHECKOUT_${safeLeadMinutes}M`,
+          },
+        });
+
+        remindedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        console.error(
+          `Checkout reminder notification failed (booking_id=${booking.id || "unknown"}):`,
+          error.message || error
+        );
+      }
+    }
+
+    return {
+      found: upcomingBookings.length,
+      reminded: remindedCount,
+      failed: failedCount,
+      lead_minutes: safeLeadMinutes,
+    };
+  }
+
   startAutoActivateCheckinJob(intervalMinutes = 1, graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 1);
 
@@ -313,6 +370,7 @@ class BookingService {
       this.autoActivateOverdueCheckins(graceMinutes),
       this.markNoShowForExpiredAutoActivatedBookings(),
       this.autoCheckoutExpiredBookings(),
+      this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
     ]).catch((error) => {
       console.error("Initial auto-activate checkin job failed:", error);
     });
@@ -323,6 +381,7 @@ class BookingService {
           this.autoActivateOverdueCheckins(graceMinutes),
           this.markNoShowForExpiredAutoActivatedBookings(),
           this.autoCheckoutExpiredBookings(),
+          this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
         ]);
       } catch (error) {
         console.error("Auto-activate checkin job error:", error);

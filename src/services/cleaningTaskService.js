@@ -13,6 +13,12 @@ const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const BookingOrder = require("../models/BookingOrder");
+const Incident = require("../models/Incidents");
+const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
+const notificationService = require("./notificationService");
 const mongoose = require("mongoose");
 const { randomInt } = require("crypto");
 
@@ -31,6 +37,174 @@ const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"]
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+
+const resolveOrderForTaskBooking = async (bookingId, session = null) => {
+  if (!bookingId) return null;
+
+  const bookingQuery = Booking.findOne({ id: String(bookingId) }).select("id order_id");
+  const booking = session ? await bookingQuery.session(session).lean() : await bookingQuery.lean();
+  if (!booking || !booking.order_id) return null;
+
+  const orderQuery = BookingOrder.findOne({ id: String(booking.order_id) })
+    .select("id user_id status deposit_total deposit_settlement_status");
+  const order = session ? await orderQuery.session(session) : await orderQuery;
+  if (!order) return null;
+
+  return { booking, order };
+};
+
+const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
+  const resolved = await resolveOrderForTaskBooking(bookingId);
+  if (!resolved) return;
+
+  const { order } = resolved;
+  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || ""))) return;
+  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") return;
+
+  const depositAmount = Number(order.deposit_total || 0);
+  if (depositAmount <= 0) return;
+
+  let refundNotificationPayload = null;
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const freshResolved = await resolveOrderForTaskBooking(bookingId, session);
+      if (!freshResolved) return;
+
+      const freshOrder = freshResolved.order;
+      const freshDepositAmount = Number(freshOrder.deposit_total || 0);
+
+      if (!["PAID", "PARTIAL_CANCEL"].includes(String(freshOrder.status || ""))) return;
+      if (String(freshOrder.deposit_settlement_status || "") !== "PENDING_INSPECTION") return;
+      if (freshDepositAmount <= 0) return;
+
+      const orderBookings = await Booking.find({
+        order_id: freshOrder.id,
+        status: { $ne: "CANCELLED" },
+      })
+        .select("id")
+        .session(session)
+        .lean();
+
+      if (!orderBookings.length) return;
+
+      const orderBookingIds = orderBookings.map((item) => item.id);
+
+      const unfinishedTask = await CleaningTask.findOne({
+        booking_id: { $in: orderBookingIds },
+        status: { $ne: "DONE" },
+      })
+        .select("id status")
+        .session(session)
+        .lean();
+
+      if (unfinishedTask) return;
+
+      const hasIncident = await Incident.exists({
+        booking_id: { $in: orderBookingIds },
+      }).session(session);
+
+      if (hasIncident) return;
+
+      const settlementUpdate = await BookingOrder.updateOne(
+        {
+          id: freshOrder.id,
+          deposit_settlement_status: "PENDING_INSPECTION",
+          deposit_total: { $gt: 0 },
+        },
+        {
+          $set: {
+            deposit_settlement_status: "REFUNDED",
+          },
+        },
+        { session }
+      );
+
+      if (settlementUpdate.modifiedCount !== 1) return;
+
+      let wallet = await Wallet.findOne({ user_id: freshOrder.user_id }).session(session);
+      if (!wallet) {
+        const createdWallet = await Wallet.create(
+          [
+            {
+              user_id: freshOrder.user_id,
+              balance: 0,
+              status: "ACTIVE",
+            },
+          ],
+          { session }
+        );
+        wallet = createdWallet[0];
+      }
+
+      const balanceBefore = Number(wallet.balance || 0);
+      const balanceAfter = Number((balanceBefore + freshDepositAmount).toFixed(2));
+      wallet.balance = balanceAfter;
+      await wallet.save({ session });
+
+      const createdRefundTx = await Transaction.create(
+        [
+          {
+            order_id: freshOrder.id,
+            amount: freshDepositAmount,
+            currency: "VND",
+            type: "REFUND",
+            method: "WALLET",
+            status: "SUCCESS",
+            provider_reference: "AUTO_REFUND_DEPOSIT_CLEANING_DONE",
+          },
+        ],
+        { session }
+      );
+
+      const refundTx = createdRefundTx[0];
+
+      await WalletTransaction.create(
+        [
+          {
+            wallet_id: wallet.id,
+            amount: freshDepositAmount,
+            type: "REFUND",
+            transaction_id: refundTx.id,
+            reference_id: freshOrder.id,
+            description: `Hoan tien coc don ${freshOrder.id} sau khi cleaner hoan tat va khong co su co`,
+            balance_before: balanceBefore,
+            balance_after: balanceAfter,
+          },
+        ],
+        { session }
+      );
+
+      refundNotificationPayload = {
+        user_id: String(freshOrder.user_id || ""),
+        order_id: String(freshOrder.id || ""),
+        deposit_amount: freshDepositAmount,
+        refunded_transaction_id: String(refundTx.id || ""),
+      };
+    });
+
+    if (refundNotificationPayload && refundNotificationPayload.user_id) {
+      await notificationService.sendToUser(refundNotificationPayload.user_id, {
+        title: "Hoan tien coc thanh cong",
+        message: `He thong da hoan ${Number(refundNotificationPayload.deposit_amount || 0).toLocaleString("vi-VN")} VND tien coc vao vi cua ban.`,
+        type: "PAYMENT",
+        event_code: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
+        dedupe_key: `PAYMENT_DEPOSIT_REFUND_SUCCESS:${refundNotificationPayload.order_id}:${refundNotificationPayload.refunded_transaction_id || "NO_TX"}`,
+        data: {
+          type: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
+          order_id: refundNotificationPayload.order_id,
+          refund_amount: String(refundNotificationPayload.deposit_amount || 0),
+          deposit_amount: String(refundNotificationPayload.deposit_amount || 0),
+          refunded_transaction_id: refundNotificationPayload.refunded_transaction_id,
+          refunded_to_wallet_immediately: "true",
+        },
+      });
+    }
+  } finally {
+    await session.endSession();
+  }
+};
 
 const createError = (message, statusCode, errorCode = null) => {
   const err = new Error(message);
@@ -786,7 +960,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   debugInfo.buffer_policy_id = bufferConfig.policyId;
 
   const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
-  
+
   // estimated_start_time = booking.end_time + 5 minutes
   const estimatedStartTime = bookingLike && bookingLike.end_time
     ? new Date(new Date(bookingLike.end_time).getTime() + 5 * 60 * 1000)
@@ -1604,6 +1778,19 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
     await notifyCleanerTaskAssigned(task, {
       dedupeSuffix: cleanerChangedAfterSave ? "REASSIGNED" : "STATUS_UPDATED",
     });
+  }
+
+
+  if (previousStatus !== "DONE" && nextStatus === "DONE") {
+    try {
+      await tryAutoRefundDepositAfterCleaningDone({ bookingId: task.booking_id });
+    } catch (error) {
+      console.error("Auto refund deposit after cleaning DONE failed", {
+        task_id: task.id,
+        booking_id: task.booking_id,
+        error: error?.message || error,
+      });
+    }
   }
 
   return task;

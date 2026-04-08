@@ -2,6 +2,8 @@ const vnpayService = require("../utils/vnpayService");
 const Transaction = require("../models/Transaction");
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
+const BookingVoucher = require("../models/BookingVoucher");
+const Voucher = require("../models/Voucher");
 const OnlineKey = require("../models/OnlineKey");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
@@ -58,6 +60,39 @@ class PaymentService {
     return transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
   }
 
+  async _incrementVoucherUsageIfNeeded(orderId, session = null) {
+    let bookingVoucherQuery = BookingVoucher.findOne({ order_id: orderId }).select(
+      "voucher_id",
+    );
+    if (session) {
+      bookingVoucherQuery = bookingVoucherQuery.session(session);
+    }
+
+    const bookingVoucher = await bookingVoucherQuery;
+    if (!bookingVoucher?.voucher_id) {
+      return;
+    }
+
+    const voucherUpdateFilter = {
+      id: bookingVoucher.voucher_id,
+      $or: [
+        { usage_limit: null },
+        { usage_limit: { $exists: false } },
+        { $expr: { $lt: ["$usage_count", "$usage_limit"] } },
+      ],
+    };
+
+    let voucherUpdateQuery = Voucher.updateOne(
+      voucherUpdateFilter,
+      { $inc: { usage_count: 1 } },
+    );
+    if (session) {
+      voucherUpdateQuery = voucherUpdateQuery.session(session);
+    }
+
+    await voucherUpdateQuery;
+  }
+
   async _settleOrderIfFullyPaid(orderId, session = null) {
     let bookingOrderQuery = BookingOrder.findOne({ id: orderId });
     if (session) {
@@ -90,16 +125,24 @@ class PaymentService {
       session,
     );
 
-    bookingOrder.status = "PAID";
-    if (walletCharged > 0 && vnpayCharged > 0) {
-      bookingOrder.payment_method = "HYBRID";
-    } else if (walletCharged > 0) {
-      bookingOrder.payment_method = "WALLET";
-    } else {
-      bookingOrder.payment_method = "VNPAY";
-    }
+    const nextPaymentMethod =
+      walletCharged > 0 && vnpayCharged > 0
+        ? "HYBRID"
+        : walletCharged > 0
+          ? "WALLET"
+          : "VNPAY";
 
-    await bookingOrder.save({ session });
+    let becamePaid = false;
+    if (bookingOrder.status !== "PAID") {
+      bookingOrder.status = "PAID";
+      bookingOrder.payment_method = nextPaymentMethod;
+      await bookingOrder.save({ session });
+      becamePaid = true;
+
+      await this._incrementVoucherUsageIfNeeded(orderId, session);
+    } else {
+      bookingOrder.payment_method = nextPaymentMethod;
+    }
 
     return {
       bookingOrder,
@@ -108,6 +151,7 @@ class PaymentService {
       walletCharged,
       vnpayCharged,
       isPaid: true,
+      becamePaid,
     };
   }
 
@@ -808,53 +852,86 @@ class PaymentService {
       throw error;
     }
 
-    const wallet = await Wallet.findOne({ id: walletIdFromRef });
-    if (!wallet) {
-      const error = new Error("Wallet not found for topup transaction");
-      error.statusCode = 404;
-      throw error;
-    }
+    let walletId = walletIdFromRef;
+    let balanceBefore = 0;
+    let balanceAfter = 0;
 
-    if (wallet.status !== "ACTIVE") {
-      const error = new Error("Wallet is locked");
-      error.statusCode = 423;
-      throw error;
-    }
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const wallet = await Wallet.findOne({ id: walletIdFromRef }).session(session);
+        if (!wallet) {
+          const error = new Error("Wallet not found for topup transaction");
+          error.statusCode = 404;
+          throw error;
+        }
 
-    const existingWalletTopupAudit = await WalletTransaction.findOne({
-      reference_id: txnRef,
-      type: "TOPUP",
-    });
+        if (wallet.status !== "ACTIVE") {
+          const error = new Error("Wallet is locked");
+          error.statusCode = 423;
+          throw error;
+        }
 
-    let balanceBefore = wallet.balance;
-    let balanceAfter = wallet.balance;
+        walletId = wallet.id;
 
-    if (!existingWalletTopupAudit) {
-      balanceBefore = wallet.balance;
-      balanceAfter = Number((Number(balanceBefore) + Number(paidAmount)).toFixed(2));
-      wallet.balance = balanceAfter;
-      await wallet.save();
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        }).session(session);
 
-      await WalletTransaction.create({
-        wallet_id: wallet.id,
-        amount: Number(paidAmount),
-        type: "TOPUP",
-        transaction_id: null,
-        reference_id: txnRef,
-        description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
+        if (existingWalletTopupAudit) {
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+          return;
+        }
+
+        balanceBefore = Number(wallet.balance || 0);
+        balanceAfter = Number((balanceBefore + Number(paidAmount)).toFixed(2));
+        wallet.balance = balanceAfter;
+        await wallet.save({ session });
+
+        await WalletTransaction.create(
+          [
+            {
+              wallet_id: wallet.id,
+              amount: Number(paidAmount),
+              type: "TOPUP",
+              transaction_id: null,
+              reference_id: txnRef,
+              description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
+              balance_before: balanceBefore,
+              balance_after: balanceAfter,
+            },
+          ],
+          { session },
+        );
       });
-    } else {
-      balanceBefore = existingWalletTopupAudit.balance_before;
-      balanceAfter = existingWalletTopupAudit.balance_after;
+    } catch (error) {
+      if (error?.code === 11000) {
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        });
+
+        if (existingWalletTopupAudit) {
+          walletId = existingWalletTopupAudit.wallet_id || walletIdFromRef;
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    } finally {
+      session.endSession();
     }
 
     return {
       code: responseCode,
       message: "Topup successful",
       transactionId: null,
-      walletId: wallet.id,
+      walletId,
       amount: Number(paidAmount),
       status: "SUCCESS",
       balance_before: balanceBefore,

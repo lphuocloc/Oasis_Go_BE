@@ -51,9 +51,13 @@ const {
  *                 minimum: 1
  *               total_discount:
  *                 type: number
- *                 description: Total discount amount (optional)
+ *                 description: Manual discount amount (optional, ignored when voucher_code is provided)
  *                 default: 0
  *                 minimum: 0
+ *               voucher_code:
+ *                 type: string
+ *                 description: Optional voucher code to apply during order creation
+ *                 example: NEWUSER20
  *               require_adjacent:
  *                 type: boolean
  *                 description: Require adjacent pods if booking multiple
