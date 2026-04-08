@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
 const walletController = require("../controllers/walletController");
-const { protect } = require("../middlewares/authMiddleware");
+const { protect, authorize } = require("../middlewares/authMiddleware");
 
 /**
  * @swagger
@@ -88,7 +88,7 @@ router.get("/me", walletController.getMyWallet);
  *         name: type
  *         schema:
  *           type: string
- *           enum: [TOPUP, PAYMENT, REFUND]
+ *           enum: [TOPUP, PAYMENT, REFUND, WITHDRAWAL_HOLD, WITHDRAWAL_SUCCESS, WITHDRAWAL_REFUND]
  *         description: Filter by transaction type
  *       - in: query
  *         name: page
@@ -309,5 +309,152 @@ router.post("/pin/forgot/reset", walletController.resetPin);
  *         description: Wallet is locked
  */
 router.post("/pay-order", walletController.payOrderByWallet);
+
+/**
+ * @swagger
+ * /api/wallets/withdrawals/request:
+ *   post:
+ *     summary: Create withdrawal request (PIN required)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [amount, pin]
+ *             properties:
+ *               amount:
+ *                 type: number
+ *                 example: 150000
+ *               pin:
+ *                 type: string
+ *                 example: "123456"
+ *               note:
+ *                 type: string
+ *                 example: Rut tien ve tai khoan ngan hang
+ *     responses:
+ *       201:
+ *         description: Withdrawal request created successfully
+ *       400:
+ *         description: Invalid amount, wrong PIN, missing bank info or insufficient balance
+ */
+router.post("/withdrawals/request", walletController.requestWithdrawal);
+
+/**
+ * @swagger
+ * /api/wallets/withdrawals/me:
+ *   get:
+ *     summary: Get my withdrawal requests
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [PENDING, APPROVED, REJECTED, CANCELLED]
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 10
+ *     responses:
+ *       200:
+ *         description: Withdrawal requests fetched successfully
+ */
+router.get("/withdrawals/me", walletController.getMyWithdrawalRequests);
+
+/**
+ * @swagger
+ * /api/wallets/withdrawals/{requestId}/cancel:
+ *   post:
+ *     summary: Cancel my pending withdrawal request
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: requestId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Withdrawal request cancelled successfully
+ *       400:
+ *         description: Request is not pending
+ */
+router.post("/withdrawals/:requestId/cancel", walletController.cancelMyWithdrawalRequest);
+
+/**
+ * @swagger
+ * /api/wallets/withdrawals/pending:
+ *   get:
+ *     summary: Get pending withdrawal requests (admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Pending withdrawal requests fetched successfully
+ *       403:
+ *         description: Forbidden
+ */
+router.get("/withdrawals/pending", authorize("admin"), walletController.getPendingWithdrawalRequests);
+
+/**
+ * @swagger
+ * /api/wallets/withdrawals/{requestId}/process:
+ *   post:
+ *     summary: Process withdrawal request (admin only)
+ *     tags: [Wallet]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: requestId
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [action]
+ *             properties:
+ *               action:
+ *                 type: string
+ *                 enum: [APPROVE, REJECT, CANCEL]
+ *               note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Withdrawal request processed successfully
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Withdrawal request not found
+ */
+router.post("/withdrawals/:requestId/process", authorize("admin"), walletController.processWithdrawalRequest);
 
 module.exports = router;

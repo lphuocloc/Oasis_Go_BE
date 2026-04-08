@@ -142,3 +142,94 @@ exports.payOrderByWallet = async (req, res) => {
         });
     }
 };
+
+exports.requestWithdrawal = async (req, res) => {
+    try {
+        const result = await walletService.createWithdrawalRequest(req.user.id, req.body || {});
+        return res.status(201).json({
+            success: true,
+            message: "Yêu cầu rút tiền đã được tạo thành công!",
+            data: result,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Tạo yêu cầu rút tiền thất bại!",
+        });
+    }
+};
+
+exports.getMyWithdrawalRequests = async (req, res) => {
+    try {
+        const result = await walletService.getMyWithdrawalRequests(req.user.id, req.query || {});
+        return res.status(200).json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Lỗi khi lấy yêu cầu rút tiền",
+        });
+    }
+};
+
+exports.getPendingWithdrawalRequests = async (req, res) => {
+    try {
+        const result = await walletService.getPendingWithdrawalRequests(req.query || {});
+        return res.status(200).json({
+            success: true,
+            data: result.data,
+            pagination: result.pagination,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Lỗi khi lấy yêu cầu rút tiền đang chờ xử lý",
+        });
+    }
+};
+
+exports.processWithdrawalRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { action, note } = req.body || {};
+
+        const result = await walletService.processWithdrawalRequest(requestId, req.user, {
+            action,
+            note,
+        });
+
+        return res.status(200).json({
+            success: true,
+            message: "Yêu cầu rút tiền đã được xử lý thành công!",
+            data: result,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Lỗi khi xử lý yêu cầu rút tiền",
+        });
+    }
+};
+
+exports.cancelMyWithdrawalRequest = async (req, res) => {
+    try {
+        const { requestId } = req.params;
+        const { note } = req.body || {};
+
+        const result = await walletService.cancelMyWithdrawalRequest(req.user.id, requestId, { note });
+
+        return res.status(200).json({
+            success: true,
+            message: "Yêu cầu rút tiền đã được hủy thành công!",
+            data: result,
+        });
+    } catch (error) {
+        return res.status(error.statusCode || 500).json({
+            success: false,
+            message: error.message || "Lỗi khi hủy yêu cầu rút tiền",
+        });
+    }
+};
