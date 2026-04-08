@@ -22,7 +22,7 @@ const walletTransactionSchema = new mongoose.Schema(
         type: {
             type: String,
             enum: {
-                values: ["TOPUP", "PAYMENT", "REFUND"],
+                values: ["TOPUP", "PAYMENT", "REFUND", "WITHDRAWAL_HOLD", "WITHDRAWAL_SUCCESS", "WITHDRAWAL_REFUND"],
                 message: "{VALUE} is not a valid wallet transaction type",
             },
             required: true,

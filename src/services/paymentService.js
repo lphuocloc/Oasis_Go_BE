@@ -342,14 +342,6 @@ class PaymentService {
       bankCode: "NCB",
     });
 
-    console.log("Create transaction request:", {
-      transactionId: transaction.id,
-      orderId,
-      amount,
-      status: transaction.status,
-      timestamp: new Date().toISOString(),
-    });
-
     return {
       transactionId: transaction.id,
       orderId,
@@ -676,7 +668,6 @@ class PaymentService {
    * Xử lý VNPay return/callback
    */
   async handleVnpayReturn(vnpayParams) {
-    console.log("VNPay return params:", vnpayParams);
 
     const verifyResult = vnpayService.verifyReturnUrl({ ...vnpayParams });
     const isValid = verifyResult && verifyResult.isValid;
@@ -777,15 +768,6 @@ class PaymentService {
         });
       }
     }
-
-    console.log(`Transaction ${orderId} updated to ${newStatus}:`, {
-      transactionId: transaction.id,
-      transactionNo,
-      amount,
-      bankCode,
-      payDate,
-      timestamp: new Date().toISOString(),
-    });
 
     return {
       code: responseCode,

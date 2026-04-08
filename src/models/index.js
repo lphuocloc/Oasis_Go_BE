@@ -16,6 +16,7 @@ module.exports = {
   OnlineKey: require("./OnlineKey"),
   Wallet: require("./Wallet"),
   WalletTransaction: require("./WalletTransaction"),
+  WithdrawalRequest: require("./WithdrawalRequest"),
   Incident: require("./Incidents"),
   IncidentPhoto: require("./IncidentPhoto"),
   LostFoundItem: require("./LostFoundItem"),
