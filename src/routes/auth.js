@@ -524,6 +524,15 @@ router.get("/me", protect, authController.getMe);
  *                 type: string
  *                 description: New avatar URL or base64 string
  *                 example: https://example.com/new-avatar.jpg
+ *               phone:
+ *                 type: string
+ *                 example: "0912345678"
+ *               bank_name:
+ *                 type: string
+ *                 example: Vietcombank
+ *               bank_account_number:
+ *                 type: string
+ *                 example: "1234567890"
  *     responses:
  *       200:
  *         description: Profile updated successfully
