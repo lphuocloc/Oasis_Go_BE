@@ -5,8 +5,6 @@ const { loadManagerScope, applyManagerPodScope } = require("../middlewares/manag
 const { uploadIncidentPhoto } = require("../config/cloudinary");
 const {
   createIncident,
-  createIncidentFromCleaningTask,
-  createDamageReport,
   getDamageReports,
   getIncidents,
   getIncidentById,
@@ -546,79 +544,6 @@ router.get(
  *         description: Incident not found
  */
 router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getIncidentById);
-
-/**
- * @swagger
- * /api/incidents/cleaning-task:
- *   post:
- *     summary: "[Deprecated] Create incident via legacy cleaning-task endpoint"
- *     deprecated: true
- *     tags: [Incidents]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             $ref: '#/components/schemas/DamageReportCreateInput'
- *     responses:
- *       201:
- *         description: Incident created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   $ref: '#/components/schemas/DamageReportResponse'
- *       400:
- *         description: Invalid input
- *       404:
- *         description: Pod, item, service catalog, or cleaning task not found
- */
-router.post(
-  "/cleaning-task",
-  protect,
-  authorize("admin", "manager", "cleaner"),
-  uploadIncidentPhoto.array("photos", 8),
-  createIncidentFromCleaningTask
-);
-
-/**
- * @swagger
- * /api/incidents/damage-report:
- *   post:
- *     summary: "[Deprecated] Create incident via legacy damage-report endpoint"
- *     deprecated: true
- *     tags: [Incidents]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             $ref: '#/components/schemas/DamageReportCreateInput'
- *     responses:
- *       201:
- *         description: Damage report created successfully
- *       400:
- *         description: Invalid input
- *       404:
- *         description: Pod, item, service catalog, or cleaning task not found
- */
-router.post(
-  "/damage-report",
-  protect,
-  authorize("admin", "manager", "cleaner"),
-  uploadIncidentPhoto.array("photos", 8),
-  createDamageReport
-);
 
 /**
  * @swagger

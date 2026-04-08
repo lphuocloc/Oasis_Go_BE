@@ -76,18 +76,6 @@ const createDamageIncident = async (req, res, { successMessage = "Incident creat
   }
 };
 
-exports.createIncidentFromCleaningTask = async (req, res) => {
-  res.set("X-API-Deprecated", "true");
-  res.set("X-API-Replacement", "/api/incidents");
-  return createDamageIncident(req, res, {
-    successMessage: "Incident created successfully",
-  });
-};
-
-exports.createDamageReport = async (req, res) => createDamageIncident(req, res, {
-  successMessage: "Damage report created successfully",
-});
-
 exports.createIncident = async (req, res) => createDamageIncident(req, res, {
   successMessage: "Incident created successfully",
 });
