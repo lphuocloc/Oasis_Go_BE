@@ -18,7 +18,6 @@ const Incident = require("../models/Incidents");
 const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
-const notificationService = require("./notificationService");
 const mongoose = require("mongoose");
 const { randomInt } = require("crypto");
 
