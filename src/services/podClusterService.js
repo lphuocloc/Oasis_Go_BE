@@ -1,10 +1,16 @@
 const PodCluster = require("../models/PodCluster");
 const PodClusterImage = require("../models/PodClusterImage");
 const Location = require("../models/Location");
+const Review = require("../models/Review");
 const { LEAF_TYPES } = require("./locationService");
 const voucherService = require("./voucherService");
 
 const ALLOWED_SLOT_DURATIONS = [30, 60, 90, 120];
+const DEFAULT_RATING_STATS = {
+  avgRating: 0,
+  totalReviews: 0,
+  ratingCounts: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+};
 
 class PodClusterService {
   /**
@@ -50,6 +56,52 @@ class PodClusterService {
       .sort({ createdAt: -1 })
       .lean();
 
+    const ratingStats = await Review.aggregate([
+      {
+        $match: {
+          cluster_id: { $in: clusterIds },
+          is_rejected: false,
+          rating: { $ne: null },
+        },
+      },
+      {
+        $group: {
+          _id: "$cluster_id",
+          avgRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 },
+          rating1: { $sum: { $cond: [{ $eq: ["$rating", 1] }, 1, 0] } },
+          rating2: { $sum: { $cond: [{ $eq: ["$rating", 2] }, 1, 0] } },
+          rating3: { $sum: { $cond: [{ $eq: ["$rating", 3] }, 1, 0] } },
+          rating4: { $sum: { $cond: [{ $eq: ["$rating", 4] }, 1, 0] } },
+          rating5: { $sum: { $cond: [{ $eq: ["$rating", 5] }, 1, 0] } },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          cluster_id: "$_id",
+          avgRating: { $round: ["$avgRating", 2] },
+          totalReviews: 1,
+          ratingCounts: {
+            1: "$rating1",
+            2: "$rating2",
+            3: "$rating3",
+            4: "$rating4",
+            5: "$rating5",
+          },
+        },
+      },
+    ]);
+
+    const ratingMap = ratingStats.reduce((map, stat) => {
+      map[stat.cluster_id] = {
+        avgRating: stat.avgRating,
+        totalReviews: stat.totalReviews,
+        ratingCounts: stat.ratingCounts,
+      };
+      return map;
+    }, {});
+
     const imageMap = images.reduce((map, image) => {
       if (!map[image.cluster_id]) {
         map[image.cluster_id] = [];
@@ -61,6 +113,7 @@ class PodClusterService {
     const podClustersWithImages = podClusters.map((cluster) => {
       const clusterObj = cluster.toObject();
       clusterObj.images = imageMap[cluster.id] || [];
+      clusterObj.rating = ratingMap[cluster.id] || DEFAULT_RATING_STATS;
       return clusterObj;
     });
 
@@ -89,6 +142,7 @@ class PodClusterService {
     // Thêm images vào object trả về
     const podClusterObj = podCluster.toObject();
     podClusterObj.images = images;
+    podClusterObj.rating = await Review.getClusterStats(clusterId);
 
     return podClusterObj;
   }
@@ -385,46 +439,42 @@ class PodClusterService {
       allLocations.map((loc) => [loc.id.toString(), loc]),
     );
     const allVouchers = voucherData.items || [];
+
+    // Lấy data từ chính hàm trong class để đảm bảo có đủ ảnh và rating
     const clusters = await this.getAllPodClusters({});
 
-    // Trọng số
+    // Bảng trọng số đã tinh chỉnh: Price có trọng số rất cao khi chọn lọc giá
     const WEIGHTS = {
-      balanced: { dist: 40, promo: 40, img: 20 },
-      distance: { dist: 80, promo: 10, img: 10 },
-      promotion: { dist: 20, promo: 70, img: 10 },
-      price: { dist: 20, promo: 20, img: 10 },
+      balanced: { dist: 40, promo: 30, price: 30 },
+      distance: { dist: 90, promo: 5, price: 5 },
+      promotion: { dist: 20, promo: 80, price: 0 },
+      price: { dist: 10, promo: 10, price: 100 },
     };
     const currentWeight = WEIGHTS[priority] || WEIGHTS.balanced;
 
-    // 2. Xử lý từng Cluster
     let processed = clusters.map((cluster) => {
       let score = 0;
       const originalPrice = (cluster.base_price_modifier || 0) * UNIT_PRICE;
 
-      // --- LOGIC LEO CÂY TÌM TỌA ĐỘ ---
-      let finalLat = null;
-      let finalLng = null;
+      // --- LOGIC TÌM TỌA ĐỘ ---
+      let finalLat = null,
+        finalLng = null;
       let currentLoc = locationMap.get(cluster.location_id?.toString());
-
       while (currentLoc) {
-        if (
-          currentLoc.lat !== null &&
-          currentLoc.lng !== null &&
-          currentLoc.lat !== undefined
-        ) {
+        if (currentLoc.lat != null && currentLoc.lng != null) {
           finalLat = currentLoc.lat;
           finalLng = currentLoc.lng;
           break;
         }
-        const parentId = currentLoc.parent_id?.toString();
-        currentLoc = parentId ? locationMap.get(parentId) : null;
+        currentLoc = currentLoc.parent_id
+          ? locationMap.get(currentLoc.parent_id.toString())
+          : null;
       }
 
       // --- TÍNH KHOẢNG CÁCH ---
       let distance = null;
       const uLat = userLocation?.latitude;
       const uLng = userLocation?.longitude;
-
       if (uLat && uLng && finalLat && finalLng) {
         distance = this._calculateDistance(
           Number(uLat),
@@ -434,7 +484,7 @@ class PodClusterService {
         );
       }
 
-      // --- TÍNH VOUCHER ---
+      // --- TÍNH VOUCHER TỐT NHẤT ---
       let bestDiscount = 0;
       let bestVoucher = null;
       allVouchers.forEach((v) => {
@@ -456,14 +506,22 @@ class PodClusterService {
       const finalPrice = Math.max(0, originalPrice - bestDiscount);
       const discountPct = originalPrice > 0 ? bestDiscount / originalPrice : 0;
 
-      // --- TÍNH SCORE ---
+      // --- TÍNH TOÁN SCORE CHI TIẾT ---
+      // 1. Điểm khoảng cách (Càng gần điểm càng cao)
       if (distance !== null) {
         score += Math.max(0, currentWeight.dist - distance * 4);
-        if (distance < 2) score += 50;
+        if (distance < 1.5) score += 30; // Bonus cho bán kính đi bộ
       }
+
+      // 2. Điểm khuyến mãi
       score += discountPct * currentWeight.promo;
-      if (cluster.images?.length > 0) score += currentWeight.img;
-      else score -= 30;
+
+      // 3. ĐIỂM GIÁ RẺ (Nghịch đảo giá trị)
+      // Giá càng thấp so với mốc 1 triệu thì điểm cộng vào Score càng cao
+      if (currentWeight.price > 0) {
+        const priceInverseFactor = Math.max(0, (1000000 - finalPrice) / 10000);
+        score += priceInverseFactor * (currentWeight.price / 100);
+      }
 
       // Tie-breaker
       if (distance !== null) score += 0.001 / (distance + 0.1);
@@ -478,7 +536,6 @@ class PodClusterService {
           ? {
               code: bestVoucher.code,
               discount_amount: bestDiscount,
-              description: bestVoucher.description,
             }
           : null,
         recommendation_score: parseFloat(score.toFixed(3)),
@@ -486,41 +543,41 @@ class PodClusterService {
       };
     });
 
-    // 3. Sắp xếp, Gắn nhãn và Giới hạn kết quả
+    // --- SẮP XẾP VÀ GẮN TAG ---
     if (processed.length > 0) {
-      // Sắp xếp theo điểm cao nhất lên đầu
-      processed.sort((a, b) => b.recommendation_score - a.recommendation_score);
+      if (priority === "price") {
+        // Nếu chọn Price, ưu tiên tuyệt đối thằng rẻ nhất lên đầu
+        processed.sort((a, b) => a.final_price - b.final_price);
+      } else {
+        // Các trường hợp khác dùng điểm tổng hợp
+        processed.sort(
+          (a, b) => b.recommendation_score - a.recommendation_score,
+        );
+      }
 
-      // Chỉ lấy 4 cụm Pod tốt nhất (hoặc 3 tùy bạn chỉnh số 4)
       processed = processed.slice(0, 4);
 
-      // Lấy giá trị tốt nhất trong Top 4 để so sánh gắn Tag
-      const topScore = processed[0].recommendation_score;
-
-      // Tìm khoảng cách nhỏ nhất trong số những cái có distance (tránh lỗi null)
       const validDistances = processed
         .filter((c) => c.distance !== null)
         .map((c) => c.distance);
       const minDistance =
         validDistances.length > 0 ? Math.min(...validDistances) : null;
+      const minPrice = Math.min(...processed.map((c) => c.final_price));
 
-      processed = processed.map((c) => {
+      processed = processed.map((c, index) => {
         const tags = [];
 
-        // Tag PHÙ HỢP NHẤT: Dành cho thằng đứng đầu bảng điểm
-        if (c.recommendation_score === topScore && topScore > 0) {
-          tags.push("PHÙ HỢP NHẤT");
+        // Tag dành cho vị trí số 1
+        if (index === 0) {
+          if (priority === "price") tags.push("GIÁ TỐT NHẤT");
+          else tags.push("PHÙ HỢP NHẤT");
         }
 
-        // Tag GẦN BẠN NHẤT: Phải khớp với khoảng cách nhỏ nhất tìm được
-        if (minDistance !== null && c.distance === minDistance) {
+        if (minDistance !== null && c.distance === minDistance)
           tags.push("GẦN BẠN NHẤT");
-        }
-
-        // Tag ƯU ĐÃI KHỦNG: Nếu giảm trên 20% (Logic thêm để phong phú)
-        if (c.discount_pct >= 0.2) {
-          tags.push("ƯU ĐÃI KHỦNG");
-        }
+        if (c.final_price === minPrice && priority !== "price")
+          tags.push("GIÁ RẺ NHẤT");
+        if (c.discount_pct >= 0.2) tags.push("ƯU ĐÃI KHỦNG");
 
         return { ...c, suggestion_tags: tags };
       });

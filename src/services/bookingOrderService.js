@@ -13,7 +13,6 @@ const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
-const timeSlotService = require("./timeSlotService");
 const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
@@ -222,6 +221,72 @@ class BookingOrderService {
             refundRate: REFUND_RATE_BEFORE_48H,
             refundAmount,
             policy: `Refund 100% when cancelled at least ${REFUND_CANCEL_WINDOW_HOURS} hours before check-in`,
+        };
+    }
+
+    async _recalculateOrderPricingAfterPartialCancel(order, session = null) {
+        const remainingBooked = await Booking.find({
+            order_id: order.id,
+            status: "BOOKED",
+        })
+            .select("id total_price")
+            .session(session);
+
+        const recalculatedBase = remainingBooked.reduce(
+            (sum, booking) => sum + Number(booking.total_price || 0),
+            0
+        );
+
+        let recalculatedDiscount = 0;
+        let voucherAction = "NONE";
+
+        const existingBookingVoucher = await BookingVoucher.findOne({ order_id: order.id })
+            .session(session)
+            .select("id voucher_id");
+
+        if (existingBookingVoucher?.voucher_id) {
+            const voucher = await Voucher.findOne({ id: existingBookingVoucher.voucher_id })
+                .session(session)
+                .select("id discount_type discount_value max_discount min_booking_value");
+
+            const minBookingValue = Number(voucher?.min_booking_value || 0);
+            const stillEligibleByMinValue = voucher && recalculatedBase >= minBookingValue;
+
+            if (stillEligibleByMinValue) {
+                recalculatedDiscount = this._calculateVoucherDiscountAmount(
+                    { total_base_price: recalculatedBase },
+                    voucher
+                );
+
+                await BookingVoucher.updateOne(
+                    { id: existingBookingVoucher.id },
+                    { $set: { discount_amount: recalculatedDiscount } }
+                ).session(session);
+                voucherAction = "RECALCULATED";
+            } else {
+                await BookingVoucher.deleteOne({ id: existingBookingVoucher.id }).session(session);
+                voucherAction = "REMOVED_MIN_BOOKING_VALUE_NOT_MET";
+            }
+        }
+
+        const finalTotalPrice = Math.max(0, recalculatedBase - recalculatedDiscount);
+        const payableTotalPrice = Number(finalTotalPrice) + Number(order.deposit_total || 0);
+
+        order.total_base_price = Number(recalculatedBase.toFixed(2));
+        order.total_discount = Number(recalculatedDiscount.toFixed(2));
+        order.final_total_price = Number(finalTotalPrice.toFixed(2));
+        order.payable_total_price = Number(payableTotalPrice.toFixed(2));
+
+        await order.save({ session });
+
+        return {
+            remaining_booking_count: remainingBooked.length,
+            total_base_price: order.total_base_price,
+            total_discount: order.total_discount,
+            final_total_price: order.final_total_price,
+            payable_total_price: order.payable_total_price,
+            deposit_total_unchanged: Number(order.deposit_total || 0),
+            voucher_action: voucherAction,
         };
     }
 
@@ -1368,7 +1433,13 @@ class BookingOrderService {
 
                 const nextOrderStatus = allCancelled ? "FULLY_CANCELLED" : "PARTIAL_CANCEL";
                 order.status = nextOrderStatus;
-                await order.save({ session });
+
+                let repricing = null;
+                if (!allCancelled) {
+                    repricing = await this._recalculateOrderPricingAfterPartialCancel(order, session);
+                } else {
+                    await order.save({ session });
+                }
 
                 const now = new Date();
                 const refundSummary = this._calculateRefundForBookings(targetBookedBookings, now);
@@ -1426,6 +1497,7 @@ class BookingOrderService {
                     order,
                     cancellation_type: allCancelled ? "FULL_CANCEL" : "PARTIAL_CANCEL",
                     cancelled_booking_ids: targetBookingIds,
+                    pricing_adjustment: repricing,
                     refund: {
                         applicable: totalRefundAmount > 0,
                         amount: totalRefundAmount,

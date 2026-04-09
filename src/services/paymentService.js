@@ -2,6 +2,8 @@ const vnpayService = require("../utils/vnpayService");
 const Transaction = require("../models/Transaction");
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
+const BookingVoucher = require("../models/BookingVoucher");
+const Voucher = require("../models/Voucher");
 const OnlineKey = require("../models/OnlineKey");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
@@ -58,6 +60,39 @@ class PaymentService {
     return transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
   }
 
+  async _incrementVoucherUsageIfNeeded(orderId, session = null) {
+    let bookingVoucherQuery = BookingVoucher.findOne({ order_id: orderId }).select(
+      "voucher_id",
+    );
+    if (session) {
+      bookingVoucherQuery = bookingVoucherQuery.session(session);
+    }
+
+    const bookingVoucher = await bookingVoucherQuery;
+    if (!bookingVoucher?.voucher_id) {
+      return;
+    }
+
+    const voucherUpdateFilter = {
+      id: bookingVoucher.voucher_id,
+      $or: [
+        { usage_limit: null },
+        { usage_limit: { $exists: false } },
+        { $expr: { $lt: ["$usage_count", "$usage_limit"] } },
+      ],
+    };
+
+    let voucherUpdateQuery = Voucher.updateOne(
+      voucherUpdateFilter,
+      { $inc: { usage_count: 1 } },
+    );
+    if (session) {
+      voucherUpdateQuery = voucherUpdateQuery.session(session);
+    }
+
+    await voucherUpdateQuery;
+  }
+
   async _settleOrderIfFullyPaid(orderId, session = null) {
     let bookingOrderQuery = BookingOrder.findOne({ id: orderId });
     if (session) {
@@ -90,16 +125,24 @@ class PaymentService {
       session,
     );
 
-    bookingOrder.status = "PAID";
-    if (walletCharged > 0 && vnpayCharged > 0) {
-      bookingOrder.payment_method = "HYBRID";
-    } else if (walletCharged > 0) {
-      bookingOrder.payment_method = "WALLET";
-    } else {
-      bookingOrder.payment_method = "VNPAY";
-    }
+    const nextPaymentMethod =
+      walletCharged > 0 && vnpayCharged > 0
+        ? "HYBRID"
+        : walletCharged > 0
+          ? "WALLET"
+          : "VNPAY";
 
-    await bookingOrder.save({ session });
+    let becamePaid = false;
+    if (bookingOrder.status !== "PAID") {
+      bookingOrder.status = "PAID";
+      bookingOrder.payment_method = nextPaymentMethod;
+      await bookingOrder.save({ session });
+      becamePaid = true;
+
+      await this._incrementVoucherUsageIfNeeded(orderId, session);
+    } else {
+      bookingOrder.payment_method = nextPaymentMethod;
+    }
 
     return {
       bookingOrder,
@@ -108,6 +151,7 @@ class PaymentService {
       walletCharged,
       vnpayCharged,
       isPaid: true,
+      becamePaid,
     };
   }
 

@@ -217,7 +217,7 @@ exports.getRecommendations = async (req, res) => {
   try {
     const { lat, lng, latitude, longitude, priority } = req.query;
     console.log("--- [CONTROLLER] NHẬN REQUEST ---");
-    console.log("Raw Query:", lat);
+    console.log("Raw Query:", req.query);
 
     const finalLat = lat || latitude;
     const finalLng = lng || longitude;
