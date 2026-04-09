@@ -2,7 +2,7 @@ const inventoryCheckoutLogService = require("../services/inventoryCheckoutLogSer
 
 exports.createInventoryCheckoutLog = async (req, res) => {
   try {
-    const log = await inventoryCheckoutLogService.createInventoryCheckoutLog(req.body);
+    const log = await inventoryCheckoutLogService.createInventoryCheckoutLog(req.body, req.user);
     res.status(201).json({ success: true, message: "Inventory checkout log created successfully", data: log });
   } catch (error) {
     const statusCode = error.statusCode || 500;
@@ -31,7 +31,7 @@ exports.getInventoryCheckoutLogById = async (req, res) => {
 
 exports.updateInventoryCheckoutLog = async (req, res) => {
   try {
-    const log = await inventoryCheckoutLogService.updateInventoryCheckoutLog(req.params.id, req.body);
+    const log = await inventoryCheckoutLogService.updateInventoryCheckoutLog(req.params.id, req.body, req.user);
     res.status(200).json({ success: true, message: "Inventory checkout log updated successfully", data: log });
   } catch (error) {
     const statusCode = error.statusCode || 500;

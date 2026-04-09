@@ -157,13 +157,15 @@ exports.getMe = async (req, res) => {
 // @access  Private
 exports.updateProfile = async (req, res) => {
   try {
-    const { name, avatar, phone } = req.body;
+    const { name, avatar, phone, bank_name, bank_account_number } = req.body;
     const userId = req.user.id;
 
     const result = await authService.updateProfile(userId, {
       name,
-      profilePicture: avatar,
+      avatar,
       phone,
+      bank_name,
+      bank_account_number,
     });
 
     res.status(200).json({

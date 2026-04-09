@@ -26,18 +26,32 @@ const parsePhotoUrls = (raw) => {
   return [];
 };
 
-exports.createIncidentFromCleaningTask = async (req, res) => {
-  const uploadedPhotos = Array.isArray(req.files)
-    ? req.files
-        .filter((file) => file && file.path)
-        .map((file) => ({
-          url: file.path,
-          public_id: file.filename || null,
-        }))
-    : [];
+const buildUploadedPhotos = (files) => {
+  if (!Array.isArray(files)) return [];
+
+  return files
+    .filter((file) => file && file.path)
+    .map((file) => ({
+      url: file.path,
+      public_id: file.filename || null,
+    }));
+};
+
+const cleanupUploadedPhotos = async (uploadedPhotos = []) => {
+  if (!Array.isArray(uploadedPhotos) || uploadedPhotos.length === 0) return;
+
+  await Promise.all(
+    uploadedPhotos
+      .filter((item) => item.public_id)
+      .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
+  );
+};
+
+const createDamageIncident = async (req, res, { successMessage = "Incident created successfully" } = {}) => {
+  const uploadedPhotos = buildUploadedPhotos(req.files);
 
   try {
-    const incident = await incidentService.createIncidentFromCleaningTask(
+    const incident = await incidentService.createDamageReport(
       {
         ...req.body,
         photo_urls: parsePhotoUrls(req.body.photo_urls),
@@ -48,22 +62,38 @@ exports.createIncidentFromCleaningTask = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Incident created successfully",
+      message: successMessage,
       data: incident,
     });
   } catch (error) {
-    if (uploadedPhotos.length > 0) {
-      await Promise.all(
-        uploadedPhotos
-          .filter((item) => item.public_id)
-          .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
-      );
-    }
+    await cleanupUploadedPhotos(uploadedPhotos);
 
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
       message: error.message || "Error creating incident",
+    });
+  }
+};
+
+exports.createIncident = async (req, res) => createDamageIncident(req, res, {
+  successMessage: "Incident created successfully",
+});
+
+exports.getDamageReports = async (req, res) => {
+  try {
+    const result = await incidentService.getDamageReports(req.query);
+    res.status(200).json({
+      success: true,
+      count: Array.isArray(result.items) ? result.items.length : 0,
+      data: result.items || [],
+      pagination: result.pagination || undefined,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching damage reports",
     });
   }
 };

@@ -8,9 +8,12 @@ const PodCluster = require("../models/PodCluster");
 const SupportRequest = require("../models/SupportRequest");
 const TimeSlot = require("../models/TimeSlot");
 const User = require("../models/User");
+const StaffShiftAssignment = require("../models/StaffShiftAssignment");
+const LocationShift = require("../models/LocationShift");
 const notificationService = require("./notificationService");
+const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 
-const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
+const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD", "CLEANING"];
 const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"];
 const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
 const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -266,6 +269,107 @@ class SupportRequestService {
     );
   }
 
+  async _notifyCleanersForCleaningSupport(supportRequest, booking) {
+    if (!supportRequest || normalizeUpper(supportRequest.type) !== "CLEANING") {
+      return;
+    }
+
+    const locationShiftIds = await LocationShift.find({ location_id: String(supportRequest.location_id) })
+      .distinct("id");
+
+    if (!locationShiftIds || locationShiftIds.length === 0) {
+      return;
+    }
+
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const assignments = await StaffShiftAssignment.find({
+      location_shift_id: { $in: locationShiftIds },
+      start_date: { $lte: endOfDay },
+      end_date: { $gte: startOfDay },
+      status: { $in: ["CHECKED_IN", "ASSIGNED"] },
+    })
+      .select("staff_id")
+      .lean();
+
+    if (!assignments || assignments.length === 0) {
+      return;
+    }
+
+    const staffIds = [...new Set(assignments.map((item) => String(item.staff_id || "")).filter(Boolean))];
+    if (staffIds.length === 0) {
+      return;
+    }
+
+    const staffObjectIds = staffIds
+      .filter((id) => /^[a-f\d]{24}$/i.test(id))
+      .map((id) => id);
+
+    const cleaners = await User.find({
+      isActive: true,
+      role: "cleaner",
+      $or: [
+        { id: { $in: staffIds } },
+        { _id: { $in: staffObjectIds } },
+      ],
+    })
+      .select("_id id")
+      .lean();
+
+    if (!cleaners || cleaners.length === 0) {
+      return;
+    }
+
+    const pod = await Pod.findOne({ id: booking.pod_id }).select("id code").lean();
+    const podCode = pod?.code || booking.pod_id || "Unknown";
+    const description = String(supportRequest.description || "").trim() || "(khong co mo ta)";
+
+    await Promise.all(
+      cleaners.map((cleaner) => {
+        const cleanerId = cleaner.id || cleaner._id;
+        return notificationService.sendToUser(cleanerId, {
+          title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
+          message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+          type: "SUPPORT",
+          event_code: "SUPPORT_CLEANING_REQUEST",
+          dedupe_key: `SUPPORT_CLEANING_REQUEST:${supportRequest.id}:${String(cleanerId)}`,
+          data: {
+            support_request_id: supportRequest.id,
+            booking_id: booking.id,
+            pod_id: booking.pod_id,
+            pod_code: podCode,
+            description,
+          },
+        });
+      })
+    );
+
+    cleaners.forEach((cleaner) => {
+      const cleanerId = String(cleaner._id || cleaner.id || "");
+      if (!cleanerId) return;
+
+      emitCleanerNotificationEvent({
+        user_id: cleanerId,
+        notification: {
+          event: "SUPPORT_CLEANING_REQUEST",
+          payload: {
+            support_request_id: supportRequest.id,
+            booking_id: booking.id,
+            pod_id: booking.pod_id,
+            pod_code: podCode,
+            description,
+            title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
+            message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+          },
+        },
+      });
+    });
+  }
+
   async createSupportRequest(actor, payload = {}) {
     const actorId = this._getActorId(actor);
     const actorRole = this._getActorRole(actor);
@@ -347,6 +451,10 @@ class SupportRequestService {
         images: normalizedImages,
         status: "PENDING",
       });
+
+      if (normalizedType === "CLEANING") {
+        await this._notifyCleanersForCleaningSupport(supportRequest, booking);
+      }
 
       return supportRequest;
     } catch (error) {

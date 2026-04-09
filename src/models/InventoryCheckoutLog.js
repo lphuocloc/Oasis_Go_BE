@@ -27,6 +27,12 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
+    actor_id: {
+      type: String,
+      default: null,
+      ref: "User",
+      index: true,
+    },
     cleaning_task_id: {
       type: String,
       default: null,
@@ -95,5 +101,6 @@ inventoryCheckoutLogSchema.pre("validate", function () {
 inventoryCheckoutLogSchema.index({ created_at: -1 });
 inventoryCheckoutLogSchema.index({ inventory_stock_id: 1, created_at: -1 });
 inventoryCheckoutLogSchema.index({ staff_id: 1, created_at: -1 });
+inventoryCheckoutLogSchema.index({ actor_id: 1, created_at: -1 });
 
 module.exports = mongoose.model("InventoryCheckoutLog", inventoryCheckoutLogSchema);

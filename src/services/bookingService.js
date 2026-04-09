@@ -8,7 +8,10 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
-const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
+const {
+  autoAssignTaskForBooking,
+  cancelOpenTasksForNoShowBooking,
+} = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
@@ -21,6 +24,13 @@ const POD_DETAILS_SELECT =
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  _createError(message, statusCode, errorCode) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.errorCode = errorCode;
+    return error;
+  }
+
   async _revokeCleanerKeysForBooking(bookingId) {
     if (!bookingId) return;
     await OnlineKey.updateMany(
@@ -833,7 +843,6 @@ class BookingService {
     }
 
     const now = new Date();
-
     // ============= CUSTOMER CHECK-IN (QR ONLY) =============
     if (qr_token) {
       const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
