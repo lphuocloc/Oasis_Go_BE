@@ -350,6 +350,23 @@ class BookingOrderController {
       });
     }
   }
+
+  async getMyAnalytics(req, res) {
+    try {
+      const result = await bookingOrderService.getBookingAnalytics({
+        user_id: req.user.id,
+        start_date: req.query.start_date,
+        end_date: req.query.end_date,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new BookingOrderController();

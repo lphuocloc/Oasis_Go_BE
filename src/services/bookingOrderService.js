@@ -2372,10 +2372,14 @@ class BookingOrderService {
       const podMap = pods.reduce((map, p) => ({ ...map, [p.id]: p }), {});
 
       const now = new Date().getTime();
-      const BUFFER = 15 * 60 * 1000; // 15 phút
+      const BUFFER = 15 * 60 * 1000;
 
       return bookings.map((b) => {
         const startTime = new Date(b.start_time).getTime();
+
+        const isWithinCheckinWindow =
+          now >= startTime - BUFFER && now <= startTime + BUFFER;
+
         return {
           bookingId: b.id,
           orderId: b.order_id,
@@ -2383,10 +2387,55 @@ class BookingOrderService {
           startTime: b.start_time,
           endTime: b.end_time,
           checkinState: b.checkin_state,
-          // Trả thêm field này để UI đổi màu nút bấm
-          canCheckIn: now >= startTime - BUFFER,
+          canCheckIn: isWithinCheckinWindow,
         };
       });
+    } catch (error) {
+      throw error;
+    }
+  }
+
+  /**
+   * Lấy thống kê tổng quan cho User (Hoặc Manager)
+   */
+  async getBookingAnalytics(filters = {}) {
+    try {
+      const { user_id, start_date, end_date } = filters;
+      const query = { status: { $ne: "CANCELLED" } }; // Chỉ tính đơn thành công
+
+      if (user_id) query.user_id = user_id;
+      if (start_date || end_date) {
+        query.createdAt = {};
+        if (start_date) query.createdAt.$gte = new Date(start_date);
+        if (end_date) query.createdAt.$lte = new Date(end_date);
+      }
+
+      const stats = await BookingOrder.aggregate([
+        { $match: query },
+        {
+          $group: {
+            _id: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+            totalRevenue: { $sum: "$final_total_price" },
+            orderCount: { $sum: 1 },
+            avgOrderValue: { $avg: "$final_total_price" },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      // Thống kê tần suất theo thứ trong tuần (Day of Week)
+      const frequency = await Booking.aggregate([
+        { $match: { ...query, status: "COMPLETED" } },
+        {
+          $group: {
+            _id: { $dayOfWeek: "$start_time" }, // 1 (CN) -> 7 (T7)
+            count: { $sum: 1 },
+          },
+        },
+        { $sort: { _id: 1 } },
+      ]);
+
+      return { stats, frequency };
     } catch (error) {
       throw error;
     }

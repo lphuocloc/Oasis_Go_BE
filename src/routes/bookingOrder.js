@@ -328,6 +328,7 @@ router.post(
 );
 
 router.get("/my-today", protect, bookingOrderController.getMyTodayBookings);
+router.get("/my-analytics", protect, bookingOrderController.getMyAnalytics);
 
 /**
  * @swagger
