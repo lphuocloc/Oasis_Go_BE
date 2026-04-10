@@ -82,7 +82,7 @@ exports.createIncident = async (req, res) => createDamageIncident(req, res, {
 
 exports.getDamageReports = async (req, res) => {
   try {
-    const result = await incidentService.getDamageReports(req.query);
+    const result = await incidentService.getDamageReports(req.query, req.user);
     res.status(200).json({
       success: true,
       count: Array.isArray(result.items) ? result.items.length : 0,
@@ -98,9 +98,32 @@ exports.getDamageReports = async (req, res) => {
   }
 };
 
+exports.getMyPendingIncidentReviews = async (req, res) => {
+  try {
+    const query = {
+      ...req.query,
+      status: "PENDING",
+    };
+
+    const result = await incidentService.getDamageReports(query, req.user);
+    res.status(200).json({
+      success: true,
+      count: Array.isArray(result.items) ? result.items.length : 0,
+      data: result.items || [],
+      pagination: result.pagination || undefined,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching pending incident reviews",
+    });
+  }
+};
+
 exports.getIncidents = async (req, res) => {
   try {
-    const incidents = await incidentService.getIncidents(req.query);
+    const incidents = await incidentService.getIncidents(req.query, req.user);
     res.status(200).json({
       success: true,
       count: incidents.length,
@@ -117,16 +140,7 @@ exports.getIncidents = async (req, res) => {
 
 exports.getIncidentById = async (req, res) => {
   try {
-    const incident = await incidentService.getIncidentById(req.params.id);
-
-    if (req.user && req.user.role === "manager" && req.managerScope) {
-      if (!req.managerScope.podIds.includes(String(incident.pod_id))) {
-        return res.status(403).json({
-          success: false,
-          message: "You are not allowed to access an incident out of your management scope",
-        });
-      }
-    }
+    const incident = await incidentService.getIncidentById(req.params.id, req.user, req.managerScope);
 
     res.status(200).json({
       success: true,

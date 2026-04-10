@@ -21,6 +21,11 @@ const staffAttendanceLogSchema = new mongoose.Schema(
 			ref: "StaffShiftAssignment",
 			index: true,
 		},
+		work_date: {
+			type: Date,
+			required: false,
+			index: true,
+		},
 		action: {
 			type: String,
 			required: true,
@@ -37,6 +42,10 @@ const staffAttendanceLogSchema = new mongoose.Schema(
 );
 
 staffAttendanceLogSchema.index({ shift_assignment_id: 1, created_at: 1 });
+staffAttendanceLogSchema.index(
+	{ shift_assignment_id: 1, work_date: 1, action: 1 },
+	{ unique: true, sparse: true }
+);
 
 staffAttendanceLogSchema.virtual("staff", {
 	ref: "User",

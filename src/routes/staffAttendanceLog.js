@@ -33,12 +33,81 @@ router.get(
 
 /**
  * @swagger
+ * /api/staff-attendance-logs/me/status:
+ *   get:
+ *     summary: Check my check-in/check-out status for a specific shift assignment
+ *     tags: [Staff Attendance Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: shift_assignment_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Shift assignment ID
+ *       - in: query
+ *         name: date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Optional work date (YYYY-MM-DD), default is today
+ */
+router.get(
+  "/me/status",
+  authMiddleware.protect,
+  authMiddleware.authorize("cleaner"),
+  staffAttendanceLogController.getMyAssignmentAttendanceStatus
+);
+
+/**
+ * @swagger
+ * /api/staff-attendance-logs/me/today-status:
+ *   get:
+ *     summary: Check my check-in/check-out status for today
+ *     tags: [Staff Attendance Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Optional date (YYYY-MM-DD), default is today
+ */
+router.get(
+  "/me/today-status",
+  authMiddleware.protect,
+  authMiddleware.authorize("cleaner"),
+  staffAttendanceLogController.getMyTodayAttendanceStatus
+);
+
+/**
+ * @swagger
  * /api/staff-attendance-logs/checkin:
  *   post:
  *     summary: Check in for a shift assignment
  *     tags: [Staff Attendance Logs]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               shift_assignment_id:
+ *                 type: string
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 description: Optional selected card date (YYYY-MM-DD)
+ *             required:
+ *               - shift_assignment_id
  */
 router.post(
   "/checkin",
@@ -55,6 +124,21 @@ router.post(
  *     tags: [Staff Attendance Logs]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               shift_assignment_id:
+ *                 type: string
+ *               date:
+ *                 type: string
+ *                 format: date
+ *                 description: Optional selected card date (YYYY-MM-DD)
+ *             required:
+ *               - shift_assignment_id
  */
 router.post(
   "/checkout",

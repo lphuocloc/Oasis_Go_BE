@@ -6,6 +6,7 @@ const { uploadIncidentPhoto } = require("../config/cloudinary");
 const {
   createIncident,
   getDamageReports,
+  getMyPendingIncidentReviews,
   getIncidents,
   getIncidentById,
   updateIncidentStatus,
@@ -512,6 +513,74 @@ router.get(
   loadManagerScope,
   applyManagerPodScope,
   getDamageReports
+);
+
+/**
+ * @swagger
+ * /api/incidents/my-pending-reviews:
+ *   get:
+ *     summary: Get pending incident reviews in manager scope
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: pod_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: pod_ids
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: booking_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: cleaning_task_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: item_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: severity
+ *         schema:
+ *           type: string
+ *           enum: [LOW, MEDIUM, HIGH, CRITICAL]
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Pending incident reviews retrieved successfully
+ */
+router.get(
+  "/my-pending-reviews",
+  protect,
+  authorize("manager"),
+  loadManagerScope,
+  applyManagerPodScope,
+  getMyPendingIncidentReviews
 );
 
 /**
