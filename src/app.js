@@ -91,6 +91,7 @@ const walletRouter = require("./routes/wallet");
 const depositPolicyRouter = require("./routes/depositPolicy");
 const voucherRouter = require("./routes/voucher");
 const bookingVoucherRouter = require("./routes/bookingVoucher");
+const pricingRuleRouter = require("./routes/pricingRule");
 const app = express();
 
 // Middlewares
@@ -142,6 +143,7 @@ app.use("/api/wallets", walletRouter);
 app.use("/api/deposit-policies", depositPolicyRouter);
 app.use("/api/vouchers", voucherRouter);
 app.use("/api/booking-vouchers", bookingVoucherRouter);
+app.use("/api/pricing-rules", pricingRuleRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

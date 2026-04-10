@@ -7,8 +7,10 @@ const User = require("../models/User");
 const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const BookingVoucher = require("../models/BookingVoucher");
+const BookingPricingDetail = require("../models/BookingPricingDetail");
 const Voucher = require("../models/Voucher");
 const Location = require("../models/Location");
+const PricingRule = require("../models/PricingRule");
 const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
@@ -27,6 +29,10 @@ const REFUND_CANCEL_WINDOW_HOURS = 48;
 const REFUND_RATE_BEFORE_48H = 1;
 
 class BookingOrderService {
+    _roundMoney(value) {
+        return Number((Number(value || 0)).toFixed(2));
+    }
+
     _createError(message, statusCode) {
         const error = new Error(message);
         error.statusCode = statusCode;
@@ -200,7 +206,69 @@ class BookingOrderService {
         await BookingSlot.deleteMany({ booking_id: { $in: bookingIds } }).session(session);
     }
 
-    _calculateRefundForBookings(bookings = [], requestedAt = new Date()) {
+    async _resolveBookingAmounts(bookings = [], session = null) {
+        if (!Array.isArray(bookings) || bookings.length === 0) {
+            return {
+                total_amount: 0,
+                amount_source: {
+                    pricing_detail_count: 0,
+                    booking_fallback_count: 0,
+                },
+                booking_amounts: [],
+            };
+        }
+
+        const bookingIds = bookings.map((booking) => String(booking.id)).filter(Boolean);
+        const pricingDetails = await BookingPricingDetail.find({
+            booking_id: { $in: bookingIds },
+        })
+            .select("booking_id pricing_rule_id applied_modifier calculated_amount")
+            .session(session)
+            .lean();
+
+        const detailMap = pricingDetails.reduce((map, detail) => {
+            map[String(detail.booking_id)] = detail;
+            return map;
+        }, {});
+
+        let pricingDetailCount = 0;
+        let bookingFallbackCount = 0;
+
+        const bookingAmounts = bookings.map((booking) => {
+            const detail = detailMap[String(booking.id)] || null;
+            const hasDetailAmount = Number.isFinite(Number(detail?.calculated_amount));
+            const resolvedAmount = hasDetailAmount
+                ? Number(detail.calculated_amount)
+                : Number(booking.total_price || 0);
+
+            if (hasDetailAmount) {
+                pricingDetailCount += 1;
+            } else {
+                bookingFallbackCount += 1;
+            }
+
+            return {
+                booking_id: booking.id,
+                amount: Number(resolvedAmount.toFixed(2)),
+                source: hasDetailAmount ? "BOOKING_PRICING_DETAIL" : "BOOKING_TOTAL_PRICE_FALLBACK",
+                pricing_rule_id: detail?.pricing_rule_id || null,
+                applied_modifier: hasDetailAmount ? Number(detail?.applied_modifier || 1) : null,
+            };
+        });
+
+        const totalAmount = bookingAmounts.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+
+        return {
+            total_amount: Number(totalAmount.toFixed(2)),
+            amount_source: {
+                pricing_detail_count: pricingDetailCount,
+                booking_fallback_count: bookingFallbackCount,
+            },
+            booking_amounts: bookingAmounts,
+        };
+    }
+
+    async _calculateRefundForBookings(bookings = [], requestedAt = new Date(), session = null) {
         const requestedAtMs = new Date(requestedAt).getTime();
         const thresholdMs = REFUND_CANCEL_WINDOW_HOURS * 60 * 60 * 1000;
 
@@ -209,9 +277,8 @@ class BookingOrderService {
             return Number.isFinite(startMs) && startMs - requestedAtMs >= thresholdMs;
         });
 
-        const refundableBaseAmount = eligibleBookings.reduce((sum, booking) => {
-            return sum + Number(booking.total_price || 0);
-        }, 0);
+        const amountResolution = await this._resolveBookingAmounts(eligibleBookings, session);
+        const refundableBaseAmount = Number(amountResolution.total_amount || 0);
 
         const refundAmount = Number((refundableBaseAmount * REFUND_RATE_BEFORE_48H).toFixed(2));
 
@@ -220,6 +287,8 @@ class BookingOrderService {
             refundableBaseAmount: Number(refundableBaseAmount.toFixed(2)),
             refundRate: REFUND_RATE_BEFORE_48H,
             refundAmount,
+            amount_source: amountResolution.amount_source,
+            booking_amounts: amountResolution.booking_amounts,
             policy: `Refund 100% when cancelled at least ${REFUND_CANCEL_WINDOW_HOURS} hours before check-in`,
         };
     }
@@ -232,10 +301,8 @@ class BookingOrderService {
             .select("id total_price")
             .session(session);
 
-        const recalculatedBase = remainingBooked.reduce(
-            (sum, booking) => sum + Number(booking.total_price || 0),
-            0
-        );
+        const amountResolution = await this._resolveBookingAmounts(remainingBooked, session);
+        const recalculatedBase = Number(amountResolution.total_amount || 0);
 
         let recalculatedDiscount = 0;
         let voucherAction = "NONE";
@@ -287,6 +354,7 @@ class BookingOrderService {
             payable_total_price: order.payable_total_price,
             deposit_total_unchanged: Number(order.deposit_total || 0),
             voucher_action: voucherAction,
+            amount_source: amountResolution.amount_source,
         };
     }
 
@@ -570,9 +638,59 @@ class BookingOrderService {
                 const pricePerSlot = basePriceModifier * PRICE_UNIT_MULTIPLIER;
                 const numberOfSlots = durationMinutes / slotDurationMinutes;
 
-                const pricePerPod = pricePerSlot * numberOfSlots;
+                const pricePerPod = this._roundMoney(pricePerSlot * numberOfSlots);
                 const selectedPodCount = podsToBook.length;
-                const totalBasePrice = pricePerPod * selectedPodCount;
+
+                // Lock pricing by evaluating rules at booking start time (UTC).
+                const ruleEvaluationTime = startDate;
+                const [locationRules, podRules] = await Promise.all([
+                    PricingRule.find({ location_id: location.id, is_active: true })
+                        .sort({ createdAt: -1 })
+                        .session(session),
+                    PricingRule.find({
+                        pod_id: { $in: podsToBook.map((pod) => pod.id) },
+                        is_active: true,
+                    })
+                        .sort({ createdAt: -1 })
+                        .session(session),
+                ]);
+
+                const matchedLocationRules = locationRules.filter((rule) => rule.matchesUtcDate(ruleEvaluationTime));
+                const effectiveLocationRule = matchedLocationRules[0] || null;
+
+                const podRuleMap = podRules.reduce((map, rule) => {
+                    const podId = String(rule.pod_id || "");
+                    if (!podId) return map;
+                    if (!map[podId]) map[podId] = [];
+                    map[podId].push(rule);
+                    return map;
+                }, {});
+
+                const lockedPricingByPod = {};
+                for (const pod of podsToBook) {
+                    const podId = String(pod.id);
+                    const matchedPodRules = (podRuleMap[podId] || []).filter((rule) =>
+                        rule.matchesUtcDate(ruleEvaluationTime)
+                    );
+
+                    const effectiveRule = matchedPodRules[0] || effectiveLocationRule || null;
+                    const appliedModifier = Number(effectiveRule?.multiplier ?? 1);
+                    const calculatedAmount = this._roundMoney(pricePerPod * appliedModifier);
+
+                    lockedPricingByPod[podId] = {
+                        booking_id: null,
+                        pricing_rule_id: effectiveRule?.id || null,
+                        applied_modifier: appliedModifier,
+                        calculated_amount: calculatedAmount,
+                    };
+                }
+
+                const totalBasePrice = this._roundMoney(
+                    Object.values(lockedPricingByPod).reduce(
+                        (sum, item) => sum + Number(item.calculated_amount || 0),
+                        0
+                    )
+                );
 
                 // Apply discount
                 let appliedVoucher = null;
@@ -603,9 +721,9 @@ class BookingOrderService {
                 }
 
                 discountAmount = Math.min(discountAmount, totalBasePrice);
-                const finalTotalPrice = Math.max(0, totalBasePrice - discountAmount);
+                const finalTotalPrice = this._roundMoney(Math.max(0, totalBasePrice - discountAmount));
                 const depositPricing = await this._calculateVolumeBasedDeposit(selectedPodCount);
-                const payableTotalPrice = finalTotalPrice + depositPricing.deposit_total;
+                const payableTotalPrice = this._roundMoney(finalTotalPrice + depositPricing.deposit_total);
 
                 // Create booking order within transaction
                 const bookingOrderArray = await BookingOrder.create([{
@@ -639,14 +757,16 @@ class BookingOrderService {
                 const bookingDocs = [];
 
                 for (const pod of podsToBook) {
+                    const locked = lockedPricingByPod[String(pod.id)];
+                    const bookingPrice = this._roundMoney(locked?.calculated_amount ?? pricePerPod);
                     bookingDocs.push({
                         order_id: bookingOrder.id,
                         user_id,
                         pod_id: pod.id,
                         start_time: startDate,
                         end_time: endDate,
-                        base_price: pricePerPod,
-                        total_price: pricePerPod,
+                        base_price: bookingPrice,
+                        total_price: bookingPrice,
                         status: 'BOOKED'
                     });
                 }
@@ -654,6 +774,22 @@ class BookingOrderService {
                 // Batch create all bookings within transaction
                 const createdBookings = await Booking.create(bookingDocs, { session, ordered: true });
                 bookings.push(...createdBookings);
+
+                // Persist locked pricing detail for each booking in the same transaction.
+                const pricingDetailDocs = createdBookings.map((booking) => {
+                    const locked = lockedPricingByPod[String(booking.pod_id)] || {};
+                    return {
+                        booking_id: booking.id,
+                        pricing_rule_id: locked.pricing_rule_id || null,
+                        applied_modifier: Number(locked.applied_modifier ?? 1),
+                        calculated_amount: this._roundMoney(locked.calculated_amount ?? booking.total_price),
+                    };
+                });
+
+                const createdPricingDetails = await BookingPricingDetail.create(pricingDetailDocs, {
+                    session,
+                    ordered: true,
+                });
 
                 // Generate time slots and booking slots for each booking
                 const allTimeSlotIds = [];
@@ -709,6 +845,13 @@ class BookingOrderService {
                         total_price: b.total_price,
                         status: b.status,
                     })),
+                    booking_pricing_details: createdPricingDetails.map((detail) => ({
+                        id: detail.id,
+                        booking_id: detail.booking_id,
+                        pricing_rule_id: detail.pricing_rule_id,
+                        applied_modifier: detail.applied_modifier,
+                        calculated_amount: detail.calculated_amount,
+                    })),
                     summary: {
                         cluster_id,
                         cluster_name: cluster.name,
@@ -721,6 +864,7 @@ class BookingOrderService {
                         slot_duration_minutes: slotDurationMinutes,
                         number_of_slots: numberOfSlots,
                         pods_booked: selectedPodCount,
+                        pricing_locked_at_utc: ruleEvaluationTime.toISOString(),
                         base_price_modifier: basePriceModifier,
                         price_unit_multiplier: PRICE_UNIT_MULTIPLIER,
                         price_per_slot: pricePerSlot,
@@ -1096,6 +1240,14 @@ class BookingOrderService {
 
             // Get all bookings for this order
             const bookings = await Booking.find({ order_id: orderId }).lean();
+            const pricingDetails = await BookingPricingDetail.find({
+                booking_id: { $in: bookings.map((booking) => booking.id) },
+            }).lean();
+
+            const pricingDetailMap = pricingDetails.reduce((map, detail) => {
+                map[String(detail.booking_id)] = detail;
+                return map;
+            }, {});
 
             let visibleBookings = bookings;
             if (actorRole === "manager") {
@@ -1126,7 +1278,8 @@ class BookingOrderService {
             // Attach pod details to bookings
             const bookingsWithPods = visibleBookings.map(booking => ({
                 ...booking,
-                pod: podMap[booking.pod_id] || null
+                pod: podMap[booking.pod_id] || null,
+                pricing_detail: pricingDetailMap[String(booking.id)] || null,
             }));
 
             // Get pod cluster info from booked pods (all pods should belong to the same cluster)
@@ -1442,7 +1595,7 @@ class BookingOrderService {
                 }
 
                 const now = new Date();
-                const refundSummary = this._calculateRefundForBookings(targetBookedBookings, now);
+                const refundSummary = await this._calculateRefundForBookings(targetBookedBookings, now, session);
                 const canRefundBefore48h = refundSummary.eligibleBookings.length === targetBookedBookings.length;
 
                 const rentalRefundAmount = canRefundBefore48h ? refundSummary.refundAmount : 0;
@@ -1505,6 +1658,8 @@ class BookingOrderService {
                         deposit_amount: depositRefundAmount,
                         refundable_base_amount: refundSummary.refundableBaseAmount,
                         refund_rate: refundSummary.refundRate,
+                        refund_amount_source: refundSummary.amount_source,
+                        booking_amounts: refundSummary.booking_amounts,
                         eligible_booking_ids: refundSummary.eligibleBookings.map((booking) => booking.id),
                         refunded_transaction_id: refundTransaction?.id || null,
                         refunded_to_wallet_immediately: totalRefundAmount > 0,
