@@ -22,7 +22,7 @@ const walletTransactionSchema = new mongoose.Schema(
         type: {
             type: String,
             enum: {
-                values: ["TOPUP", "PAYMENT", "REFUND"],
+                values: ["TOPUP", "PAYMENT", "REFUND", "WITHDRAWAL_HOLD", "WITHDRAWAL_SUCCESS", "WITHDRAWAL_REFUND"],
                 message: "{VALUE} is not a valid wallet transaction type",
             },
             required: true,
@@ -69,8 +69,17 @@ const walletTransactionSchema = new mongoose.Schema(
 
 walletTransactionSchema.index({ wallet_id: 1, created_at: -1 });
 walletTransactionSchema.index({ wallet_id: 1, type: 1, created_at: -1 });
-walletTransactionSchema.index({ transaction_id: 1 });
-walletTransactionSchema.index({ reference_id: 1 });
+walletTransactionSchema.index(
+    { type: 1, reference_id: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            type: "TOPUP",
+            reference_id: { $type: "string" },
+        },
+        name: "uniq_wallet_topup_reference",
+    }
+);
 
 const WalletTransaction = mongoose.model("WalletTransaction", walletTransactionSchema);
 

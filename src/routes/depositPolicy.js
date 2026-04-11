@@ -71,7 +71,7 @@ const depositPolicyController = require("../controllers/depositPolicyController"
  *       200:
  *         description: Deposit policy retrieved successfully
  */
-router.get("/current", protect, authorize("admin"), depositPolicyController.getCurrentPolicy);
+router.get("/current", protect, depositPolicyController.getCurrentPolicy);
 
 /**
  * @swagger

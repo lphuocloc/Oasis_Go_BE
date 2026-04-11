@@ -8,18 +8,30 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
-const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
+const {
+  autoAssignTaskForBooking,
+  cancelOpenTasksForNoShowBooking,
+} = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
+const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  _createError(message, statusCode, errorCode) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.errorCode = errorCode;
+    return error;
+  }
+
   async _revokeCleanerKeysForBooking(bookingId) {
     if (!bookingId) return;
     await OnlineKey.updateMany(
@@ -292,6 +304,62 @@ class BookingService {
     };
   }
 
+  async notifyUpcomingCheckoutBookings(leadMinutes = CHECKOUT_REMINDER_LEAD_MINUTES) {
+    const safeLeadMinutes = Math.max(1, Number(leadMinutes) || CHECKOUT_REMINDER_LEAD_MINUTES);
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + safeLeadMinutes * 60 * 1000);
+
+    // Only remind bookings that were manually checked in by user.
+    const upcomingBookings = await Booking.find({
+      status: "IN_USE",
+      checkin_state: "MANUAL_CHECKED_IN",
+      end_time: { $gt: now, $lte: windowEnd },
+    }).select("id user_id pod_id order_id end_time checkin_state status");
+
+    if (upcomingBookings.length === 0) {
+      return { found: 0, reminded: 0, failed: 0, lead_minutes: safeLeadMinutes };
+    }
+
+    let remindedCount = 0;
+    let failedCount = 0;
+
+    for (const booking of upcomingBookings) {
+      try {
+        await notificationService.sendToUser(booking.user_id, {
+          title: "Nhắc nhở sắp checkout",
+          message: `Phiên sử dụng sẽ kết thúc trong khoảng ${safeLeadMinutes} phút nữa. Vui lòng chuẩn bị checkout đúng giờ.`,
+          type: "BOOKING",
+          event_code: "BOOKING_REMINDER",
+          dedupe_key: `BOOKING_CHECKOUT_REMINDER_${safeLeadMinutes}M:${booking.id}`,
+          data: {
+            type: "BOOKING_CHECKOUT_REMINDER",
+            booking_id: booking.id,
+            order_id: booking.order_id,
+            pod_id: booking.pod_id,
+            end_time: booking.end_time,
+            minutes_left: String(safeLeadMinutes),
+            reminder_type: `CHECKOUT_${safeLeadMinutes}M`,
+          },
+        });
+
+        remindedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        console.error(
+          `Checkout reminder notification failed (booking_id=${booking.id || "unknown"}):`,
+          error.message || error
+        );
+      }
+    }
+
+    return {
+      found: upcomingBookings.length,
+      reminded: remindedCount,
+      failed: failedCount,
+      lead_minutes: safeLeadMinutes,
+    };
+  }
+
   startAutoActivateCheckinJob(intervalMinutes = 1, graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 1);
 
@@ -303,6 +371,7 @@ class BookingService {
       this.autoActivateOverdueCheckins(graceMinutes),
       this.markNoShowForExpiredAutoActivatedBookings(),
       this.autoCheckoutExpiredBookings(),
+      this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
     ]).catch((error) => {
       console.error("Initial auto-activate checkin job failed:", error);
     });
@@ -313,6 +382,7 @@ class BookingService {
           this.autoActivateOverdueCheckins(graceMinutes),
           this.markNoShowForExpiredAutoActivatedBookings(),
           this.autoCheckoutExpiredBookings(),
+          this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
         ]);
       } catch (error) {
         console.error("Auto-activate checkin job error:", error);
@@ -774,7 +844,6 @@ class BookingService {
     }
 
     const now = new Date();
-
     // ============= CUSTOMER CHECK-IN (QR ONLY) =============
     if (qr_token) {
       const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
@@ -802,10 +871,28 @@ class BookingService {
         throw error;
       }
 
-      let booking = candidateBookings.find((item) => item.status === "BOOKED");
-      if (!booking) {
-        booking = candidateBookings.find((item) => item.status === "IN_USE") || candidateBookings[0];
-      }
+      const nowMs = now.getTime();
+      const inUseBooking = candidateBookings.find((item) => item.status === "IN_USE");
+      const bookedInWindow = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        const startMs = new Date(item.start_time).getTime();
+        return nowMs >= startMs - CHECKIN_GRACE_PERIOD_MS && nowMs <= startMs + CHECKIN_GRACE_PERIOD_MS;
+      });
+      const latestPastBooked = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        return new Date(item.start_time).getTime() <= nowMs;
+      });
+      const earliestFutureBooked = [...candidateBookings]
+        .filter((item) => item.status === "BOOKED" && new Date(item.start_time).getTime() > nowMs)
+        .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+
+      // Priority: active session -> valid check-in window booking -> nearest past booking -> nearest future booking.
+      const booking =
+        inUseBooking ||
+        bookedInWindow ||
+        latestPastBooked ||
+        earliestFutureBooked ||
+        candidateBookings[0];
 
       if (booking.checkin_state === "NO_SHOW") {
         const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");

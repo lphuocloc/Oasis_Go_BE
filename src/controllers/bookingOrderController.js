@@ -15,6 +15,7 @@ class BookingOrderController {
                 end_time,
                 pod_count,
                 total_discount,
+                voucher_code,
                 require_adjacent,
                 floor_preference,
                 accept_fragmented,
@@ -36,6 +37,7 @@ class BookingOrderController {
                 end_time,
                 pod_count: pod_count || 1,
                 total_discount: total_discount || 0,
+                voucher_code: voucher_code || null,
                 require_adjacent: require_adjacent || false,
                 floor_preference: floor_preference || null,
                 accept_fragmented: accept_fragmented || false,
@@ -175,6 +177,54 @@ class BookingOrderController {
             return res.status(error.statusCode || 500).json({
                 success: false,
                 message: error.message || "Failed to checkout booking order",
+            });
+        }
+    }
+
+    /**
+     * Apply voucher to order (phase 2)
+     * @route POST /api/booking-orders/:id/voucher/apply
+     */
+    async applyVoucher(req, res) {
+        try {
+            const { id } = req.params;
+            const { code } = req.body || {};
+
+            const result = await bookingOrderService.applyVoucherToOrder(id, req.user, { code });
+
+            return res.status(200).json({
+                success: true,
+                message: "Voucher applied successfully",
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error applying voucher:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to apply voucher",
+            });
+        }
+    }
+
+    /**
+     * Remove voucher from order (phase 2)
+     * @route DELETE /api/booking-orders/:id/voucher
+     */
+    async removeVoucher(req, res) {
+        try {
+            const { id } = req.params;
+            const result = await bookingOrderService.removeVoucherFromOrder(id, req.user);
+
+            return res.status(200).json({
+                success: true,
+                message: "Voucher removed successfully",
+                data: result,
+            });
+        } catch (error) {
+            console.error("Error removing voucher:", error);
+            return res.status(error.statusCode || 500).json({
+                success: false,
+                message: error.message || "Failed to remove voucher",
             });
         }
     }

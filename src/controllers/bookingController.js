@@ -211,6 +211,7 @@ const getMyCleanerKeyByBookingId = async (req, res) => {
         res.status(statusCode).json({
             success: false,
             message: error.message || "Failed to retrieve cleaner key",
+            error_code: error.errorCode || "CLEANER_KEY_RETRIEVAL_FAILED",
         });
     }
 };

@@ -30,6 +30,24 @@ exports.getMyCleaningTasks = async (req, res) => {
   }
 };
 
+exports.getMyCleanerKeyByTaskId = async (req, res) => {
+  try {
+    const data = await cleaningTaskService.getMyCleanerKeyByTaskId(req.params.id, req.user);
+    res.status(200).json({
+      success: true,
+      message: "Cleaner key retrieved successfully",
+      data,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching cleaner key by task",
+      error_code: error.errorCode || "CLEANER_KEY_RETRIEVAL_FAILED",
+    });
+  }
+};
+
 exports.getCleaningTaskById = async (req, res) => {
   try {
     const task = await cleaningTaskService.getCleaningTaskById(req.params.id);
