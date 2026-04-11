@@ -177,7 +177,7 @@ class SupportRequestService {
       id: { $ne: String(currentPod.id) },
     };
 
-    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status").lean();
+    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status type").lean();
     const pods = scopedPodIds.size > 0
       ? rawPods.filter((item) => scopedPodIds.has(String(item.id)))
       : rawPods;
@@ -241,6 +241,7 @@ class SupportRequestService {
         cluster_id: String(pod.cluster_id),
         location_id: String(podCluster.location_id),
         scope_level: String(pod.cluster_id) === String(currentCluster.id) ? "SAME_CLUSTER" : "SAME_PARENT_LOCATION",
+        type: pod.type || "STANDARD",
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
@@ -257,7 +258,8 @@ class SupportRequestService {
       return a.scope_level === "SAME_CLUSTER" ? -1 : 1;
     });
 
-    return candidates;
+    const standardCandidates = candidates.filter(c => c.type === "STANDARD");
+    return standardCandidates.length > 0 ? standardCandidates : candidates;
   }
 
   async _notifyAdminsForEscalation(supportRequest, booking) {

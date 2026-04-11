@@ -580,10 +580,11 @@ class BookingOrderService {
                     throw error;
                 }
 
-                // Get all pods in cluster
+                // Get all standard pods in cluster
                 const allPods = await Pod.find({
                     cluster_id,
-                    status: { $nin: ['MAINTENANCE'] }
+                    status: { $nin: ['MAINTENANCE'] },
+                    type: "STANDARD"
                 }).lean();
 
                 if (allPods.length === 0) {
