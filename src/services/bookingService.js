@@ -908,7 +908,7 @@ class BookingService {
 
         if (needsManualSync) {
           booking.checkin_state = "MANUAL_CHECKED_IN";
-          booking.checked_in_at = booking.checked_in_at || new Date();
+          booking.checked_in_at = new Date();
           booking.checkin_source = "USER_QR";
           booking.no_show_marked_at = null;
           await booking.save();
