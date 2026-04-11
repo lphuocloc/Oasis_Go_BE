@@ -14,6 +14,7 @@ const getRequestValue = (req, source, key) => {
 };
 
 const uniqueStrings = (values) => [...new Set(values.filter(Boolean).map((v) => String(v)))];
+const isManagerScopeBypassed = (req) => Boolean(req && req.managerScopeBypassed);
 
 const loadManagerScope = async (req, res, next) => {
   try {
@@ -54,10 +55,9 @@ const loadManagerScope = async (req, res, next) => {
     const uniqueLocShiftIds = uniqueStrings([...assignmentLocShiftIds, ...rosterLocShiftIds]);
 
     if (uniqueLocShiftIds.length === 0) {
-      return res.status(403).json({
-        success: false,
-        message: "Manager has no assigned location scope",
-      });
+      req.managerScope = null;
+      req.managerScopeBypassed = true;
+      return next();
     }
 
     const locationShifts = await LocationShift.find({ id: { $in: uniqueLocShiftIds } })
@@ -67,10 +67,9 @@ const loadManagerScope = async (req, res, next) => {
     const parentLocationIds = uniqueStrings(locationShifts.map((item) => item.location_id));
 
     if (parentLocationIds.length === 0) {
-      return res.status(403).json({
-        success: false,
-        message: "Manager has no assigned parent location scope",
-      });
+      req.managerScope = null;
+      req.managerScopeBypassed = true;
+      return next();
     }
 
     const descendantsByParent = await Promise.all(
@@ -99,6 +98,7 @@ const loadManagerScope = async (req, res, next) => {
       clusterIds,
       podIds,
     };
+    req.managerScopeBypassed = false;
 
     next();
   } catch (error) {
@@ -109,6 +109,10 @@ const loadManagerScope = async (req, res, next) => {
 const requireManagerLocationAccess = ({ source = "params", key = "locationId" } = {}) => {
   return (req, res, next) => {
     if (!req.user || req.user.role !== "manager") {
+      return next();
+    }
+
+    if (isManagerScopeBypassed(req)) {
       return next();
     }
 
@@ -134,6 +138,10 @@ const requireManagerClusterAccess = ({ source = "params", key = "id" } = {}) => 
       return next();
     }
 
+    if (isManagerScopeBypassed(req)) {
+      return next();
+    }
+
     const clusterId = getRequestValue(req, source, key);
     if (!clusterId) {
       return next();
@@ -156,6 +164,10 @@ const requireManagerPodAccess = ({ source = "params", key = "podId" } = {}) => {
       return next();
     }
 
+    if (isManagerScopeBypassed(req)) {
+      return next();
+    }
+
     const podId = getRequestValue(req, source, key);
     if (!podId) {
       return next();
@@ -174,6 +186,10 @@ const requireManagerPodAccess = ({ source = "params", key = "podId" } = {}) => {
 
 const applyManagerBookingScope = (req, res, next) => {
   if (!req.user || req.user.role !== "manager") {
+    return next();
+  }
+
+  if (isManagerScopeBypassed(req)) {
     return next();
   }
 
@@ -203,6 +219,10 @@ const applyManagerLocationScope = (req, res, next) => {
     return next();
   }
 
+  if (isManagerScopeBypassed(req)) {
+    return next();
+  }
+
   const scopedLocationIds = (req.managerScope && req.managerScope.locationIds) || [];
   if (req.query.scope_location_ids) {
     const requestedIds = String(req.query.scope_location_ids).split(",");
@@ -216,6 +236,10 @@ const applyManagerLocationScope = (req, res, next) => {
 
 const applyManagerPodScope = (req, res, next) => {
   if (!req.user || req.user.role !== "manager") {
+    return next();
+  }
+
+  if (isManagerScopeBypassed(req)) {
     return next();
   }
 

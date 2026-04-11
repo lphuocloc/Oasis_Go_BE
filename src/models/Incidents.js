@@ -15,6 +15,15 @@ const incidentSchema = new mongoose.Schema(
       ref: "Pod",
       index: true,
     },
+    incident_type: {
+      type: String,
+      enum: {
+        values: ["OPERATIONAL", "DAMAGE_REPORT"],
+        message: "{VALUE} is not a valid incident type",
+      },
+      default: "OPERATIONAL",
+      index: true,
+    },
     booking_id: {
       type: String,
       default: null,
@@ -27,15 +36,15 @@ const incidentSchema = new mongoose.Schema(
       ref: "CleaningTask",
       index: true,
     },
-    shift_assignment_id: {
-      type: String,
-      default: null,
-      ref: "StaffShiftAssignment",
-      index: true,
-    },
     reported_by: {
       type: String,
       required: [true, "reported_by is required"],
+      ref: "User",
+      index: true,
+    },
+    handled_by: {
+      type: String,
+      default: null,
       ref: "User",
       index: true,
     },
@@ -56,16 +65,26 @@ const incidentSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "INVESTIGATING", "ESCALATED", "RESOLVED", "CLOSED"],
+        values: ["PENDING", "RESOLVED", "DISMISSED"],
         message: "{VALUE} is not a valid status",
       },
       default: "PENDING",
       index: true,
     },
-    has_lost_found: {
-      type: Boolean,
-      default: false,
-      index: true,
+    estimated_service_fee: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    estimated_total_value: {
+      type: Number,
+      default: null,
+      min: 0,
+    },
+    pricing_source: {
+      type: String,
+      default: null,
+      trim: true,
     },
     resolution_note: {
       type: String,
@@ -84,6 +103,8 @@ const incidentSchema = new mongoose.Schema(
 );
 
 incidentSchema.index({ reported_by: 1, created_at: -1 });
+incidentSchema.index({ handled_by: 1, created_at: -1 });
 incidentSchema.index({ cleaning_task_id: 1, created_at: -1 });
+incidentSchema.index({ incident_type: 1, created_at: -1 });
 
 module.exports = mongoose.model("Incident", incidentSchema);

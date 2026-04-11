@@ -59,6 +59,38 @@ const { uploadPodClusterImage } = require("../config/cloudinary");
  *         updatedAt:
  *           type: string
  *           format: date-time
+ *         pricing_summary:
+ *           type: object
+ *           properties:
+ *             queried_at_utc:
+ *               type: string
+ *               format: date-time
+ *               example: 2026-04-10T09:30:00.000Z
+ *             has_location_rule:
+ *               type: boolean
+ *               example: true
+ *             has_pod_rule:
+ *               type: boolean
+ *               example: false
+ *             effective_rule:
+ *               type: object
+ *               nullable: true
+ *               properties:
+ *                 id:
+ *                   type: string
+ *                 scope:
+ *                   type: string
+ *                   enum: [POD, LOCATION]
+ *                 multiplier:
+ *                   type: number
+ *                 start_time:
+ *                   type: string
+ *                 end_time:
+ *                   type: string
+ *                 days_of_week:
+ *                   type: array
+ *                   items:
+ *                     type: string
  */
 
 /**
@@ -149,6 +181,13 @@ router.get(
  *         schema:
  *           type: string
  *         description: Pod cluster ID
+ *       - in: query
+ *         name: at
+ *         required: false
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Optional UTC datetime to evaluate effective pricing rule (defaults to current UTC)
  *     responses:
  *       200:
  *         description: Pod cluster details
