@@ -190,7 +190,7 @@ class SupportRequestService {
     });
 
     const candidates = [];
-    
+
     // Process all pods concurrently to avoid N+1 query stalling
     const podPromises = pods.map(async (pod) => {
       const podCluster = clusterById.get(String(pod.cluster_id));
@@ -246,7 +246,7 @@ class SupportRequestService {
 
     const results = await Promise.all(podPromises);
     for (const res of results) {
-       if (res) candidates.push(res);
+      if (res) candidates.push(res);
     }
 
     candidates.sort((a, b) => {
@@ -266,8 +266,8 @@ class SupportRequestService {
     await Promise.all(
       admins.map((admin) =>
         notificationService.sendToUser(admin._id, {
-          title: "Yeu cau ho tro can xu ly",
-          message: "Manager da escalate yeu cau MAINTENANCE muc do cao.",
+          title: "Yêu cầu hỗ trợ khẩn cấp",
+          message: `Quản lý đã chuyển cấp một yêu cầu bảo trì mức độ ưu tiên ${supportRequest.severity || 'cao'}.`,
           type: "SUPPORT",
           event_code: "SUPPORT_ESCALATED",
           dedupe_key: `SUPPORT_ESCALATED:${supportRequest.id}:${admin._id}`,
@@ -423,7 +423,7 @@ class SupportRequestService {
   async getSupportRequestById(requestId, actor, managerScope) {
     const role = this._getActorRole(actor);
     const actorId = this._getActorId(actor);
-    
+
     const supportRequest = await SupportRequest.findOne({ id: requestId })
       .populate("booking", "id user_id pod_id status start_time end_time")
       .populate("handler", "_id name email role")
@@ -768,14 +768,14 @@ class SupportRequestService {
 
     if (requestType === "MAINTENANCE" && ["HIGH", "CRITICAL"].includes(normalizeUpper(supportRequest.severity))) {
       supportRequest.status = "ESCALATED";
-      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Escalated to admin after emergency room change";
+      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Đã chuyển cấp lên ban quản trị sau khi thực hiện dời phòng khẩn cấp do sự cố bảo trì.";
     } else {
       supportRequest.status = "RESOLVED";
     }
 
     supportRequest.resolution_note =
       String(payload.resolution_note || "").trim() ||
-      `Room changed from pod ${currentPod.code || currentPod.id} to ${nextPod.code || nextPod.id}`;
+      `Hệ thống đã dời khách hàng từ phòng ${currentPod.code || currentPod.id} sang phòng ${nextPod.code || nextPod.id}`;
 
     await supportRequest.save();
 
@@ -816,8 +816,8 @@ class SupportRequestService {
     }
 
     await notificationService.sendToUser(booking.user_id, {
-      title: "Support request room changed",
-      message: "Manager moved your booking to a new pod. Please check updated details.",
+      title: "Phòng của bạn đã được thay đổi",
+      message: "Quản lý đã sắp xếp lại phòng cho bạn để đảm bảo trải nghiệm. Vui lòng kiểm tra màn hình để lấy mã phòng và lối đi mới.",
       type: "SUPPORT",
       event_code: "SUPPORT_ROOM_CHANGED",
       dedupe_key: `SUPPORT_ROOM_CHANGED:${supportRequest.id}:${booking.id}`,
@@ -837,7 +837,7 @@ class SupportRequestService {
 
   async cancelSupportRequest(requestId, actor) {
     const actorId = this._getActorId(actor);
-    
+
     if (this._getActorRole(actor) !== "user") {
       throw createError("Only users can cancel their support request", 403);
     }

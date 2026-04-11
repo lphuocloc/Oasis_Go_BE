@@ -2,6 +2,7 @@ const mongoose = require("mongoose");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
+const BookingOrder = require("../models/BookingOrder");
 const Incident = require("../models/Incidents");
 const User = require("../models/User");
 const Location = require("../models/Location");
@@ -97,11 +98,12 @@ exports.getDashboard = async (req, res) => {
     }
     const incidentFilters = {};
 
-    const [podsRaw, bookingsResult, incidentsRaw, clustersTotalRaw] = await Promise.all([
+    const [podsRaw, bookingsResult, incidentsRaw, clustersTotalRaw, ordersRaw] = await Promise.all([
       podService.getAllPods(podFilters),
       bookingService.getAllBookings(bookingFilters),
       incidentService.getIncidents(incidentFilters),
       PodCluster.countDocuments({}),
+      BookingOrder.find({ createdAt: { $gte: rangeFrom, $lte: rangeTo } }).lean(),
     ]);
 
     const pods = isManager
@@ -178,9 +180,10 @@ exports.getDashboard = async (req, res) => {
     );
     const revenueInRange = billableBookings.reduce((sum, booking) => sum + getBookingAmount(booking), 0);
 
-    const resolvedGroupBy = ["hour", "day", "month"].includes(String(groupBy))
-      ? String(groupBy)
-      : "hour";
+    let resolvedGroupBy = String(groupBy);
+    if (resolvedGroupBy === "week") resolvedGroupBy = "day"; // Treat week queries as daily breakdown
+    if (!["hour", "day", "month"].includes(resolvedGroupBy)) resolvedGroupBy = "hour";
+
     const toBucketKey = (dateValue) => {
       const d = toDateOrNull(dateValue);
       if (!d) return null;
@@ -200,12 +203,27 @@ exports.getDashboard = async (req, res) => {
       const bookingTime = booking.start_time || booking.start_date || booking.createdAt;
       const bucket = toBucketKey(bookingTime);
       if (!bucket) return;
-      revenueBucketMap.set(bucket, (revenueBucketMap.get(bucket) || 0) + getBookingAmount(booking));
+      const bucketData = revenueBucketMap.get(bucket) || { amount: 0, orders: 0 };
+      bucketData.amount += getBookingAmount(booking);
+      revenueBucketMap.set(bucket, bucketData);
+    });
+
+    const validOrderStatuses = ["PAID", "PENDING"];
+    const orders = ordersRaw.filter((o) => validOrderStatuses.includes(normalizeStatus(o.status)));
+    const ordersInRange = orders.length;
+
+    orders.forEach((order) => {
+      const orderTime = order.created_at || order.createdAt;
+      const bucket = toBucketKey(orderTime);
+      if (!bucket) return;
+      const bucketData = revenueBucketMap.get(bucket) || { amount: 0, orders: 0 };
+      bucketData.orders += 1;
+      revenueBucketMap.set(bucket, bucketData);
     });
 
     const revenueTrend = Array.from(revenueBucketMap.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([label, amount]) => ({ label, amount: Number(amount.toFixed(2)) }));
+      .map(([label, data]) => ({ label, amount: Number(data.amount.toFixed(2)), orders: data.orders }));
 
     const incidentsByStatus = countByField(
       incidents.map((incident) => ({
@@ -222,6 +240,7 @@ exports.getDashboard = async (req, res) => {
       podsTotal: pods.length,
       clustersTotal,
       bookingsInRange: bookings.length,
+      ordersInRange,
       incidentsTotal: incidents.length,
       openIncidents,
       revenueInRange: Number(revenueInRange.toFixed(2)),

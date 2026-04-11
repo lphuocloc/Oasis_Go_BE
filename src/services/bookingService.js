@@ -498,7 +498,7 @@ class BookingService {
     // If no pagination params, return all results
     if (!page && !limit) {
       const bookings = await Booking.find(query)
-        .sort({ created_at: -1 })
+        .sort({ createdAt: -1 })
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
         .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status");
@@ -512,7 +512,7 @@ class BookingService {
 
     const [bookings, total] = await Promise.all([
       Booking.find(query)
-        .sort({ created_at: -1 })
+        .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
         .populate("user", "id name email phone")

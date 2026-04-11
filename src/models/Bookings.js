@@ -111,7 +111,7 @@ const bookingSchema = new mongoose.Schema(
 // Indexes for efficient queries
 bookingSchema.index({ user_id: 1, status: 1 });
 bookingSchema.index({ pod_id: 1, start_time: 1 });
-bookingSchema.index({ status: 1, created_at: -1 });
+bookingSchema.index({ status: 1, createdAt: -1 });
 bookingSchema.index({ status: 1, checkin_state: 1, start_time: 1 });
 
 // Virtual for order details
@@ -202,7 +202,7 @@ bookingSchema.methods.cancel = async function () {
 bookingSchema.statics.getByUser = async function (userId, status = null) {
   const filter = { user_id: userId };
   if (status) filter.status = status;
-  return await this.find(filter).sort({ created_at: -1 });
+  return await this.find(filter).sort({ createdAt: -1 });
 };
 
 // Static method to get bookings by pod
