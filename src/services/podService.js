@@ -119,6 +119,7 @@ class PodService {
             cluster_id: pod.cluster_id,
             status: "AVAILABLE",
             id: { $ne: pod.id },
+            type: "STANDARD"
         })
             .select("id code name cluster_id")
             .lean();
@@ -228,6 +229,7 @@ class PodService {
             wifi_available: wifi_available !== undefined ? wifi_available : true,
             max_session_duration: max_session_duration || 480,
             status: "AVAILABLE",
+            type: data.type || "STANDARD",
         };
 
         let podsToCreate = [];
@@ -463,6 +465,7 @@ class PodService {
             wifi_available,
             max_session_duration,
             status,
+            type,
         } = updates;
 
         const pod = await Pod.findOne({ id: podId });
@@ -522,6 +525,7 @@ class PodService {
         if (wifi_available !== undefined) pod.wifi_available = wifi_available;
         if (max_session_duration !== undefined) pod.max_session_duration = max_session_duration;
         if (status) pod.status = status;
+        if (type) pod.type = type;
 
         await pod.save();
         await pod.populate("cluster");

@@ -86,6 +86,16 @@ const incidentSchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
+    resolution_note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
+    escalation_note: {
+      type: String,
+      default: null,
+      trim: true,
+    },
   },
   {
     timestamps: { createdAt: "created_at", updatedAt: "updated_at" },

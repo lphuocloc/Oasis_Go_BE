@@ -5,9 +5,8 @@ const { loadManagerScope, applyManagerPodScope } = require("../middlewares/manag
 const { uploadIncidentPhoto } = require("../config/cloudinary");
 const {
   createIncident,
-  createIncidentFromCleaningTask,
-  createDamageReport,
   getDamageReports,
+  getMyPendingIncidentReviews,
   getIncidents,
   getIncidentById,
   updateIncidentStatus,
@@ -518,6 +517,74 @@ router.get(
 
 /**
  * @swagger
+ * /api/incidents/my-pending-reviews:
+ *   get:
+ *     summary: Get pending incident reviews in manager scope
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: pod_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: pod_ids
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: booking_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: cleaning_task_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: item_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: severity
+ *         schema:
+ *           type: string
+ *           enum: [LOW, MEDIUM, HIGH, CRITICAL]
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Pending incident reviews retrieved successfully
+ */
+router.get(
+  "/my-pending-reviews",
+  protect,
+  authorize("manager"),
+  loadManagerScope,
+  applyManagerPodScope,
+  getMyPendingIncidentReviews
+);
+
+/**
+ * @swagger
  * /api/incidents/{id}:
  *   get:
  *     summary: Get incident detail by id
@@ -546,79 +613,6 @@ router.get(
  *         description: Incident not found
  */
 router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getIncidentById);
-
-/**
- * @swagger
- * /api/incidents/cleaning-task:
- *   post:
- *     summary: "[Deprecated] Create incident via legacy cleaning-task endpoint"
- *     deprecated: true
- *     tags: [Incidents]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             $ref: '#/components/schemas/DamageReportCreateInput'
- *     responses:
- *       201:
- *         description: Incident created successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   $ref: '#/components/schemas/DamageReportResponse'
- *       400:
- *         description: Invalid input
- *       404:
- *         description: Pod, item, service catalog, or cleaning task not found
- */
-router.post(
-  "/cleaning-task",
-  protect,
-  authorize("admin", "manager", "cleaner"),
-  uploadIncidentPhoto.array("photos", 8),
-  createIncidentFromCleaningTask
-);
-
-/**
- * @swagger
- * /api/incidents/damage-report:
- *   post:
- *     summary: "[Deprecated] Create incident via legacy damage-report endpoint"
- *     deprecated: true
- *     tags: [Incidents]
- *     security:
- *       - bearerAuth: []
- *     requestBody:
- *       required: true
- *       content:
- *         multipart/form-data:
- *           schema:
- *             $ref: '#/components/schemas/DamageReportCreateInput'
- *     responses:
- *       201:
- *         description: Damage report created successfully
- *       400:
- *         description: Invalid input
- *       404:
- *         description: Pod, item, service catalog, or cleaning task not found
- */
-router.post(
-  "/damage-report",
-  protect,
-  authorize("admin", "manager", "cleaner"),
-  uploadIncidentPhoto.array("photos", 8),
-  createDamageReport
-);
 
 /**
  * @swagger

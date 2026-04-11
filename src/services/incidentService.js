@@ -79,6 +79,10 @@ const resolveActorId = (actor) => {
   return ids.length > 0 ? ids[0] : null;
 };
 
+const resolveActorIdentityIds = (actor) => {
+  return [...new Set([actor?.id, actor?._id].filter(Boolean).map((id) => String(id)))];
+};
+
 const parseIncidentDetailsPayload = ({ details }) => {
   let parsedDetails = details;
 
@@ -281,13 +285,13 @@ const buildDamageMetadataMap = async (incidents = []) => {
       : Promise.resolve([]),
     reporterIds.length > 0
       ? User.find({
-          $or: [
-            { id: { $in: reporterIds } },
-            { _id: { $in: reporterObjectIds } },
-          ],
-        })
-          .select("_id id name")
-          .lean()
+        $or: [
+          { id: { $in: reporterIds } },
+          { _id: { $in: reporterObjectIds } },
+        ],
+      })
+        .select("_id id name")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -341,8 +345,8 @@ const resolveIncidentDetails = async (detailsPayload = []) => {
     itemIds.length > 0 ? Item.find({ id: { $in: itemIds } }).select("id name unit_cost").lean() : Promise.resolve([]),
     serviceCatalogIds.length > 0
       ? DamageServiceCatalog.find({ id: { $in: serviceCatalogIds }, is_active: true })
-          .select("id name base_price")
-          .lean()
+        .select("id name base_price")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -440,7 +444,7 @@ const buildIncidentIdsByItemFilter = async (itemId) => {
   return [...new Set(matchedIncidentIds.map((id) => String(id)).filter(Boolean))];
 };
 
-exports.getIncidents = async (filters = {}) => {
+exports.getIncidents = async (filters = {}, actor = null) => {
   const query = {};
 
   if (filters.pod_ids) {
@@ -471,6 +475,15 @@ exports.getIncidents = async (filters = {}) => {
     query.status = status;
   }
 
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    query.reported_by = actorIds.length === 1 ? actorIds[0] : { $in: actorIds };
+  }
+
   const incidents = await Incident.find(query).sort({ created_at: -1 });
   if (incidents.length === 0) return [];
 
@@ -485,7 +498,7 @@ exports.getIncidents = async (filters = {}) => {
   );
 };
 
-exports.getDamageReports = async (query = {}) => {
+exports.getDamageReports = async (query = {}, actor = null) => {
   const filter = {
     incident_type: "DAMAGE_REPORT",
   };
@@ -506,11 +519,11 @@ exports.getDamageReports = async (query = {}) => {
         items: [],
         pagination: query.page !== undefined || query.limit !== undefined
           ? {
-              current_page: parsePositiveInt(query.page, 1),
-              total_pages: 0,
-              total_items: 0,
-              items_per_page: Math.min(parsePositiveInt(query.limit, 20), 100),
-            }
+            current_page: parsePositiveInt(query.page, 1),
+            total_pages: 0,
+            total_items: 0,
+            items_per_page: Math.min(parsePositiveInt(query.limit, 20), 100),
+          }
           : null,
       };
     }
@@ -531,6 +544,15 @@ exports.getDamageReports = async (query = {}) => {
       throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
     }
     filter.status = status;
+  }
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    filter.reported_by = actorIds.length === 1 ? actorIds[0] : { $in: actorIds };
   }
 
   if (query.from || query.to) {
@@ -604,9 +626,27 @@ exports.getDamageReports = async (query = {}) => {
   };
 };
 
-exports.getIncidentById = async (incidentId) => {
+exports.getIncidentById = async (incidentId, actor = null, managerScope = null) => {
   const incident = await Incident.findOne({ id: incidentId });
   if (!incident) throw createError("Incident not found", 404);
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "manager" && managerScope) {
+    if (!Array.isArray(managerScope.podIds) || !managerScope.podIds.includes(String(incident.pod_id))) {
+      throw createError("You are not allowed to access an incident out of your management scope", 403);
+    }
+  }
+
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    const isOwner = actorIds.includes(String(incident.reported_by || ""));
+    if (!isOwner) {
+      throw createError("You are not allowed to access incidents from other users", 403);
+    }
+  }
 
   const [photos, details] = await Promise.all([
     IncidentPhoto.find({ incident_id: incidentId }).select("photo_url -_id").lean(),
@@ -619,156 +659,6 @@ exports.getIncidentById = async (incidentId) => {
     incident,
     photos.map((item) => item.photo_url),
     details
-  );
-};
-
-exports.createIncidentFromCleaningTask = async (
-  { cleaning_task_id, description, severity, photo_urls = [], uploaded_photos = [] },
-  actor
-) => {
-  if (!cleaning_task_id) throw createError("cleaning_task_id is required", 400);
-
-  const normalizedDescription = String(description || "").trim();
-  if (!normalizedDescription) throw createError("description is required", 400);
-
-  const normalizedSeverity = normalizeSeverity(severity) || "MEDIUM";
-  if (!INCIDENT_SEVERITIES.includes(normalizedSeverity)) {
-    throw createError(`Invalid severity. Must be one of: ${INCIDENT_SEVERITIES.join(", ")}`, 400);
-  }
-
-  const reporterId = resolveActorId(actor);
-  if (!reporterId) throw createError("Unable to resolve reporter identity", 401);
-
-  const [task, reporter, pod] = await Promise.all([
-    ensureCleanerCanReportOnTask(cleaning_task_id, actor),
-    User.findOne({ $or: [{ id: reporterId }, { _id: reporterId }] }).select("id _id isActive").lean(),
-    CleaningTask.findOne({ id: cleaning_task_id }).select("pod_id").lean().then((t) =>
-      t ? Pod.findOne({ id: t.pod_id }).select("id code name status maintenance_status").lean() : null
-    ),
-  ]);
-
-  if (!reporter) throw createError("Reporter not found", 404);
-  if (!reporter.isActive) throw createError("Reporter is inactive", 403);
-  if (!pod) throw createError("Pod not found", 404);
-
-  const normalizedPhotoUrls = Array.isArray(photo_urls)
-    ? photo_urls.map((url) => String(url || "").trim()).filter(Boolean)
-    : [];
-
-  const normalizedUploadedPhotos = Array.isArray(uploaded_photos)
-    ? uploaded_photos
-        .filter((item) => item && item.url)
-        .map((item) => ({
-          url: String(item.url || "").trim(),
-          public_id: item.public_id ? String(item.public_id).trim() : null,
-        }))
-        .filter((item) => item.url)
-    : [];
-
-  const photoRecords = [
-    ...normalizedUploadedPhotos,
-    ...normalizedPhotoUrls.map((url) => ({ url, public_id: null })),
-  ]
-    .filter((item) => isLikelyHttpUrl(item.url))
-    .reduce((acc, item) => {
-      if (!acc.some((existing) => existing.url === item.url)) {
-        acc.push(item);
-      }
-      return acc;
-    }, []);
-
-  const session = await mongoose.startSession();
-  let incident;
-
-  try {
-    incident = await session.withTransaction(async () => {
-      const [createdIncident] = await Incident.create(
-        [
-          {
-            pod_id: task.pod_id,
-            booking_id: task.booking_id || null,
-            cleaning_task_id: task.id,
-            reported_by: reporterId,
-            description: normalizedDescription,
-            severity: normalizedSeverity,
-            status: "PENDING",
-          },
-        ],
-        { session }
-      );
-
-      if (photoRecords.length > 0) {
-        await IncidentPhoto.insertMany(
-          photoRecords.map((item) => ({
-            incident_id: createdIncident.id,
-            photo_url: item.url,
-            photo_public_id: item.public_id,
-          })),
-          { session }
-        );
-      }
-
-      if (["HIGH", "CRITICAL"].includes(normalizedSeverity)) {
-        await Pod.updateOne(
-          { id: task.pod_id },
-          {
-            $set: {
-              status: "MAINTENANCE",
-              maintenance_status: normalizedDescription.slice(0, 255),
-            },
-          },
-          { session }
-        );
-      }
-
-      return createdIncident;
-    });
-  } finally {
-    session.endSession();
-  }
-
-  const reporterRole = String(actor?.role || "").toLowerCase();
-  if (reporterRole === "cleaner") {
-    const podCode = pod?.code || pod?.name || task?.pod_id || "Unknown";
-    const cleanerUserId = String(reporter._id || "");
-
-    if (cleanerUserId) {
-      await notificationService.sendToUser(cleanerUserId, {
-        title: "Bao cao su co da duoc gui",
-        message: `Su co tai Pod ${podCode} da duoc gui toi he thong.`,
-        type: "INCIDENT",
-        event_code: "INCIDENT_REPORTED",
-        dedupe_key: `INCIDENT_REPORTED:${incident.id}:${cleanerUserId}`,
-        data: {
-          incident_id: incident.id,
-          pod_id: task.pod_id,
-          pod_code: podCode,
-          status: String(incident.status || "PENDING").toUpperCase(),
-          incident_type: String(incident.incident_type || "OPERATIONAL").toUpperCase(),
-        },
-      });
-
-      emitCleanerNotificationEvent({
-        user_id: cleanerUserId,
-        notification: {
-          event: "INCIDENT_REPORTED",
-          payload: {
-            incident_id: incident.id,
-            pod_id: task.pod_id,
-            pod_code: podCode,
-            status: String(incident.status || "PENDING").toUpperCase(),
-            incident_type: String(incident.incident_type || "OPERATIONAL").toUpperCase(),
-            title: "Bao cao su co da duoc gui",
-            message: `Su co tai Pod ${podCode} da duoc gui toi he thong.`,
-          },
-        },
-      });
-    }
-  }
-
-  return toIncidentView(
-    incident,
-    photoRecords.map((item) => item.url)
   );
 };
 
@@ -843,12 +733,12 @@ exports.createDamageReport = async (
 
   const normalizedUploadedPhotos = Array.isArray(uploaded_photos)
     ? uploaded_photos
-        .filter((item) => item && item.url)
-        .map((item) => ({
-          url: String(item.url || "").trim(),
-          public_id: item.public_id ? String(item.public_id).trim() : null,
-        }))
-        .filter((item) => item.url)
+      .filter((item) => item && item.url)
+      .map((item) => ({
+        url: String(item.url || "").trim(),
+        public_id: item.public_id ? String(item.public_id).trim() : null,
+      }))
+      .filter((item) => item.url)
     : [];
 
   const photoRecords = [
@@ -990,13 +880,15 @@ exports.createDamageReport = async (
       user_id: String(reporter.id || reporter._id || reporterId),
       user_name: reporter.name || null,
       cleaner_name: reporter.name || null,
-      },
-      resolvedDetailsData.resolved
+    },
+    resolvedDetailsData.resolved
   );
 };
 
-exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
+exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
+  const { status, resolution_note, escalation_note } = payload;
   const normalizedStatus = normalizeStatus(status);
+
   if (!INCIDENT_STATUSES.includes(normalizedStatus)) {
     throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
   }
