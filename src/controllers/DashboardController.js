@@ -10,6 +10,7 @@ const Transaction = require("../models/Transaction");
 
 const OPEN_INCIDENT_STATUSES = ["PENDING", "INVESTIGATING"];
 const SUCCESS_PAYMENT_STATUSES = ["SUCCESS"];
+const SUCCESS_ORDER_STATUSES = ["PAID"];
 
 const toDateOrNull = (value) => {
   if (!value) return null;
@@ -29,6 +30,38 @@ const getDateRange = (fromInput, toInput) => {
   const from = toDateOrNull(fromInput) || defaults.from;
   const to = toDateOrNull(toInput) || defaults.to;
   return { from, to };
+};
+
+const isValidRange = (range) =>
+  Boolean(
+    range &&
+    range.from instanceof Date &&
+    range.to instanceof Date &&
+    !Number.isNaN(range.from.getTime()) &&
+    !Number.isNaN(range.to.getTime()) &&
+    range.from <= range.to
+  );
+
+const buildDateRangeFilter = (fieldName, range) => ({
+  [fieldName]: {
+    $gte: range.from,
+    $lte: range.to,
+  },
+});
+
+const resolveRevenueGranularity = (value) => {
+  const normalized = String(value || "day").toLowerCase();
+  if (["day", "week", "month", "year"].includes(normalized)) {
+    return normalized;
+  }
+  return "day";
+};
+
+const getRevenueBucketFormat = (granularity) => {
+  if (granularity === "week") return "%G-W%V";
+  if (granularity === "month") return "%Y-%m";
+  if (granularity === "year") return "%Y";
+  return "%Y-%m-%d";
 };
 
 const buildScopedPodIds = async (locationId, clusterId) => {
@@ -122,12 +155,12 @@ exports.getDashboard = async (req, res) => {
 
     const incidents = isManager
       ? incidentsRaw.filter((incident) => {
-          const incidentPodMongoId = incident.podId || (incident.pod && incident.pod._id) || null;
-          const incidentPodBusinessId = incident.pod_id || (incident.pod && incident.pod.id) || null;
-          if (incidentPodMongoId && podMongoIdSet.has(String(incidentPodMongoId))) return true;
-          if (incidentPodBusinessId && podBusinessIdSet.has(String(incidentPodBusinessId))) return true;
-          return false;
-        })
+        const incidentPodMongoId = incident.podId || (incident.pod && incident.pod._id) || null;
+        const incidentPodBusinessId = incident.pod_id || (incident.pod && incident.pod.id) || null;
+        if (incidentPodMongoId && podMongoIdSet.has(String(incidentPodMongoId))) return true;
+        if (incidentPodBusinessId && podBusinessIdSet.has(String(incidentPodBusinessId))) return true;
+        return false;
+      })
       : incidentsRaw;
 
     const clustersTotal = isManager
@@ -578,6 +611,319 @@ exports.getAdminStats = async (req, res) => {
     return res.status(500).json({
       success: false,
       message: "Server error while fetching admin stats",
+    });
+  }
+};
+
+exports.getRevenueSeries = async (req, res) => {
+  try {
+    const { from, to, granularity } = req.query;
+    const range = getDateRange(from, to);
+
+    if (!isValidRange(range)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    const resolvedGranularity = resolveRevenueGranularity(granularity);
+    const bucketFormat = getRevenueBucketFormat(resolvedGranularity);
+
+    const points = await Transaction.aggregate([
+      {
+        $match: {
+          ...buildDateRangeFilter("created_at", range),
+          status: { $in: SUCCESS_PAYMENT_STATUSES },
+          type: { $in: ["CHARGE", "REFUND"] },
+        },
+      },
+      {
+        $group: {
+          _id: {
+            $dateToString: {
+              format: bucketFormat,
+              date: "$created_at",
+              timezone: "UTC",
+            },
+          },
+          chargeAmount: {
+            $sum: {
+              $cond: [{ $eq: ["$type", "CHARGE"] }, "$amount", 0],
+            },
+          },
+          refundAmount: {
+            $sum: {
+              $cond: [{ $eq: ["$type", "REFUND"] }, "$amount", 0],
+            },
+          },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const dataPoints = points.map((item) => {
+      const chargeAmount = Number(item.chargeAmount || 0);
+      const refundAmount = Number(item.refundAmount || 0);
+      const netRevenue = chargeAmount - refundAmount;
+
+      return {
+        label: item._id,
+        chargeAmount: Number(chargeAmount.toFixed(2)),
+        refundAmount: Number(refundAmount.toFixed(2)),
+        netRevenue: Number(netRevenue.toFixed(2)),
+      };
+    });
+
+    const totals = dataPoints.reduce(
+      (acc, point) => {
+        acc.chargeAmount += point.chargeAmount;
+        acc.refundAmount += point.refundAmount;
+        acc.netRevenue += point.netRevenue;
+        return acc;
+      },
+      {
+        chargeAmount: 0,
+        refundAmount: 0,
+        netRevenue: 0,
+      }
+    );
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        range,
+        granularity: resolvedGranularity,
+        points: dataPoints,
+        totals: {
+          chargeAmount: Number(totals.chargeAmount.toFixed(2)),
+          refundAmount: Number(totals.refundAmount.toFixed(2)),
+          netRevenue: Number(totals.netRevenue.toFixed(2)),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get revenue series error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching revenue series",
+    });
+  }
+};
+
+exports.getOrderSuccessRate = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = getDateRange(from, to);
+
+    if (!isValidRange(range)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    const dateFilter = buildDateRangeFilter("createdAt", range);
+
+    const [totalOrders, successOrders, byStatus] = await Promise.all([
+      BookingOrder.countDocuments(dateFilter),
+      BookingOrder.countDocuments({
+        ...dateFilter,
+        status: { $in: SUCCESS_ORDER_STATUSES },
+      }),
+      BookingOrder.aggregate([
+        { $match: dateFilter },
+        { $group: { _id: "$status", count: { $sum: 1 } } },
+        { $project: { _id: 0, status: "$_id", count: 1 } },
+        { $sort: { count: -1 } },
+      ]),
+    ]);
+
+    const successRate = totalOrders > 0 ? Number(((successOrders / totalOrders) * 100).toFixed(2)) : 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        range,
+        totalOrders,
+        successOrders,
+        failedOrders: Math.max(0, totalOrders - successOrders),
+        successRate,
+        byStatus,
+      },
+    });
+  } catch (error) {
+    console.error("Get order success rate error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching order success rate",
+    });
+  }
+};
+
+exports.getBookingsByCluster = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = getDateRange(from, to);
+
+    if (!isValidRange(range)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    const clusterStats = await Booking.aggregate([
+      { $match: buildDateRangeFilter("start_time", range) },
+      {
+        $lookup: {
+          from: "pods",
+          localField: "pod_id",
+          foreignField: "id",
+          as: "pod",
+        },
+      },
+      { $unwind: "$pod" },
+      {
+        $group: {
+          _id: "$pod.cluster_id",
+          bookingCount: { $sum: 1 },
+          grossRevenue: { $sum: { $ifNull: ["$total_price", 0] } },
+          statusCounts: {
+            $push: "$status",
+          },
+        },
+      },
+      {
+        $lookup: {
+          from: "podclusters",
+          localField: "_id",
+          foreignField: "id",
+          as: "cluster",
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          clusterId: "$_id",
+          clusterName: {
+            $ifNull: [{ $arrayElemAt: ["$cluster.name", 0] }, "Unknown cluster"],
+          },
+          bookingCount: 1,
+          grossRevenue: { $round: ["$grossRevenue", 2] },
+          statusCounts: 1,
+        },
+      },
+      { $sort: { bookingCount: -1 } },
+    ]);
+
+    const data = clusterStats.map((item) => {
+      const normalizedStatusCounts = (item.statusCounts || []).reduce((acc, status) => {
+        const key = status || "UNKNOWN";
+        acc[key] = (acc[key] || 0) + 1;
+        return acc;
+      }, {});
+
+      return {
+        clusterId: item.clusterId,
+        clusterName: item.clusterName,
+        bookingCount: item.bookingCount,
+        grossRevenue: Number(item.grossRevenue || 0),
+        byStatus: buildPieData(normalizedStatusCounts),
+      };
+    });
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        range,
+        clusters: data,
+        totals: {
+          bookingCount: data.reduce((sum, c) => sum + (c.bookingCount || 0), 0),
+          grossRevenue: Number(
+            data.reduce((sum, c) => sum + (Number(c.grossRevenue) || 0), 0).toFixed(2)
+          ),
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get bookings by cluster error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching bookings by cluster",
+    });
+  }
+};
+
+exports.getSummaryCards = async (req, res) => {
+  try {
+    const { from, to } = req.query;
+    const range = getDateRange(from, to);
+
+    if (!isValidRange(range)) {
+      return res.status(400).json({
+        success: false,
+        message: "Invalid date range",
+      });
+    }
+
+    const transactionMatch = {
+      ...buildDateRangeFilter("created_at", range),
+      status: { $in: SUCCESS_PAYMENT_STATUSES },
+      type: { $in: ["CHARGE", "REFUND"] },
+    };
+
+    const [transactionTotals, totalOrders, successOrders, totalBookings, totalClusters] = await Promise.all([
+      Transaction.aggregate([
+        { $match: transactionMatch },
+        {
+          $group: {
+            _id: null,
+            chargeAmount: {
+              $sum: {
+                $cond: [{ $eq: ["$type", "CHARGE"] }, "$amount", 0],
+              },
+            },
+            refundAmount: {
+              $sum: {
+                $cond: [{ $eq: ["$type", "REFUND"] }, "$amount", 0],
+              },
+            },
+          },
+        },
+      ]),
+      BookingOrder.countDocuments(buildDateRangeFilter("createdAt", range)),
+      BookingOrder.countDocuments({
+        ...buildDateRangeFilter("createdAt", range),
+        status: { $in: SUCCESS_ORDER_STATUSES },
+      }),
+      Booking.countDocuments(buildDateRangeFilter("start_time", range)),
+      PodCluster.countDocuments({}),
+    ]);
+
+    const chargeAmount = Number(transactionTotals[0]?.chargeAmount || 0);
+    const refundAmount = Number(transactionTotals[0]?.refundAmount || 0);
+    const successRate = totalOrders > 0 ? Number(((successOrders / totalOrders) * 100).toFixed(2)) : 0;
+
+    return res.status(200).json({
+      success: true,
+      data: {
+        range,
+        cards: {
+          netRevenue: Number((chargeAmount - refundAmount).toFixed(2)),
+          totalBookings,
+          totalOrders,
+          successfulOrders: successOrders,
+          orderSuccessRate: successRate,
+          totalClusters,
+        },
+      },
+    });
+  } catch (error) {
+    console.error("Get summary cards error:", error);
+    return res.status(500).json({
+      success: false,
+      message: "Server error while fetching summary cards",
     });
   }
 };

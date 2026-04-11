@@ -19,12 +19,44 @@ const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
 const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+const POD_TYPE_STANDARD = "STANDARD";
+const POD_TYPE_SERVICE = "SERVICE";
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  _normalizeRole(role) {
+    return String(role || "").trim().toLowerCase();
+  }
+
+  _normalizePodType(type) {
+    return String(type || "").trim().toUpperCase();
+  }
+
+  _isPodTypeAllowedForRole(role, podType) {
+    const normalizedRole = this._normalizeRole(role);
+    const normalizedType = this._normalizePodType(podType);
+
+    if (normalizedRole === "user") {
+      return normalizedType === POD_TYPE_STANDARD;
+    }
+
+    return [POD_TYPE_STANDARD, POD_TYPE_SERVICE].includes(normalizedType);
+  }
+
+  _buildPodTypeNotAllowedError(role, podType) {
+    const normalizedRole = this._normalizeRole(role) || "unknown";
+    const normalizedType = this._normalizePodType(podType) || "UNKNOWN";
+    const error = new Error(
+      `Role ${normalizedRole} is not allowed to use pod type ${normalizedType} for booking`
+    );
+    error.statusCode = 403;
+    error.errorCode = "POD_TYPE_NOT_ALLOWED_FOR_ROLE";
+    return error;
+  }
+
   _createError(message, statusCode, errorCode) {
     const error = new Error(message);
     error.statusCode = statusCode;
@@ -460,7 +492,7 @@ class BookingService {
    * @param {Object} bookingData - Booking data
    * @returns {Promise<Object>} Created booking
    */
-  async createBooking(bookingData) {
+  async createBooking(bookingData, actor = null) {
     const {
       order_id,
       user_id,
@@ -487,6 +519,10 @@ class BookingService {
     const pod = await Pod.findOne({ id: pod_id });
     if (!pod) {
       throw new Error("Pod not found");
+    }
+
+    if (!this._isPodTypeAllowedForRole(actor?.role, pod.type)) {
+      throw this._buildPodTypeNotAllowedError(actor?.role, pod.type);
     }
 
     // Check pod availability
@@ -908,7 +944,7 @@ class BookingService {
 
         if (needsManualSync) {
           booking.checkin_state = "MANUAL_CHECKED_IN";
-          booking.checked_in_at = booking.checked_in_at || new Date();
+          booking.checked_in_at = new Date();
           booking.checkin_source = "USER_QR";
           booking.no_show_marked_at = null;
           await booking.save();
@@ -1091,7 +1127,18 @@ class BookingService {
    * @param {Date} endTime - End time
    * @returns {Promise<Boolean>} True if available
    */
-  async checkAvailability(podId, startTime, endTime) {
+  async checkAvailability(podId, startTime, endTime, actor = null) {
+    const pod = await Pod.findOne({ id: podId }).select("id type").lean();
+    if (!pod) {
+      const error = new Error("Pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!this._isPodTypeAllowedForRole(actor?.role, pod.type)) {
+      throw this._buildPodTypeNotAllowedError(actor?.role, pod.type);
+    }
+
     return await Booking.isPodAvailable(podId, startTime, endTime);
   }
 

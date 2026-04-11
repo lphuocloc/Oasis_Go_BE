@@ -733,24 +733,6 @@ router.patch("/update-fcm-token", protect, authController.handleUpdateToken);
 // Đăng xuất (Để xóa token trong DB)
 router.post("/reset-fcmToken", protect, authController.handleLogout);
 
-// Route: POST /api/auth/test-push
-router.post("/test-push", protect, async (req, res) => {
-  const { title, body } = req.body;
-
-  const result = await notificationService.sendToUser(req.user.id, {
-    title: title || "Thông báo từ Backend",
-    message: body || "Hệ thống đã kết nối thành công!",
-    type: "SYSTEM",
-    event_code: "SYSTEM_TEST",
-    data: { type: "SYSTEM_TEST", url: "/home" },
-  });
-
-  if (result.success) {
-    res.json({ message: "Đã gửi yêu cầu thông báo!", result });
-  } else {
-    res.status(500).json({ message: "Gửi thất bại", error: result.error });
-  }
-});
 
 /**
  * @swagger
