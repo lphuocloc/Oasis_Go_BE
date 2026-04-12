@@ -3,6 +3,8 @@ const expo = new Expo();
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 
+const EXPO_NOTIFICATION_CHANNEL_ID = String(process.env.EXPO_NOTIFICATION_CHANNEL_ID || "default").trim();
+
 class NotificationService {
   _normalizeNotificationPayload(payload = {}) {
     const title = String(payload.title || "").trim();
@@ -42,7 +44,7 @@ class NotificationService {
         title,
         body,
         data: this._sanitizePushData(data),
-        channelId: "queanh_test_noti",
+        channelId: EXPO_NOTIFICATION_CHANNEL_ID || "default",
         priority: "high",
       },
     ];

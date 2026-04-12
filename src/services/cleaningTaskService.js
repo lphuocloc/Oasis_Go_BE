@@ -533,6 +533,56 @@ const notifyCleanerTaskAssigned = async (task, options = {}) => {
   });
 };
 
+const emitCleaningTaskStatusChangedRealtime = async ({
+  task,
+  previousStatus,
+  previousCleanerId = null,
+}) => {
+  if (!task) return;
+
+  const nextStatus = String(task.status || "");
+  const prevStatus = String(previousStatus || "");
+  if (!nextStatus || nextStatus === prevStatus) {
+    return;
+  }
+
+  const cleanerCandidates = [
+    previousCleanerId,
+    task.cleaner_id,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value));
+
+  const uniqueCleanerIds = [...new Set(cleanerCandidates)];
+  if (uniqueCleanerIds.length === 0) {
+    return;
+  }
+
+  const cleanerUserIds = await Promise.all(uniqueCleanerIds.map((identity) => resolveNotificationUserId(identity)));
+
+  cleanerUserIds
+    .filter(Boolean)
+    .forEach((userId) => {
+      emitCleanerNotificationEvent({
+        user_id: userId,
+        notification: {
+          event: "CLEANING_TASK_STATUS_CHANGED",
+          payload: {
+            cleaning_task_id: String(task.id),
+            booking_id: task.booking_id ? String(task.booking_id) : null,
+            pod_id: task.pod_id ? String(task.pod_id) : null,
+            cleaner_id: task.cleaner_id ? String(task.cleaner_id) : null,
+            previous_status: prevStatus || null,
+            status: nextStatus,
+            note: task.note || null,
+            rejection_reason: task.rejection_reason || null,
+            updated_at: new Date().toISOString(),
+          },
+        },
+      });
+    });
+};
+
 const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = [], options = {}) => {
   if (!Array.isArray(assignments) || assignments.length === 0) return null;
   if (!Array.isArray(eligibleCleanerIds) || eligibleCleanerIds.length === 0) return null;
@@ -1776,6 +1826,14 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   if (statusChangedToDispatchable || cleanerChangedAfterSave) {
     await notifyCleanerTaskAssigned(task, {
       dedupeSuffix: cleanerChangedAfterSave ? "REASSIGNED" : "STATUS_UPDATED",
+    });
+  }
+
+  if (previousStatus !== task.status) {
+    await emitCleaningTaskStatusChangedRealtime({
+      task,
+      previousStatus,
+      previousCleanerId,
     });
   }
 
