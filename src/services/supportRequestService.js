@@ -5,6 +5,7 @@ const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
+const PodQrCode = require("../models/PodQrCode");
 const SupportRequest = require("../models/SupportRequest");
 const TimeSlot = require("../models/TimeSlot");
 const User = require("../models/User");
@@ -12,9 +13,10 @@ const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const LocationShift = require("../models/LocationShift");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const { getSocketServer } = require("../socket/socketServer");
 
-const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD", "CLEANING"];
-const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"];
+const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
+const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED"];
 const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
 const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
@@ -512,6 +514,32 @@ class SupportRequestService {
     };
   }
 
+  async getSupportRequestById(requestId, actor, managerScope) {
+    const role = this._getActorRole(actor);
+    const actorId = this._getActorId(actor);
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId })
+      .populate("booking", "id user_id pod_id status start_time end_time")
+      .populate("handler", "_id name email role")
+      .populate("user", "_id id name email role");
+
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    if (role === "user") {
+      if (String(supportRequest.user_id) !== actorId) {
+        throw createError("Not authorized to view this support request", 403);
+      }
+    } else if (role === "manager") {
+      await this._assertManagerScopeAccess(supportRequest, managerScope);
+    } else {
+      throw createError("Not authorized to view support requests", 403);
+    }
+
+    return supportRequest;
+  }
+
   async updateSupportRequestStatus(requestId, actor, managerScope, payload = {}) {
     const actorId = this._getActorId(actor);
     const actorRole = this._getActorRole(actor);
@@ -540,12 +568,13 @@ class SupportRequestService {
 
     const currentStatus = normalizeSupportStatus(supportRequest.status);
     const allowedTransitions = {
-      PENDING: ["PROCESSING", "REJECTED"],
-      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED"],
+      PENDING: ["PROCESSING", "REJECTED", "CANCELED"],
+      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED", "CANCELED"],
       IN_PROGRESS: ["ESCALATED", "RESOLVED", "REJECTED"],
       ESCALATED: ["IN_PROGRESS", "RESOLVED", "REJECTED"],
       RESOLVED: [],
       REJECTED: [],
+      CANCELED: [],
     };
 
     if (currentStatus !== normalizedStatus) {
@@ -599,6 +628,15 @@ class SupportRequestService {
     if (normalizedStatus === "ESCALATED") {
       const booking = await Booking.findOne({ id: supportRequest.booking_id }).select("id").lean();
       await this._notifyAdminsForEscalation(supportRequest, booking);
+    }
+
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${supportRequest.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+      });
     }
 
     return supportRequest;
@@ -708,13 +746,15 @@ class SupportRequestService {
     }
 
     const [currentCluster, nextCluster] = await Promise.all([
-      PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id"),
-      PodCluster.findOne({ id: nextPod.cluster_id }).select("id location_id"),
+      PodCluster.findOne({ id: currentPod.cluster_id }).select("id name location_id"),
+      PodCluster.findOne({ id: nextPod.cluster_id }).select("id name location_id"),
     ]);
 
     if (!currentCluster || !nextCluster) {
       throw createError("Pod cluster not found", 404);
     }
+
+    const nextLocation = await Location.findOne({ id: nextCluster.location_id }).select("id name");
 
     const currentParent = await this._resolveTopParentLocationId(currentCluster.location_id);
     const nextParent = await this._resolveTopParentLocationId(nextCluster.location_id);
@@ -822,18 +862,45 @@ class SupportRequestService {
       await this._notifyAdminsForEscalation(supportRequest, booking);
     }
 
+    const latestPodQr = await PodQrCode.findOne({
+      pod_id: nextPod.id,
+      is_active: true,
+      expires_at: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    const newPodQrToken = latestPodQr ? latestPodQr.qr_token : null;
+
+    const roomChangeData = {
+      support_request_id: supportRequest.id,
+      booking_id: booking.id,
+      old_pod_id: currentPod.id,
+      new_pod_id: nextPod.id,
+      new_pod_code: nextPod.code,
+      new_pod_name: nextPod.name,
+      new_cluster_id: nextCluster.id,
+      new_cluster_name: nextCluster.name,
+      new_location_id: nextLocation ? nextLocation.id : nextCluster.location_id,
+      new_location_name: nextLocation ? nextLocation.name : null,
+      new_pod_qr_token: newPodQrToken,
+    };
+
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${booking.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+        room_change_data: roomChangeData
+      });
+    }
+
     await notificationService.sendToUser(booking.user_id, {
       title: "Support request room changed",
       message: "Manager moved your booking to a new pod. Please check updated details.",
       type: "SUPPORT",
       event_code: "SUPPORT_ROOM_CHANGED",
       dedupe_key: `SUPPORT_ROOM_CHANGED:${supportRequest.id}:${booking.id}`,
-      data: {
-        support_request_id: supportRequest.id,
-        booking_id: booking.id,
-        old_pod_id: currentPod.id,
-        new_pod_id: nextPod.id,
-      },
+      data: roomChangeData,
     });
 
     return {
@@ -841,9 +908,46 @@ class SupportRequestService {
       booking,
       old_pod: currentPod,
       new_pod: nextPod,
+      new_pod_qr_token: newPodQrToken,
       buffer_minutes_applied: bufferMinutes,
       escalated_to_admin: supportRequest.status === "ESCALATED",
     };
+  }
+
+  async cancelSupportRequest(requestId, actor) {
+    const actorId = this._getActorId(actor);
+
+    if (this._getActorRole(actor) !== "user") {
+      throw createError("Only users can cancel their support request", 403);
+    }
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId });
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    if (String(supportRequest.user_id) !== actorId) {
+      throw createError("Not authorized to cancel this request", 403);
+    }
+
+    const currentStatus = normalizeSupportStatus(supportRequest.status);
+    if (!["PENDING", "PROCESSING"].includes(currentStatus)) {
+      throw createError(`Cannot cancel request in ${currentStatus} status`, 400);
+    }
+
+    supportRequest.status = "CANCELED";
+    await supportRequest.save();
+
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${supportRequest.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+      });
+    }
+
+    return supportRequest;
   }
 }
 

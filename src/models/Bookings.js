@@ -105,7 +105,7 @@ const bookingSchema = new mongoose.Schema(
     timestamps: true,
     toJSON: { virtuals: true },
     toObject: { virtuals: true },
-  }
+  },
 );
 
 // Indexes for efficient queries
@@ -153,11 +153,15 @@ bookingSchema.methods.startUsing = async function () {
 
   const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
   const now = Date.now();
-  const startWindow = new Date(this.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS;
-  const endWindow = new Date(this.start_time).getTime() + CHECKIN_GRACE_PERIOD_MS;
+  const startWindow =
+    new Date(this.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS;
+  const endWindow =
+    new Date(this.start_time).getTime() + CHECKIN_GRACE_PERIOD_MS;
 
   if (now < startWindow || now > endWindow) {
-    throw new Error("Check-in is only allowed from 15 minutes before start_time to 15 minutes after start_time");
+    throw new Error(
+      "Check-in is only allowed from 15 minutes before start_time to 15 minutes after start_time",
+    );
   }
 
   this.status = "IN_USE";
@@ -218,16 +222,21 @@ bookingSchema.statics.getByOrder = async function (orderId) {
 };
 
 // Static method to check pod availability
-bookingSchema.statics.isPodAvailable = async function (podId, startTime, endTime, excludeBookingId = null) {
+bookingSchema.statics.isPodAvailable = async function (
+  podId,
+  startTime,
+  endTime,
+  excludeBookingId = null,
+) {
   const query = {
     pod_id: podId,
     status: { $in: ["BOOKED", "IN_USE"] },
     $or: [
       {
         start_time: { $lt: new Date(endTime) },
-        end_time: { $gt: new Date(startTime) }
-      }
-    ]
+        end_time: { $gt: new Date(startTime) },
+      },
+    ],
   };
 
   if (excludeBookingId) {

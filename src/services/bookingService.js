@@ -18,6 +18,7 @@ const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
+const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
@@ -870,10 +871,28 @@ class BookingService {
         throw error;
       }
 
-      let booking = candidateBookings.find((item) => item.status === "BOOKED");
-      if (!booking) {
-        booking = candidateBookings.find((item) => item.status === "IN_USE") || candidateBookings[0];
-      }
+      const nowMs = now.getTime();
+      const inUseBooking = candidateBookings.find((item) => item.status === "IN_USE");
+      const bookedInWindow = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        const startMs = new Date(item.start_time).getTime();
+        return nowMs >= startMs - CHECKIN_GRACE_PERIOD_MS && nowMs <= startMs + CHECKIN_GRACE_PERIOD_MS;
+      });
+      const latestPastBooked = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        return new Date(item.start_time).getTime() <= nowMs;
+      });
+      const earliestFutureBooked = [...candidateBookings]
+        .filter((item) => item.status === "BOOKED" && new Date(item.start_time).getTime() > nowMs)
+        .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+
+      // Priority: active session -> valid check-in window booking -> nearest past booking -> nearest future booking.
+      const booking =
+        inUseBooking ||
+        bookedInWindow ||
+        latestPastBooked ||
+        earliestFutureBooked ||
+        candidateBookings[0];
 
       if (booking.checkin_state === "NO_SHOW") {
         const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");

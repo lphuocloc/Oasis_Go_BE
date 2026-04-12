@@ -31,7 +31,9 @@ exports.getAllPodClusters = async (req, res) => {
 // @access  Public
 exports.getPodClusterById = async (req, res) => {
   try {
-    const podCluster = await podClusterService.getPodClusterById(req.params.id);
+    const podCluster = await podClusterService.getPodClusterById(req.params.id, {
+      at: req.query.at,
+    });
 
     res.status(200).json({
       success: true,

@@ -79,6 +79,10 @@ const resolveActorId = (actor) => {
   return ids.length > 0 ? ids[0] : null;
 };
 
+const resolveActorIdentityIds = (actor) => {
+  return [...new Set([actor?.id, actor?._id].filter(Boolean).map((id) => String(id)))];
+};
+
 const parseIncidentDetailsPayload = ({ details }) => {
   let parsedDetails = details;
 
@@ -440,7 +444,7 @@ const buildIncidentIdsByItemFilter = async (itemId) => {
   return [...new Set(matchedIncidentIds.map((id) => String(id)).filter(Boolean))];
 };
 
-exports.getIncidents = async (filters = {}) => {
+exports.getIncidents = async (filters = {}, actor = null) => {
   const query = {};
 
   if (filters.pod_ids) {
@@ -471,6 +475,15 @@ exports.getIncidents = async (filters = {}) => {
     query.status = status;
   }
 
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    query.reported_by = actorIds.length === 1 ? actorIds[0] : { $in: actorIds };
+  }
+
   const incidents = await Incident.find(query).sort({ created_at: -1 });
   if (incidents.length === 0) return [];
 
@@ -485,7 +498,7 @@ exports.getIncidents = async (filters = {}) => {
   );
 };
 
-exports.getDamageReports = async (query = {}) => {
+exports.getDamageReports = async (query = {}, actor = null) => {
   const filter = {
     incident_type: "DAMAGE_REPORT",
   };
@@ -531,6 +544,15 @@ exports.getDamageReports = async (query = {}) => {
       throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
     }
     filter.status = status;
+  }
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    filter.reported_by = actorIds.length === 1 ? actorIds[0] : { $in: actorIds };
   }
 
   if (query.from || query.to) {
@@ -604,9 +626,27 @@ exports.getDamageReports = async (query = {}) => {
   };
 };
 
-exports.getIncidentById = async (incidentId) => {
+exports.getIncidentById = async (incidentId, actor = null, managerScope = null) => {
   const incident = await Incident.findOne({ id: incidentId });
   if (!incident) throw createError("Incident not found", 404);
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole === "manager" && managerScope) {
+    if (!Array.isArray(managerScope.podIds) || !managerScope.podIds.includes(String(incident.pod_id))) {
+      throw createError("You are not allowed to access an incident out of your management scope", 403);
+    }
+  }
+
+  if (actorRole === "cleaner") {
+    const actorIds = resolveActorIdentityIds(actor);
+    if (actorIds.length === 0) {
+      throw createError("Unable to resolve actor identity", 401);
+    }
+    const isOwner = actorIds.includes(String(incident.reported_by || ""));
+    if (!isOwner) {
+      throw createError("You are not allowed to access incidents from other users", 403);
+    }
+  }
 
   const [photos, details] = await Promise.all([
     IncidentPhoto.find({ incident_id: incidentId }).select("photo_url -_id").lean(),

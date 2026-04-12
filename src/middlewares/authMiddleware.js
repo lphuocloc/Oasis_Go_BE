@@ -28,7 +28,6 @@ exports.protect = async (req, res, next) => {
 
       // Tìm user từ token (không lấy password)
       const user = await User.findById(decoded.id).select("-password");
-      console.log("user be", user);
 
       if (!user) {
         return res.status(401).json({

@@ -1,6 +1,8 @@
 const PodCluster = require("../models/PodCluster");
 const PodClusterImage = require("../models/PodClusterImage");
 const Location = require("../models/Location");
+const Pod = require("../models/Pod");
+const PricingRule = require("../models/PricingRule");
 const Review = require("../models/Review");
 const { LEAF_TYPES } = require("./locationService");
 const voucherService = require("./voucherService");
@@ -13,6 +15,71 @@ const DEFAULT_RATING_STATS = {
 };
 
 class PodClusterService {
+  _toUtcDate(value) {
+    if (!value) return new Date();
+    const date = value instanceof Date ? value : new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      const error = new Error(
+        "Invalid 'at' datetime. Expected UTC ISO-8601 format.",
+      );
+      error.statusCode = 400;
+      throw error;
+    }
+    return date;
+  }
+
+  _formatEffectiveRule(rule = null) {
+    if (!rule) return null;
+
+    const multiplier = Number(rule.multiplier ?? rule.price_modifier ?? 1);
+
+    return {
+      id: rule.id,
+      scope: rule.pod_id ? "POD" : "LOCATION",
+      multiplier,
+      applied_modifier: multiplier,
+      start_time: rule.start_time,
+      end_time: rule.end_time,
+      days_of_week: rule.days_of_week,
+    };
+  }
+
+  async _buildPricingSummary({ clusterId, locationId, at }) {
+    const queriedAt = this._toUtcDate(at);
+
+    const [locationRules, pods] = await Promise.all([
+      PricingRule.find({ location_id: locationId, is_active: true }).sort({
+        createdAt: -1,
+      }),
+      Pod.find({ cluster_id: clusterId }).select("id").lean(),
+    ]);
+
+    const podIds = pods.map((pod) => String(pod.id)).filter(Boolean);
+    const podRules =
+      podIds.length > 0
+        ? await PricingRule.find({
+            pod_id: { $in: podIds },
+            is_active: true,
+          }).sort({ createdAt: -1 })
+        : [];
+
+    const matchedLocationRules = locationRules.filter((rule) =>
+      rule.matchesUtcDate(queriedAt),
+    );
+    const matchedPodRules = podRules.filter((rule) =>
+      rule.matchesUtcDate(queriedAt),
+    );
+
+    const effectiveRule = matchedPodRules[0] || matchedLocationRules[0] || null;
+
+    return {
+      queried_at_utc: queriedAt.toISOString(),
+      has_location_rule: matchedLocationRules.length > 0,
+      has_pod_rule: matchedPodRules.length > 0,
+      effective_rule: this._formatEffectiveRule(effectiveRule),
+    };
+  }
+
   /**
    * Lấy tất cả pod clusters với filters
    */
@@ -123,7 +190,7 @@ class PodClusterService {
   /**
    * Lấy pod cluster theo ID
    */
-  async getPodClusterById(clusterId) {
+  async getPodClusterById(clusterId, options = {}) {
     const podCluster = await PodCluster.findOne({ id: clusterId }).populate(
       "location",
     );
@@ -143,6 +210,11 @@ class PodClusterService {
     const podClusterObj = podCluster.toObject();
     podClusterObj.images = images;
     podClusterObj.rating = await Review.getClusterStats(clusterId);
+    podClusterObj.pricing_summary = await this._buildPricingSummary({
+      clusterId,
+      locationId: podCluster.location_id,
+      at: options.at,
+    });
 
     return podClusterObj;
   }
