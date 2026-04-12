@@ -484,6 +484,7 @@ class PodClusterService {
   }
 
   // --- HÀM TÍNH KHOẢNG CÁCH (HAVERSINE FORMULA) ---
+  // --- HÀM TÍNH KHOẢNG CÁCH (HAVERSINE FORMULA) ---
   _calculateDistance(lat1, lon1, lat2, lon2) {
     const R = 6371; // km
     const dLat = ((lat2 - lat1) * Math.PI) / 180;
@@ -501,6 +502,7 @@ class PodClusterService {
   // --- HÀM GỢI Ý CỤM POD (RECOMMENDATIONS) ---
   async getRecommendations(userLocation, priority = "balanced") {
     const UNIT_PRICE = 10000;
+    const now = new Date(); // Lấy thời gian hiện tại để so sánh voucher
 
     const [allLocations, voucherData] = await Promise.all([
       Location.find({ isActive: true }).lean(),
@@ -510,12 +512,17 @@ class PodClusterService {
     const locationMap = new Map(
       allLocations.map((loc) => [loc.id.toString(), loc]),
     );
-    const allVouchers = voucherData.items || [];
 
-    // Lấy data từ chính hàm trong class để đảm bảo có đủ ảnh và rating
+    // --- 1. LỌC VOUCHER "SẠCH" (CÒN HẠN, CÒN LƯỢT) ---
+    const validVouchers = (voucherData.items || []).filter((v) => {
+      const isStarted = v.valid_from ? new Date(v.valid_from) <= now : true;
+      const isNotExpired = v.valid_to ? new Date(v.valid_to) >= now : true;
+      const hasUsageLeft = v.usage_limit ? v.usage_count < v.usage_limit : true;
+      return isStarted && isNotExpired && hasUsageLeft && v.is_active;
+    });
+
     const clusters = await this.getAllPodClusters({});
 
-    // Bảng trọng số đã tinh chỉnh: Price có trọng số rất cao khi chọn lọc giá
     const WEIGHTS = {
       balanced: { dist: 40, promo: 30, price: 30 },
       distance: { dist: 90, promo: 5, price: 5 },
@@ -526,9 +533,14 @@ class PodClusterService {
 
     let processed = clusters.map((cluster) => {
       let score = 0;
-      const originalPrice = (cluster.base_price_modifier || 0) * UNIT_PRICE;
 
-      // --- LOGIC TÌM TỌA ĐỘ ---
+      // --- 2. TÍNH GIÁ HIỆN TẠI (THEO KHUNG GIỜ) ---
+      const multiplier =
+        cluster.pricing_summary?.effective_rule?.multiplier || 1;
+      const originalPrice =
+        (cluster.base_price_modifier || 0) * UNIT_PRICE * multiplier;
+
+      // --- 3. LOGIC TÌM TỌA ĐỘ ---
       let finalLat = null,
         finalLng = null;
       let currentLoc = locationMap.get(cluster.location_id?.toString());
@@ -543,23 +555,27 @@ class PodClusterService {
           : null;
       }
 
-      // --- TÍNH KHOẢNG CÁCH ---
+      // --- 4. TÍNH KHOẢNG CÁCH ---
       let distance = null;
-      const uLat = userLocation?.latitude;
-      const uLng = userLocation?.longitude;
-      if (uLat && uLng && finalLat && finalLng) {
+      if (
+        userLocation?.latitude &&
+        userLocation?.longitude &&
+        finalLat &&
+        finalLng
+      ) {
         distance = this._calculateDistance(
-          Number(uLat),
-          Number(uLng),
+          Number(userLocation.latitude),
+          Number(userLocation.longitude),
           Number(finalLat),
           Number(finalLng),
         );
       }
 
-      // --- TÍNH VOUCHER TỐT NHẤT ---
+      // --- 5. TÍNH VOUCHER TỐT NHẤT TRÊN TỔNG ĐƠN ---
+      // (Vì voucher tính theo tổng đơn, ta so sánh originalPrice với min_booking_value)
       let bestDiscount = 0;
       let bestVoucher = null;
-      allVouchers.forEach((v) => {
+      validVouchers.forEach((v) => {
         if (originalPrice >= v.min_booking_value) {
           let d =
             v.discount_type === "PERCENT"
@@ -578,24 +594,20 @@ class PodClusterService {
       const finalPrice = Math.max(0, originalPrice - bestDiscount);
       const discountPct = originalPrice > 0 ? bestDiscount / originalPrice : 0;
 
-      // --- TÍNH TOÁN SCORE CHI TIẾT ---
-      // 1. Điểm khoảng cách (Càng gần điểm càng cao)
+      // --- 6. TÍNH TOÁN SCORE ---
       if (distance !== null) {
         score += Math.max(0, currentWeight.dist - distance * 4);
-        if (distance < 1.5) score += 30; // Bonus cho bán kính đi bộ
+        if (distance < 1.5) score += 30; // Thưởng khoảng cách đi bộ
       }
 
-      // 2. Điểm khuyến mãi
       score += discountPct * currentWeight.promo;
 
-      // 3. ĐIỂM GIÁ RẺ (Nghịch đảo giá trị)
-      // Giá càng thấp so với mốc 1 triệu thì điểm cộng vào Score càng cao
       if (currentWeight.price > 0) {
-        const priceInverseFactor = Math.max(0, (1000000 - finalPrice) / 10000);
+        // Nghịch đảo giá: Pod càng rẻ so với mốc 200k thì điểm càng cao
+        const priceInverseFactor = Math.max(0, (200000 - finalPrice) / 2000);
         score += priceInverseFactor * (currentWeight.price / 100);
       }
 
-      // Tie-breaker
       if (distance !== null) score += 0.001 / (distance + 0.1);
 
       return {
@@ -605,23 +617,18 @@ class PodClusterService {
         distance: distance !== null ? parseFloat(distance.toFixed(2)) : null,
         discount_pct: discountPct,
         best_voucher: bestVoucher
-          ? {
-              code: bestVoucher.code,
-              discount_amount: bestDiscount,
-            }
+          ? { code: bestVoucher.code, discount_amount: bestDiscount }
           : null,
         recommendation_score: parseFloat(score.toFixed(3)),
         suggestion_tags: [],
       };
     });
 
-    // --- SẮP XẾP VÀ GẮN TAG ---
+    // --- 7. SẮP XẾP VÀ GẮN TAG ---
     if (processed.length > 0) {
       if (priority === "price") {
-        // Nếu chọn Price, ưu tiên tuyệt đối thằng rẻ nhất lên đầu
         processed.sort((a, b) => a.final_price - b.final_price);
       } else {
-        // Các trường hợp khác dùng điểm tổng hợp
         processed.sort(
           (a, b) => b.recommendation_score - a.recommendation_score,
         );
@@ -629,26 +636,21 @@ class PodClusterService {
 
       processed = processed.slice(0, 4);
 
+      const minPrice = Math.min(...processed.map((c) => c.final_price));
       const validDistances = processed
         .filter((c) => c.distance !== null)
         .map((c) => c.distance);
       const minDistance =
         validDistances.length > 0 ? Math.min(...validDistances) : null;
-      const minPrice = Math.min(...processed.map((c) => c.final_price));
 
       processed = processed.map((c, index) => {
         const tags = [];
-
-        // Tag dành cho vị trí số 1
-        if (index === 0) {
-          if (priority === "price") tags.push("GIÁ TỐT NHẤT");
-          else tags.push("PHÙ HỢP NHẤT");
-        }
-
+        if (index === 0)
+          tags.push(priority === "price" ? "GIÁ TỐT" : "PHÙ HỢP");
         if (minDistance !== null && c.distance === minDistance)
-          tags.push("GẦN BẠN NHẤT");
+          tags.push("GẦN BẠN");
         if (c.final_price === minPrice && priority !== "price")
-          tags.push("GIÁ RẺ NHẤT");
+          tags.push("GIÁ RẺ");
         if (c.discount_pct >= 0.2) tags.push("ƯU ĐÃI KHỦNG");
 
         return { ...c, suggestion_tags: tags };
