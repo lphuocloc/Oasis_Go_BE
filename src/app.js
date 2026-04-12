@@ -22,6 +22,7 @@ bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace pe
 
 const cleaningTaskService = require("./services/cleaningTaskService");
 const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
+const debtService = require("./services/debtService");
 if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
   cleaningTaskService.startBackfillJob(
     Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
@@ -45,6 +46,12 @@ if (String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() === "
   staffShiftAssignmentService.startShiftReminderJob(
     Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
     Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30)
+  );
+}
+
+if (String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true") {
+  debtService.startAgingDebtJob(
+    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24)
   );
 }
 

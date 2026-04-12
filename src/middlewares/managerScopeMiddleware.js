@@ -194,7 +194,22 @@ const applyManagerBookingScope = (req, res, next) => {
   }
 
   const scopedPodIds = (req.managerScope && req.managerScope.podIds) || [];
-  req.query.pod_ids = scopedPodIds.join(",");
+  let requestedIds = [];
+  
+  if (req.query.pod_ids) {
+    requestedIds = String(req.query.pod_ids).split(",");
+  } else if (req.query.pod_id) {
+    requestedIds = [String(req.query.pod_id)];
+  }
+
+  if (requestedIds.length > 0) {
+    const intersection = requestedIds.filter(id => scopedPodIds.includes(id));
+    req.query.pod_ids = intersection.join(",");
+  } else {
+    req.query.pod_ids = scopedPodIds.join(",");
+  }
+
+  delete req.query.pod_id;
 
   next();
 };
@@ -209,7 +224,13 @@ const applyManagerLocationScope = (req, res, next) => {
   }
 
   const scopedLocationIds = (req.managerScope && req.managerScope.locationIds) || [];
-  req.query.scope_location_ids = scopedLocationIds.join(",");
+  if (req.query.scope_location_ids) {
+    const requestedIds = String(req.query.scope_location_ids).split(",");
+    const intersection = requestedIds.filter(id => scopedLocationIds.includes(id));
+    req.query.scope_location_ids = intersection.join(",");
+  } else {
+    req.query.scope_location_ids = scopedLocationIds.join(",");
+  }
   next();
 };
 
@@ -223,7 +244,13 @@ const applyManagerPodScope = (req, res, next) => {
   }
 
   const scopedPodIds = (req.managerScope && req.managerScope.podIds) || [];
-  req.query.pod_ids = scopedPodIds.join(",");
+  if (req.query.pod_ids) {
+    const requestedIds = String(req.query.pod_ids).split(",");
+    const intersection = requestedIds.filter(id => scopedPodIds.includes(id));
+    req.query.pod_ids = intersection.join(",");
+  } else {
+    req.query.pod_ids = scopedPodIds.join(",");
+  }
   next();
 };
 

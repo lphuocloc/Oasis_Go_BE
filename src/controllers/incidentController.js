@@ -158,7 +158,7 @@ exports.getIncidentById = async (req, res) => {
 exports.updateIncidentStatus = async (req, res) => {
   try {
     const actor = req.user ? { ...req.user, managerScope: req.managerScope } : null;
-    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body.status, actor);
+    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body, actor);
     res.status(200).json({
       success: true,
       message: "Incident status updated successfully",

@@ -27,6 +27,120 @@ router.get("/stats", protect, authorize("admin"), dashboardController.getAdminSt
 
 /**
  * @swagger
+ * /api/admin/dashboard/revenue-series:
+ *   get:
+ *     summary: Get net revenue series for admin dashboard
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Start datetime (ISO-8601)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: End datetime (ISO-8601)
+ *       - in: query
+ *         name: granularity
+ *         schema:
+ *           type: string
+ *           enum: [day, week, month, year]
+ *         description: Grouping unit for the series
+ *     responses:
+ *       200:
+ *         description: Revenue series data
+ */
+router.get("/dashboard/revenue-series", protect, authorize("admin"), dashboardController.getRevenueSeries);
+
+/**
+ * @swagger
+ * /api/admin/dashboard/order-success-rate:
+ *   get:
+ *     summary: Get order success rate for admin dashboard
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Start datetime (ISO-8601)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: End datetime (ISO-8601)
+ *     responses:
+ *       200:
+ *         description: Order success rate metrics
+ */
+router.get("/dashboard/order-success-rate", protect, authorize("admin"), dashboardController.getOrderSuccessRate);
+
+/**
+ * @swagger
+ * /api/admin/dashboard/bookings-by-cluster:
+ *   get:
+ *     summary: Get booking volume and gross revenue by cluster
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Start datetime (ISO-8601)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: End datetime (ISO-8601)
+ *     responses:
+ *       200:
+ *         description: Booking statistics grouped by cluster
+ */
+router.get("/dashboard/bookings-by-cluster", protect, authorize("admin"), dashboardController.getBookingsByCluster);
+
+/**
+ * @swagger
+ * /api/admin/dashboard/summary-cards:
+ *   get:
+ *     summary: Get summary KPI cards for admin dashboard
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: Start datetime (ISO-8601)
+ *       - in: query
+ *         name: to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: End datetime (ISO-8601)
+ *     responses:
+ *       200:
+ *         description: Summary KPI cards data
+ */
+router.get("/dashboard/summary-cards", protect, authorize("admin"), dashboardController.getSummaryCards);
+
+/**
+ * @swagger
  * /api/admin/users:
  *   get:
  *     summary: Get list of all active users (users by default)

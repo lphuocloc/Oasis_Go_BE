@@ -33,6 +33,8 @@ const CLEANING_TASK_STATUSES = [
 
 const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
 const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
+const REFUND_TRIGGER_TERMINAL_STATUSES = ["DONE", "CANCELLED", "MISSED"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
@@ -53,30 +55,100 @@ const resolveOrderForTaskBooking = async (bookingId, session = null) => {
 };
 
 const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
-  const resolved = await resolveOrderForTaskBooking(bookingId);
-  if (!resolved) return;
+  const normalizedBookingId = String(bookingId || "").trim();
+  if (!normalizedBookingId) {
+    console.warn("Auto refund skipped", {
+      reason: "MISSING_BOOKING_ID",
+      booking_id: bookingId || null,
+    });
+    return;
+  }
+
+  const resolved = await resolveOrderForTaskBooking(normalizedBookingId);
+  if (!resolved) {
+    console.warn("Auto refund skipped", {
+      reason: "BOOKING_OR_ORDER_NOT_FOUND",
+      booking_id: normalizedBookingId,
+    });
+    return;
+  }
 
   const { order } = resolved;
-  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || ""))) return;
-  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") return;
+  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || ""))) {
+    console.warn("Auto refund skipped", {
+      reason: "ORDER_STATUS_NOT_ELIGIBLE",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      order_status: String(order.status || ""),
+    });
+    return;
+  }
+  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
+    console.warn("Auto refund skipped", {
+      reason: "SETTLEMENT_STATUS_NOT_PENDING_INSPECTION",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      deposit_settlement_status: String(order.deposit_settlement_status || ""),
+    });
+    return;
+  }
 
   const depositAmount = Number(order.deposit_total || 0);
-  if (depositAmount <= 0) return;
+  if (depositAmount <= 0) {
+    console.warn("Auto refund skipped", {
+      reason: "DEPOSIT_AMOUNT_NOT_POSITIVE",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      deposit_amount: depositAmount,
+    });
+    return;
+  }
 
   let refundNotificationPayload = null;
+  let pendingIncidentSettlementOrderId = null;
 
   const session = await mongoose.startSession();
   try {
     await session.withTransaction(async () => {
-      const freshResolved = await resolveOrderForTaskBooking(bookingId, session);
-      if (!freshResolved) return;
+      const freshResolved = await resolveOrderForTaskBooking(normalizedBookingId, session);
+      if (!freshResolved) {
+        console.warn("Auto refund skipped", {
+          reason: "BOOKING_OR_ORDER_NOT_FOUND_IN_TX",
+          booking_id: normalizedBookingId,
+        });
+        return;
+      }
 
       const freshOrder = freshResolved.order;
       const freshDepositAmount = Number(freshOrder.deposit_total || 0);
 
-      if (!["PAID", "PARTIAL_CANCEL"].includes(String(freshOrder.status || ""))) return;
-      if (String(freshOrder.deposit_settlement_status || "") !== "PENDING_INSPECTION") return;
-      if (freshDepositAmount <= 0) return;
+      if (!["PAID", "PARTIAL_CANCEL"].includes(String(freshOrder.status || ""))) {
+        console.warn("Auto refund skipped", {
+          reason: "ORDER_STATUS_NOT_ELIGIBLE_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          order_status: String(freshOrder.status || ""),
+        });
+        return;
+      }
+      if (String(freshOrder.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
+        console.warn("Auto refund skipped", {
+          reason: "SETTLEMENT_STATUS_NOT_PENDING_INSPECTION_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          deposit_settlement_status: String(freshOrder.deposit_settlement_status || ""),
+        });
+        return;
+      }
+      if (freshDepositAmount <= 0) {
+        console.warn("Auto refund skipped", {
+          reason: "DEPOSIT_AMOUNT_NOT_POSITIVE_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          deposit_amount: freshDepositAmount,
+        });
+        return;
+      }
 
       const orderBookings = await Booking.find({
         order_id: freshOrder.id,
@@ -86,25 +158,50 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
         .session(session)
         .lean();
 
-      if (!orderBookings.length) return;
+      if (!orderBookings.length) {
+        console.warn("Auto refund skipped", {
+          reason: "NO_ACTIVE_BOOKING_IN_ORDER",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+        });
+        return;
+      }
 
       const orderBookingIds = orderBookings.map((item) => item.id);
 
       const unfinishedTask = await CleaningTask.findOne({
         booking_id: { $in: orderBookingIds },
-        status: { $ne: "DONE" },
+        status: { $in: REFUND_BLOCKING_TASK_STATUSES },
       })
-        .select("id status")
+        .select("id status booking_id")
         .session(session)
         .lean();
 
-      if (unfinishedTask) return;
+      if (unfinishedTask) {
+        console.warn("Auto refund skipped", {
+          reason: "UNFINISHED_CLEANING_TASK_EXISTS",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          task_id: String(unfinishedTask.id || ""),
+          task_status: String(unfinishedTask.status || ""),
+          task_booking_id: String(unfinishedTask.booking_id || ""),
+        });
+        return;
+      }
 
       const hasIncident = await Incident.exists({
         booking_id: { $in: orderBookingIds },
       }).session(session);
 
-      if (hasIncident) return;
+      if (hasIncident) {
+        pendingIncidentSettlementOrderId = String(freshOrder.id || "");
+        console.warn("Auto refund skipped", {
+          reason: "INCIDENT_EXISTS_BLOCKING_REFUND",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+        });
+        return;
+      }
 
       const settlementUpdate = await BookingOrder.updateOne(
         {
@@ -120,7 +217,15 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
         { session }
       );
 
-      if (settlementUpdate.modifiedCount !== 1) return;
+      if (settlementUpdate.modifiedCount !== 1) {
+        console.warn("Auto refund skipped", {
+          reason: "SETTLEMENT_UPDATE_NOT_MODIFIED",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          modified_count: Number(settlementUpdate.modifiedCount || 0),
+        });
+        return;
+      }
 
       let wallet = await Wallet.findOne({ user_id: freshOrder.user_id }).session(session);
       if (!wallet) {
@@ -198,6 +303,14 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
           refunded_transaction_id: refundNotificationPayload.refunded_transaction_id,
           refunded_to_wallet_immediately: "true",
         },
+      });
+    }
+
+    if (pendingIncidentSettlementOrderId) {
+      const incidentService = require("./incidentService");
+      await incidentService.settleOrderDepositAfterIncidents({
+        orderId: pendingIncidentSettlementOrderId,
+        trigger: "CLEANING_DONE_WITH_INCIDENTS",
       });
     }
   } finally {
@@ -1788,6 +1901,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   const previousStatus = task.status;
   const previousCleanerId = String(task.cleaner_id || "");
+  const bookingIdBeforeUpdate = String(task.booking_id || "").trim() || null;
 
   task.pod_id = nextPodId;
   task.booking_id = nextBookingId || null;
@@ -1819,6 +1933,8 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   await task.save();
 
+  const bookingIdForRefund = String(task.booking_id || "").trim() || bookingIdBeforeUpdate;
+
   const statusChangedToDispatchable =
     previousStatus !== task.status && ["ASSIGNED", "NOTIFIED"].includes(String(task.status || ""));
   const cleanerChangedAfterSave = previousCleanerId !== String(task.cleaner_id || "");
@@ -1838,15 +1954,29 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   }
 
 
-  if (previousStatus !== "DONE" && nextStatus === "DONE") {
-    try {
-      await tryAutoRefundDepositAfterCleaningDone({ bookingId: task.booking_id });
-    } catch (error) {
-      console.error("Auto refund deposit after cleaning DONE failed", {
+  const shouldTriggerRefundRecheck =
+    previousStatus !== nextStatus && REFUND_TRIGGER_TERMINAL_STATUSES.includes(String(nextStatus || ""));
+
+  if (shouldTriggerRefundRecheck) {
+    if (!bookingIdForRefund) {
+      console.warn("Auto refund trigger skipped after terminal transition", {
+        reason: "MISSING_BOOKING_ID_ON_TERMINAL_TRANSITION",
         task_id: task.id,
-        booking_id: task.booking_id,
-        error: error?.message || error,
+        previous_status: String(previousStatus || ""),
+        next_status: String(nextStatus || ""),
       });
+    } else {
+      try {
+        await tryAutoRefundDepositAfterCleaningDone({ bookingId: bookingIdForRefund });
+      } catch (error) {
+        console.error("Auto refund deposit after cleaning DONE failed", {
+          task_id: task.id,
+          booking_id: bookingIdForRefund,
+          previous_status: String(previousStatus || ""),
+          next_status: String(nextStatus || ""),
+          error: error?.message || error,
+        });
+      }
     }
   }
 

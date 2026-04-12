@@ -94,6 +94,11 @@ router.get("/current", protect, depositPolicyController.getCurrentPolicy);
  *       400:
  *         description: Invalid input
  */
-router.put("/current", protect, authorize("admin"), depositPolicyController.updateCurrentPolicy);
+router.put(
+  "/current",
+  protect,
+  authorize("admin"),
+  depositPolicyController.updateCurrentPolicy,
+);
 
 module.exports = router;

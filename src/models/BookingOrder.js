@@ -1,6 +1,30 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const depositSettlementSnapshotSchema = new mongoose.Schema(
+    {
+        settled_at: { type: Date, default: null },
+        trigger: { type: String, default: null, trim: true },
+        total_resolved_incident_damage: { type: Number, default: 0, min: 0 },
+        deposit_used: { type: Number, default: 0, min: 0 },
+        refunded_to_wallet_amount: { type: Number, default: 0, min: 0 },
+        wallet_debit_amount: { type: Number, default: 0, min: 0 },
+        outstanding_amount: { type: Number, default: 0, min: 0 },
+        incident_breakdown: {
+            type: [
+                {
+                    incident_id: { type: String, required: true },
+                    booking_id: { type: String, default: null },
+                    amount: { type: Number, default: 0, min: 0 },
+                    status: { type: String, default: null },
+                },
+            ],
+            default: [],
+        },
+    },
+    { _id: false }
+);
+
 const bookingOrderSchema = new mongoose.Schema(
     {
         id: {
@@ -59,6 +83,19 @@ const bookingOrderSchema = new mongoose.Schema(
                 message: "{VALUE} is not a valid deposit settlement status",
             },
             default: "PENDING_INSPECTION",
+        },
+        outstanding_damage_amount: {
+            type: Number,
+            default: 0,
+            min: [0, "Outstanding damage amount cannot be negative"],
+        },
+        deposit_settled_at: {
+            type: Date,
+            default: null,
+        },
+        deposit_settlement_snapshot: {
+            type: depositSettlementSnapshotSchema,
+            default: null,
         },
         status: {
             type: String,

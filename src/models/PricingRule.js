@@ -35,12 +35,7 @@ const pricingRuleSchema = new mongoose.Schema(
             ref: "Location",
             index: true,
         },
-        pod_id: {
-            type: String,
-            default: null,
-            ref: "Pod",
-            index: true,
-        },
+
         start_time: {
             type: String,
             required: [true, "Start time is required"],
@@ -94,18 +89,14 @@ const pricingRuleSchema = new mongoose.Schema(
     }
 );
 
-pricingRuleSchema.index({ pod_id: 1, is_active: 1, createdAt: -1 });
 pricingRuleSchema.index({ location_id: 1, is_active: 1, createdAt: -1 });
 
 pricingRuleSchema.pre("validate", function () {
     this.start_time = normalizeUtcTime(this.start_time);
     this.end_time = normalizeUtcTime(this.end_time);
 
-    const scopeIds = [this.location_id, this.pod_id];
-    const nonNullCount = scopeIds.filter((value) => value !== null && value !== undefined && value !== "").length;
-
-    if (nonNullCount !== 1) {
-        throw new Error("Exactly one of location_id or pod_id must be provided");
+    if (!this.location_id) {
+        throw new Error("location_id is required");
     }
 });
 
@@ -133,19 +124,11 @@ pricingRuleSchema.methods.matchesUtcDate = function (date = new Date()) {
 
 pricingRuleSchema.pre("save", async function () {
     const Location = mongoose.model("Location");
-    const Pod = mongoose.model("Pod");
 
     if (this.location_id) {
         const location = await Location.findOne({ id: this.location_id }).select("id").lean();
         if (!location) {
             throw new Error("Location does not exist");
-        }
-    }
-
-    if (this.pod_id) {
-        const pod = await Pod.findOne({ id: this.pod_id }).select("id cluster_id").lean();
-        if (!pod) {
-            throw new Error("Pod does not exist");
         }
     }
 });

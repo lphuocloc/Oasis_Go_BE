@@ -3,8 +3,8 @@ const router = express.Router();
 const bookingOrderController = require("../controllers/bookingOrderController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
-	loadManagerScope,
-	applyManagerPodScope,
+  loadManagerScope,
+  applyManagerPodScope,
 } = require("../middlewares/managerScopeMiddleware");
 
 /**
@@ -137,11 +137,11 @@ router.post("/", protect, bookingOrderController.createBookingOrder);
  *       - bearerAuth: []
  */
 router.get(
-	"/",
-	protect,
-	loadManagerScope,
-	applyManagerPodScope,
-	bookingOrderController.getAllBookingOrders
+  "/",
+  protect,
+  loadManagerScope,
+  applyManagerPodScope,
+  bookingOrderController.getAllBookingOrders,
 );
 
 /**
@@ -236,12 +236,12 @@ router.get(
  *         description: Forbidden (Only manager can access)
  */
 router.get(
-	"/refunds/pending",
-	protect,
-	authorize("manager"),
-	loadManagerScope,
-	applyManagerPodScope,
-	bookingOrderController.getPendingRefundRequests
+  "/refunds/pending",
+  protect,
+  authorize("manager"),
+  loadManagerScope,
+  applyManagerPodScope,
+  bookingOrderController.getPendingRefundRequests,
 );
 
 /**
@@ -320,12 +320,15 @@ router.get(
  *         description: Refund request not found
  */
 router.post(
-	"/refunds/:refundId/process",
-	protect,
-	authorize("manager"),
-	loadManagerScope,
-	bookingOrderController.processRefundRequest
+  "/refunds/:refundId/process",
+  protect,
+  authorize("manager"),
+  loadManagerScope,
+  bookingOrderController.processRefundRequest,
 );
+
+router.get("/my-today", protect, bookingOrderController.getMyTodayBookings);
+router.get("/my-analytics", protect, bookingOrderController.getMyAnalytics);
 
 /**
  * @swagger
@@ -348,7 +351,12 @@ router.post(
  *     security:
  *       - bearerAuth: []
  */
-router.get("/:id", protect, loadManagerScope, bookingOrderController.getBookingOrderById);
+router.get(
+  "/:id",
+  protect,
+  loadManagerScope,
+  bookingOrderController.getBookingOrderById,
+);
 
 /**
  * @swagger
@@ -434,7 +442,11 @@ router.put("/:id/cancel", protect, bookingOrderController.cancelBookingOrder);
  *       404:
  *         description: Booking order not found
  */
-router.post("/:id/checkout", protect, bookingOrderController.checkoutBookingOrder);
+router.post(
+  "/:id/checkout",
+  protect,
+  bookingOrderController.checkoutBookingOrder,
+);
 
 /**
  * @swagger
@@ -495,6 +507,7 @@ router.post("/:id/checkout", protect, bookingOrderController.checkoutBookingOrde
  *       410:
  *         description: Gone (Order expired)
  */
+
 router.post("/:id/repay", protect, bookingOrderController.initiateRepayment);
 
 module.exports = router;
