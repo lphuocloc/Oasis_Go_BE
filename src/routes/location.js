@@ -135,6 +135,29 @@ router.get("/tree", locationController.getLocationTree);
 
 /**
  * @swagger
+ * /api/locations/{id}/pod-occupancy-rate:
+ *   get:
+ *     summary: Get pod active and occupancy rates across all child locations of a parent location
+ *     tags: [Locations]
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Parent location ID
+ *     responses:
+ *       200:
+ *         description: Pod rates calculated successfully
+ *       404:
+ *         description: Parent location not found
+ *       500:
+ *         description: Server error
+ */
+router.get("/:id/pod-occupancy-rate", locationController.getPodOccupancyRateByParentLocation);
+
+/**
+ * @swagger
  * /api/locations/{id}:
  *   get:
  *     summary: Get location by ID
