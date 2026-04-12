@@ -357,7 +357,7 @@ class WalletService {
         try {
             await session.withTransaction(async () => {
                 const user = await User.findById(userId)
-                    .select("bank_name bank_account_number")
+                    .select("bank_name bank_account_number debt_status debt_total_cached")
                     .session(session);
 
                 if (!user) {
@@ -368,6 +368,14 @@ class WalletService {
 
                 const bankName = String(user.bank_name || "").trim();
                 const bankAccountNumber = String(user.bank_account_number || "").trim();
+                const debtStatus = String(user.debt_status || "NONE").toUpperCase();
+                const debtAmount = Number(user.debt_total_cached || 0);
+
+                if (debtStatus === "IN_DEBT" || debtStatus === "BLACKLISTED" || debtAmount > 0) {
+                    const error = new Error("Withdrawal is locked while account has outstanding debt");
+                    error.statusCode = 423;
+                    throw error;
+                }
 
                 if (!bankName || !bankAccountNumber) {
                     const error = new Error("Please update bank_name and bank_account_number before requesting withdrawal");

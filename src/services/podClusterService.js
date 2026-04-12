@@ -35,7 +35,7 @@ class PodClusterService {
 
     return {
       id: rule.id,
-      scope: rule.pod_id ? "POD" : "LOCATION",
+      scope: "LOCATION",
       multiplier,
       applied_modifier: multiplier,
       start_time: rule.start_time,
@@ -47,35 +47,19 @@ class PodClusterService {
   async _buildPricingSummary({ clusterId, locationId, at }) {
     const queriedAt = this._toUtcDate(at);
 
-    const [locationRules, pods] = await Promise.all([
-      PricingRule.find({ location_id: locationId, is_active: true }).sort({
-        createdAt: -1,
-      }),
-      Pod.find({ cluster_id: clusterId }).select("id").lean(),
-    ]);
-
-    const podIds = pods.map((pod) => String(pod.id)).filter(Boolean);
-    const podRules =
-      podIds.length > 0
-        ? await PricingRule.find({
-            pod_id: { $in: podIds },
-            is_active: true,
-          }).sort({ createdAt: -1 })
-        : [];
+    const locationRules = await PricingRule.find({
+      location_id: locationId,
+      is_active: true,
+    }).sort({ createdAt: -1 });
 
     const matchedLocationRules = locationRules.filter((rule) =>
       rule.matchesUtcDate(queriedAt),
     );
-    const matchedPodRules = podRules.filter((rule) =>
-      rule.matchesUtcDate(queriedAt),
-    );
-
-    const effectiveRule = matchedPodRules[0] || matchedLocationRules[0] || null;
+    const effectiveRule = matchedLocationRules[0] || null;
 
     return {
       queried_at_utc: queriedAt.toISOString(),
       has_location_rule: matchedLocationRules.length > 0,
-      has_pod_rule: matchedPodRules.length > 0,
       effective_rule: this._formatEffectiveRule(effectiveRule),
     };
   }
@@ -83,14 +67,14 @@ class PodClusterService {
   /**
    * Lấy tất cả pod clusters với filters
    */
-  async getAllPodClusters({ location_id, scope_location_ids }) {
+  async getAllPodClusters({ location_id, scope_location_ids, at }) {
     const filter = {};
 
     const scopedLocationIds = scope_location_ids
       ? String(scope_location_ids)
-          .split(",")
-          .map((id) => id.trim())
-          .filter(Boolean)
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean)
       : [];
 
     if (scopedLocationIds.length > 0) {
@@ -177,10 +161,43 @@ class PodClusterService {
       return map;
     }, {});
 
+    const queriedAt = this._toUtcDate(at);
+    const queriedAtIso = queriedAt.toISOString();
+    const uniqueLocationIds = [
+      ...new Set(
+        podClusters
+          .map((cluster) => String(cluster.location_id || ""))
+          .filter(Boolean),
+      ),
+    ];
+
+    const locationRules =
+      uniqueLocationIds.length > 0
+        ? await PricingRule.find({
+          location_id: { $in: uniqueLocationIds },
+          is_active: true,
+        }).sort({ createdAt: -1 })
+        : [];
+
+    const locationRuleMap = locationRules.reduce((map, rule) => {
+      const locationId = String(rule.location_id || "");
+      if (!locationId) return map;
+      if (!map[locationId]) map[locationId] = [];
+      map[locationId].push(rule);
+      return map;
+    }, {});
+
     const podClustersWithImages = podClusters.map((cluster) => {
       const clusterObj = cluster.toObject();
       clusterObj.images = imageMap[cluster.id] || [];
       clusterObj.rating = ratingMap[cluster.id] || DEFAULT_RATING_STATS;
+      const matchedRules = (locationRuleMap[String(cluster.location_id)] || [])
+        .filter((rule) => rule.matchesUtcDate(queriedAt));
+      clusterObj.pricing_summary = {
+        queried_at_utc: queriedAtIso,
+        has_location_rule: matchedRules.length > 0,
+        effective_rule: this._formatEffectiveRule(matchedRules[0] || null),
+      };
       return clusterObj;
     });
 
@@ -476,9 +493,9 @@ class PodClusterService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
@@ -492,9 +509,9 @@ class PodClusterService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-        Math.cos((lat2 * Math.PI) / 180) *
-        Math.sin(dLon / 2) *
-        Math.sin(dLon / 2);
+      Math.cos((lat2 * Math.PI) / 180) *
+      Math.sin(dLon / 2) *
+      Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
@@ -580,9 +597,9 @@ class PodClusterService {
           let d =
             v.discount_type === "PERCENT"
               ? Math.min(
-                  (originalPrice * v.discount_value) / 100,
-                  v.max_discount || Infinity,
-                )
+                (originalPrice * v.discount_value) / 100,
+                v.max_discount || Infinity,
+              )
               : v.discount_value;
           if (d > bestDiscount) {
             bestDiscount = d;

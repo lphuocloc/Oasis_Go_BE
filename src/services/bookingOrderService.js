@@ -33,6 +33,149 @@ class BookingOrderService {
     return Number(Number(value || 0).toFixed(2));
   }
 
+  _normalizeUtcTime(value) {
+    const raw = String(value || "").trim();
+    const parts = raw.split(":");
+    if (parts.length === 2) {
+      return `${parts[0]}:${parts[1]}:00`;
+    }
+    return raw;
+  }
+
+  _timeToSeconds(timeValue) {
+    const normalized = this._normalizeUtcTime(timeValue);
+    const [hours, minutes, seconds] = normalized
+      .split(":")
+      .map((part) => Number(part || 0));
+    return hours * 3600 + minutes * 60 + seconds;
+  }
+
+  _isRuleMatchedAtUtc(rule, date) {
+    if (!rule || !date) return false;
+
+    if (typeof rule.matchesUtcDate === "function") {
+      return rule.matchesUtcDate(date);
+    }
+
+    const utcDay = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][
+      date.getUTCDay()
+    ];
+    const days = Array.isArray(rule.days_of_week)
+      ? rule.days_of_week.map((day) => String(day || "").toUpperCase())
+      : [];
+
+    if (!days.includes(utcDay)) {
+      return false;
+    }
+
+    const currentSeconds =
+      date.getUTCHours() * 3600 + date.getUTCMinutes() * 60 + date.getUTCSeconds();
+    const startSeconds = this._timeToSeconds(rule.start_time);
+    const endSeconds = this._timeToSeconds(rule.end_time);
+
+    if (startSeconds <= endSeconds) {
+      return currentSeconds >= startSeconds && currentSeconds < endSeconds;
+    }
+
+    return currentSeconds >= startSeconds || currentSeconds < endSeconds;
+  }
+
+  _buildSegmentBoundaries(startDate, endDate, rules = []) {
+    const boundaries = new Set([startDate.getTime(), endDate.getTime()]);
+
+    const startUtcMidnight = Date.UTC(
+      startDate.getUTCFullYear(),
+      startDate.getUTCMonth(),
+      startDate.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+    const endUtcMidnight = Date.UTC(
+      endDate.getUTCFullYear(),
+      endDate.getUTCMonth(),
+      endDate.getUTCDate(),
+      0,
+      0,
+      0,
+      0,
+    );
+
+    for (
+      let cursor = startUtcMidnight;
+      cursor <= endUtcMidnight + 86400000;
+      cursor += 86400000
+    ) {
+      boundaries.add(cursor);
+
+      rules.forEach((rule) => {
+        const startSeconds = this._timeToSeconds(rule.start_time);
+        const endSeconds = this._timeToSeconds(rule.end_time);
+
+        boundaries.add(cursor + startSeconds * 1000);
+        boundaries.add(cursor + endSeconds * 1000);
+
+        if (startSeconds > endSeconds) {
+          boundaries.add(cursor + 86400000 + endSeconds * 1000);
+        }
+      });
+    }
+
+    return [...boundaries]
+      .filter((ts) => ts >= startDate.getTime() && ts <= endDate.getTime())
+      .sort((a, b) => a - b);
+  }
+
+  _calculateSegmentedPricingFromRules({
+    startDate,
+    endDate,
+    baseAmountPerHour,
+    rules = [],
+  }) {
+    const boundaries = this._buildSegmentBoundaries(startDate, endDate, rules);
+    const segments = [];
+
+    for (let i = 0; i < boundaries.length - 1; i += 1) {
+      const segmentStartMs = boundaries[i];
+      const segmentEndMs = boundaries[i + 1];
+      if (segmentEndMs <= segmentStartMs) continue;
+
+      const segmentStartDate = new Date(segmentStartMs);
+      const matchedRules = rules.filter((rule) =>
+        this._isRuleMatchedAtUtc(rule, segmentStartDate),
+      );
+      const appliedRule = matchedRules.sort(
+        (a, b) => Number(b.multiplier || 0) - Number(a.multiplier || 0),
+      )[0] || null;
+
+      const appliedModifier = Number(appliedRule?.multiplier ?? 1);
+      const durationHours = (segmentEndMs - segmentStartMs) / (1000 * 60 * 60);
+      const amountRaw = durationHours * baseAmountPerHour * appliedModifier;
+
+      segments.push({
+        start_at_utc: new Date(segmentStartMs).toISOString(),
+        end_at_utc: new Date(segmentEndMs).toISOString(),
+        duration_hours: Number(durationHours.toFixed(6)),
+        pricing_rule_id: appliedRule?.id || null,
+        applied_modifier: appliedModifier,
+        amount_raw: amountRaw,
+        amount: this._roundMoney(amountRaw),
+      });
+    }
+
+    const totalRawAmount = segments.reduce(
+      (sum, segment) => sum + Number(segment.amount_raw || 0),
+      0,
+    );
+
+    return {
+      total_raw_amount: totalRawAmount,
+      final_amount: this._roundMoney(totalRawAmount),
+      segments,
+    };
+  }
+
   _createError(message, statusCode) {
     const error = new Error(message);
     error.statusCode = statusCode;
@@ -627,6 +770,16 @@ class BookingOrderService {
           throw error;
         }
 
+        const debtStatus = String(user.debt_status || "NONE").toUpperCase();
+        const debtAmount = Number(user.debt_total_cached || 0);
+        if (debtStatus === "IN_DEBT" || debtStatus === "BLACKLISTED" || debtAmount > 0) {
+          const error = new Error(
+            "Account has outstanding debt. Please settle debt before creating a new booking.",
+          );
+          error.statusCode = 423;
+          throw error;
+        }
+
         // Validate cluster exists
         const cluster = await PodCluster.findOne({ id: cluster_id });
         if (!cluster) {
@@ -726,52 +879,36 @@ class BookingOrderService {
         const pricePerPod = this._roundMoney(pricePerSlot * numberOfSlots);
         const selectedPodCount = podsToBook.length;
 
-        // Lock pricing by evaluating rules at booking start time (UTC).
-        const ruleEvaluationTime = startDate;
-        const [locationRules, podRules] = await Promise.all([
-          PricingRule.find({ location_id: location.id, is_active: true })
-            .sort({ createdAt: -1 })
-            .session(session),
-          PricingRule.find({
-            pod_id: { $in: podsToBook.map((pod) => pod.id) },
-            is_active: true,
-          })
-            .sort({ createdAt: -1 })
-            .session(session),
-        ]);
-
-        const matchedLocationRules = locationRules.filter((rule) =>
-          rule.matchesUtcDate(ruleEvaluationTime),
-        );
-        const effectiveLocationRule = matchedLocationRules[0] || null;
-
-        const podRuleMap = podRules.reduce((map, rule) => {
-          const podId = String(rule.pod_id || "");
-          if (!podId) return map;
-          if (!map[podId]) map[podId] = [];
-          map[podId].push(rule);
-          return map;
-        }, {});
+        // Build pricing from overlap segments and choose the highest active multiplier per segment.
+        const locationRules = await PricingRule.find({
+          location_id: location.id,
+          is_active: true,
+        })
+          .sort({ createdAt: -1 })
+          .session(session);
 
         const lockedPricingByPod = {};
         for (const pod of podsToBook) {
           const podId = String(pod.id);
-          const matchedPodRules = (podRuleMap[podId] || []).filter((rule) =>
-            rule.matchesUtcDate(ruleEvaluationTime),
-          );
+          const segmentedPricing = this._calculateSegmentedPricingFromRules({
+            startDate,
+            endDate,
+            baseAmountPerHour: durationHours > 0 ? pricePerPod / durationHours : 0,
+            rules: locationRules,
+          });
 
-          const effectiveRule =
-            matchedPodRules[0] || effectiveLocationRule || null;
-          const appliedModifier = Number(effectiveRule?.multiplier ?? 1);
-          const calculatedAmount = this._roundMoney(
-            pricePerPod * appliedModifier,
-          );
+          const calculatedAmount = this._roundMoney(segmentedPricing.final_amount);
+          const appliedModifier =
+            pricePerPod > 0 ? calculatedAmount / pricePerPod : 1;
 
           lockedPricingByPod[podId] = {
             booking_id: null,
-            pricing_rule_id: effectiveRule?.id || null,
+            pricing_rule_id:
+              segmentedPricing.segments.find((segment) => segment.pricing_rule_id)
+                ?.pricing_rule_id || null,
             applied_modifier: appliedModifier,
             calculated_amount: calculatedAmount,
+            pricing_segments: segmentedPricing.segments,
           };
         }
 
@@ -888,6 +1025,15 @@ class BookingOrderService {
         });
         bookings.push(...createdBookings);
 
+        const pricingSegmentsByBookingId = createdBookings.reduce(
+          (map, booking) => {
+            map[String(booking.id)] =
+              lockedPricingByPod[String(booking.pod_id)]?.pricing_segments || [];
+            return map;
+          },
+          {},
+        );
+
         // Persist locked pricing detail for each booking in the same transaction.
         const pricingDetailDocs = createdBookings.map((booking) => {
           const locked = lockedPricingByPod[String(booking.pod_id)] || {};
@@ -972,6 +1118,7 @@ class BookingOrderService {
             pricing_rule_id: detail.pricing_rule_id,
             applied_modifier: detail.applied_modifier,
             calculated_amount: detail.calculated_amount,
+            segments: pricingSegmentsByBookingId[String(detail.booking_id)] || [],
           })),
           summary: {
             cluster_id,
@@ -985,7 +1132,7 @@ class BookingOrderService {
             slot_duration_minutes: slotDurationMinutes,
             number_of_slots: numberOfSlots,
             pods_booked: selectedPodCount,
-            pricing_locked_at_utc: ruleEvaluationTime.toISOString(),
+            pricing_locked_at_utc: startDate.toISOString(),
             base_price_modifier: basePriceModifier,
             price_unit_multiplier: PRICE_UNIT_MULTIPLIER,
             price_per_slot: pricePerSlot,
@@ -1002,13 +1149,13 @@ class BookingOrderService {
           },
           applied_voucher: appliedVoucher
             ? {
-                voucher_id: appliedVoucher.id,
-                code: appliedVoucher.code,
-                discount_type: appliedVoucher.discount_type,
-                discount_value: appliedVoucher.discount_value,
-                max_discount: appliedVoucher.max_discount,
-                discount_amount: appliedVoucher.discount_amount,
-              }
+              voucher_id: appliedVoucher.id,
+              code: appliedVoucher.code,
+              discount_type: appliedVoucher.discount_type,
+              discount_value: appliedVoucher.discount_value,
+              max_discount: appliedVoucher.max_discount,
+              discount_amount: appliedVoucher.discount_amount,
+            }
             : null,
         };
       }); // End of withTransaction
@@ -1701,12 +1848,12 @@ class BookingOrderService {
 
         const requestedBookingIds = Array.isArray(options.booking_ids)
           ? [
-              ...new Set(
-                options.booking_ids
-                  .map((id) => String(id).trim())
-                  .filter(Boolean),
-              ),
-            ]
+            ...new Set(
+              options.booking_ids
+                .map((id) => String(id).trim())
+                .filter(Boolean),
+            ),
+          ]
           : [];
 
         let targetBookings = [];
@@ -2034,10 +2181,10 @@ class BookingOrderService {
     const orders =
       orderIds.length > 0
         ? await BookingOrder.find({ id: { $in: orderIds } })
-            .select(
-              "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
-            )
-            .lean()
+          .select(
+            "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
+          )
+          .lean()
         : [];
     const orderMap = orders.reduce((map, order) => {
       map[String(order.id)] = order;

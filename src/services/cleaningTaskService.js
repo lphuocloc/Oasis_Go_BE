@@ -105,6 +105,7 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
   }
 
   let refundNotificationPayload = null;
+  let pendingIncidentSettlementOrderId = null;
 
   const session = await mongoose.startSession();
   try {
@@ -193,6 +194,7 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
       }).session(session);
 
       if (hasIncident) {
+        pendingIncidentSettlementOrderId = String(freshOrder.id || "");
         console.warn("Auto refund skipped", {
           reason: "INCIDENT_EXISTS_BLOCKING_REFUND",
           booking_id: normalizedBookingId,
@@ -301,6 +303,14 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
           refunded_transaction_id: refundNotificationPayload.refunded_transaction_id,
           refunded_to_wallet_immediately: "true",
         },
+      });
+    }
+
+    if (pendingIncidentSettlementOrderId) {
+      const incidentService = require("./incidentService");
+      await incidentService.settleOrderDepositAfterIncidents({
+        orderId: pendingIncidentSettlementOrderId,
+        trigger: "CLEANING_DONE_WITH_INCIDENTS",
       });
     }
   } finally {
