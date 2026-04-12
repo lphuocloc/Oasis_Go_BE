@@ -40,6 +40,15 @@ const podSchema = new mongoose.Schema(
             default: "AVAILABLE",
             required: true,
         },
+        type: {
+            type: String,
+            enum: {
+                values: ["STANDARD", "SERVICE"],
+                message: "{VALUE} is not a valid type",
+            },
+            default: "STANDARD",
+            required: true,
+        },
         maintenance_status: {
             type: String,
             trim: true,
@@ -133,7 +142,7 @@ podSchema.statics.getByCluster = async function (clusterId) {
 
 // Static method to get available pods
 podSchema.statics.getAvailable = async function (clusterId = null) {
-    const filter = { status: "AVAILABLE" };
+    const filter = { status: "AVAILABLE", type: "STANDARD" };
     if (clusterId) filter.cluster_id = clusterId;
     return await this.find(filter).populate("cluster");
 };

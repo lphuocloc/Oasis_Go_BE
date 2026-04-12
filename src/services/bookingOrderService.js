@@ -661,10 +661,11 @@ class BookingOrderService {
           throw error;
         }
 
-        // Get all pods in cluster
+        // Get all standard pods in cluster
         const allPods = await Pod.find({
           cluster_id,
           status: { $nin: ["MAINTENANCE"] },
+          type: "STANDARD",
         }).lean();
 
         if (allPods.length === 0) {
@@ -1403,6 +1404,15 @@ class BookingOrderService {
         throw error;
       }
 
+      if (order.user_id) {
+        const userDoc = await User.findById(order.user_id)
+          .select("name email")
+          .lean();
+        if (userDoc) {
+          order.user = { name: userDoc.name, email: userDoc.email };
+        }
+      }
+
       // Get all bookings for this order
       const bookings = await Booking.find({ order_id: orderId }).lean();
       const pricingDetails = await BookingPricingDetail.find({
@@ -1595,15 +1605,27 @@ class BookingOrderService {
         BookingOrder.countDocuments(query),
       ]);
 
-      // Get bookings count for each order
+      // Get bookings count and user details for each order
       const ordersWithCounts = await Promise.all(
         orders.map(async (order) => {
           const bookingsCount = await Booking.countDocuments({
             order_id: order.id,
           });
+
+          let userData = null;
+          if (order.user_id) {
+            const userDoc = await User.findById(order.user_id)
+              .select("name email")
+              .lean();
+            if (userDoc) {
+              userData = { name: userDoc.name, email: userDoc.email };
+            }
+          }
+
           return {
             ...order,
             bookings_count: bookingsCount,
+            user: userData,
           };
         }),
       );

@@ -1,6 +1,11 @@
 const Incident = require("../models/Incidents");
 const IncidentDetail = require("../models/IncidentDetail");
 const IncidentPhoto = require("../models/IncidentPhoto");
+const Booking = require("../models/Bookings");
+const BookingOrder = require("../models/BookingOrder");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
+const Transaction = require("../models/Transaction");
 const CleaningTask = require("../models/CleaningTask");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
@@ -81,6 +86,48 @@ const resolveActorId = (actor) => {
 
 const resolveActorIdentityIds = (actor) => {
   return [...new Set([actor?.id, actor?._id].filter(Boolean).map((id) => String(id)))];
+};
+
+const roundMoney = (value) => {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Number(parsed.toFixed(2));
+};
+
+const getIncidentDamageTotal = async (incident) => {
+  const estimated = Number(incident?.estimated_total_value);
+  if (Number.isFinite(estimated) && estimated >= 0) {
+    return roundMoney(estimated);
+  }
+
+  const detailRows = await IncidentDetail.find({ incident_id: incident.id })
+    .select("total_cost")
+    .lean();
+
+  const total = detailRows.reduce((sum, row) => sum + Number(row?.total_cost || 0), 0);
+  return roundMoney(Math.max(0, total));
+};
+
+const getOrCreateWalletByUserId = async (userId, session = null) => {
+  let walletQuery = Wallet.findOne({ user_id: userId });
+  if (session) walletQuery = walletQuery.session(session);
+  let wallet = await walletQuery;
+
+  if (!wallet) {
+    const created = await Wallet.create(
+      [
+        {
+          user_id: userId,
+          balance: 0,
+          status: "ACTIVE",
+        },
+      ],
+      session ? { session } : {}
+    );
+    wallet = created[0];
+  }
+
+  return wallet;
 };
 
 const parseIncidentDetailsPayload = ({ details }) => {
@@ -285,13 +332,13 @@ const buildDamageMetadataMap = async (incidents = []) => {
       : Promise.resolve([]),
     reporterIds.length > 0
       ? User.find({
-          $or: [
-            { id: { $in: reporterIds } },
-            { _id: { $in: reporterObjectIds } },
-          ],
-        })
-          .select("_id id name")
-          .lean()
+        $or: [
+          { id: { $in: reporterIds } },
+          { _id: { $in: reporterObjectIds } },
+        ],
+      })
+        .select("_id id name")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -345,8 +392,8 @@ const resolveIncidentDetails = async (detailsPayload = []) => {
     itemIds.length > 0 ? Item.find({ id: { $in: itemIds } }).select("id name unit_cost").lean() : Promise.resolve([]),
     serviceCatalogIds.length > 0
       ? DamageServiceCatalog.find({ id: { $in: serviceCatalogIds }, is_active: true })
-          .select("id name base_price")
-          .lean()
+        .select("id name base_price")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -519,11 +566,11 @@ exports.getDamageReports = async (query = {}, actor = null) => {
         items: [],
         pagination: query.page !== undefined || query.limit !== undefined
           ? {
-              current_page: parsePositiveInt(query.page, 1),
-              total_pages: 0,
-              total_items: 0,
-              items_per_page: Math.min(parsePositiveInt(query.limit, 20), 100),
-            }
+            current_page: parsePositiveInt(query.page, 1),
+            total_pages: 0,
+            total_items: 0,
+            items_per_page: Math.min(parsePositiveInt(query.limit, 20), 100),
+          }
           : null,
       };
     }
@@ -733,12 +780,12 @@ exports.createDamageReport = async (
 
   const normalizedUploadedPhotos = Array.isArray(uploaded_photos)
     ? uploaded_photos
-        .filter((item) => item && item.url)
-        .map((item) => ({
-          url: String(item.url || "").trim(),
-          public_id: item.public_id ? String(item.public_id).trim() : null,
-        }))
-        .filter((item) => item.url)
+      .filter((item) => item && item.url)
+      .map((item) => ({
+        url: String(item.url || "").trim(),
+        public_id: item.public_id ? String(item.public_id).trim() : null,
+      }))
+      .filter((item) => item.url)
     : [];
 
   const photoRecords = [
@@ -880,13 +927,15 @@ exports.createDamageReport = async (
       user_id: String(reporter.id || reporter._id || reporterId),
       user_name: reporter.name || null,
       cleaner_name: reporter.name || null,
-      },
-      resolvedDetailsData.resolved
+    },
+    resolvedDetailsData.resolved
   );
 };
 
-exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
+exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
+  const { status, resolution_note, escalation_note } = payload;
   const normalizedStatus = normalizeStatus(status);
+
   if (!INCIDENT_STATUSES.includes(normalizedStatus)) {
     throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
   }
@@ -915,14 +964,133 @@ exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
     throw createError("Manager can only set incident status to RESOLVED or DISMISSED", 400);
   }
 
+  let damageBilling = {
+    damage_total_value: 0,
+    user_deposit_value: 0,
+    deposit_deducted_value: 0,
+    total_amount_value: 0,
+    currency: "VND",
+    booking_id: incident.booking_id || null,
+    booking_order_id: null,
+    refunded_to_wallet_amount: 0,
+    refunded_transaction_id: null,
+  };
+
   incident.status = normalizedStatus;
+  if (resolution_note !== undefined) {
+    incident.resolution_note = resolution_note;
+  }
+  if (escalation_note !== undefined) {
+    incident.escalation_note = escalation_note;
+  }
   incident.handled_by = ["RESOLVED", "DISMISSED"].includes(normalizedStatus)
     ? resolveActorId(actor)
     : incident.handled_by;
-  await incident.save();
 
-  const isManagerResolvedFlow = actorRole === "manager" && ["RESOLVED", "DISMISSED"].includes(normalizedStatus);
+  const isManagerResolvedFlow = actorRole === "manager" && normalizedStatus === "RESOLVED";
   if (isManagerResolvedFlow && previousStatus !== normalizedStatus) {
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        await incident.save({ session });
+
+        const damageTotalValue = await getIncidentDamageTotal(incident);
+        damageBilling.damage_total_value = damageTotalValue;
+
+        if (!incident.booking_id) {
+          damageBilling.total_amount_value = damageTotalValue;
+          return;
+        }
+
+        const booking = await Booking.findOne({ id: incident.booking_id })
+          .select("id order_id")
+          .session(session)
+          .lean();
+
+        if (!booking || !booking.order_id) {
+          damageBilling.total_amount_value = damageTotalValue;
+          return;
+        }
+
+        const order = await BookingOrder.findOne({ id: booking.order_id }).session(session);
+        if (!order) {
+          damageBilling.total_amount_value = damageTotalValue;
+          return;
+        }
+
+        damageBilling.booking_order_id = order.id;
+        const userDepositValue = roundMoney(order.deposit_total || 0);
+        const depositDeductedValue = roundMoney(Math.min(damageTotalValue, userDepositValue));
+        const remainingDeposit = roundMoney(Math.max(0, userDepositValue - depositDeductedValue));
+        const totalAmountValue = roundMoney(Math.max(0, damageTotalValue - userDepositValue));
+
+        damageBilling.user_deposit_value = userDepositValue;
+        damageBilling.deposit_deducted_value = depositDeductedValue;
+        damageBilling.total_amount_value = totalAmountValue;
+
+        if (userDepositValue > 0) {
+          if (depositDeductedValue <= 0) {
+            order.deposit_settlement_status = "REFUNDED";
+          } else if (remainingDeposit > 0) {
+            order.deposit_settlement_status = "PARTIALLY_FORFEITED";
+          } else {
+            order.deposit_settlement_status = "FORFEITED";
+          }
+        }
+
+        if (remainingDeposit > 0) {
+          const wallet = await getOrCreateWalletByUserId(order.user_id, session);
+          const balanceBefore = roundMoney(wallet.balance || 0);
+          const balanceAfter = roundMoney(balanceBefore + remainingDeposit);
+          wallet.balance = balanceAfter;
+          await wallet.save({ session });
+
+          const refundTx = await Transaction.create(
+            [
+              {
+                order_id: order.id,
+                amount: remainingDeposit,
+                currency: "VND",
+                type: "REFUND",
+                method: "WALLET",
+                status: "SUCCESS",
+                provider_reference: `INCIDENT_DEPOSIT_REFUND:${incident.id}`,
+              },
+            ],
+            { session }
+          );
+
+          await WalletTransaction.create(
+            [
+              {
+                wallet_id: wallet.id,
+                amount: remainingDeposit,
+                type: "REFUND",
+                transaction_id: refundTx[0].id,
+                reference_id: order.id,
+                description: `Hoan coc con lai sau xu ly hu hai incident ${incident.id}`,
+                balance_before: balanceBefore,
+                balance_after: balanceAfter,
+              },
+            ],
+            { session }
+          );
+
+          damageBilling.refunded_to_wallet_amount = remainingDeposit;
+          damageBilling.refunded_transaction_id = refundTx[0].id;
+        }
+
+        await order.save({ session });
+      });
+    } finally {
+      session.endSession();
+    }
+  } else {
+    await incident.save();
+  }
+
+  const isManagerReviewFlow = actorRole === "manager" && ["RESOLVED", "DISMISSED"].includes(normalizedStatus);
+  if (isManagerReviewFlow && previousStatus !== normalizedStatus) {
     const reporter = await User.findOne({
       $or: [
         { id: String(incident.reported_by || "") },
@@ -953,8 +1121,44 @@ exports.updateIncidentStatus = async (incidentId, status, actor = null) => {
         },
       });
     }
+
+    if (normalizedStatus === "RESOLVED" && damageBilling.booking_order_id) {
+      const order = await BookingOrder.findOne({ id: damageBilling.booking_order_id })
+        .select("user_id")
+        .lean();
+
+      if (order && order.user_id) {
+        await notificationService.sendToUser(order.user_id, {
+          title: "Xu ly hu hai va quyet toan tien coc",
+          message:
+            damageBilling.refunded_to_wallet_amount > 0
+              ? `Da tru ${damageBilling.deposit_deducted_value.toLocaleString("vi-VN")} VND tu coc de bu hu hai va hoan ${damageBilling.refunded_to_wallet_amount.toLocaleString("vi-VN")} VND vao vi.`
+              : `Da tru ${damageBilling.deposit_deducted_value.toLocaleString("vi-VN")} VND tu coc de bu hu hai.`,
+          type: "INCIDENT",
+          event_code: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
+          dedupe_key: `INCIDENT_DEPOSIT_SETTLEMENT:${incident.id}`,
+          data: {
+            type: "INCIDENT_DEPOSIT_SETTLEMENT",
+            incident_id: incident.id,
+            booking_id: damageBilling.booking_id,
+            booking_order_id: damageBilling.booking_order_id,
+            damage_total_value: String(damageBilling.damage_total_value),
+            user_deposit_value: String(damageBilling.user_deposit_value),
+            deposit_deducted_value: String(damageBilling.deposit_deducted_value),
+            total_amount_value: String(damageBilling.total_amount_value),
+            refunded_to_wallet_amount: String(damageBilling.refunded_to_wallet_amount),
+            refunded_transaction_id: String(damageBilling.refunded_transaction_id || ""),
+          },
+        });
+      }
+    }
   }
 
-  return incident;
+  const incidentObj = typeof incident.toObject === "function" ? incident.toObject() : incident;
+  return {
+    ...incidentObj,
+    total_amount_value: damageBilling.total_amount_value,
+    damage_billing: damageBilling,
+  };
 };
 

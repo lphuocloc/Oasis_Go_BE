@@ -47,7 +47,14 @@ class SupportRequestService {
     let current = await Location.findOne({ id: currentLocationId }).select("id parent_id").lean();
     if (!current) return null;
 
+    const visited = new Set([currentLocationId]);
+
     while (current.parent_id) {
+      if (visited.has(String(current.parent_id))) {
+        break;
+      }
+      visited.add(String(current.parent_id));
+
       const parent = await Location.findOne({ id: current.parent_id }).select("id parent_id").lean();
       if (!parent) break;
       current = parent;
@@ -170,7 +177,7 @@ class SupportRequestService {
       id: { $ne: String(currentPod.id) },
     };
 
-    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status").lean();
+    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status type").lean();
     const pods = scopedPodIds.size > 0
       ? rawPods.filter((item) => scopedPodIds.has(String(item.id)))
       : rawPods;
@@ -186,9 +193,11 @@ class SupportRequestService {
     });
 
     const candidates = [];
-    for (const pod of pods) {
+
+    // Process all pods concurrently to avoid N+1 query stalling
+    const podPromises = pods.map(async (pod) => {
       const podCluster = clusterById.get(String(pod.cluster_id));
-      if (!podCluster) continue;
+      if (!podCluster) return null;
 
       const bufferMinutes = await this._resolveCleaningBufferMinutes({
         podId: pod.id,
@@ -198,7 +207,7 @@ class SupportRequestService {
 
       const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
       if (remainingStart >= bufferedEnd) {
-        continue;
+        return null; // Time exhausted
       }
 
       const isBookingAvailable = await Booking.isPodAvailable(
@@ -209,7 +218,7 @@ class SupportRequestService {
       );
 
       if (!isBookingAvailable) {
-        continue;
+        return null;
       }
 
       const conflictingTimeSlot = await TimeSlot.findOne({
@@ -222,20 +231,26 @@ class SupportRequestService {
         .lean();
 
       if (conflictingTimeSlot) {
-        continue;
+        return null;
       }
 
-      candidates.push({
+      return {
         pod_id: pod.id,
         pod_code: pod.code,
         pod_name: pod.name,
         cluster_id: String(pod.cluster_id),
         location_id: String(podCluster.location_id),
         scope_level: String(pod.cluster_id) === String(currentCluster.id) ? "SAME_CLUSTER" : "SAME_PARENT_LOCATION",
+        type: pod.type || "STANDARD",
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
-      });
+      };
+    });
+
+    const results = await Promise.all(podPromises);
+    for (const res of results) {
+      if (res) candidates.push(res);
     }
 
     candidates.sort((a, b) => {
@@ -243,7 +258,8 @@ class SupportRequestService {
       return a.scope_level === "SAME_CLUSTER" ? -1 : 1;
     });
 
-    return candidates;
+    const standardCandidates = candidates.filter(c => c.type === "STANDARD");
+    return standardCandidates.length > 0 ? standardCandidates : candidates;
   }
 
   async _notifyAdminsForEscalation(supportRequest, booking) {
@@ -255,8 +271,8 @@ class SupportRequestService {
     await Promise.all(
       admins.map((admin) =>
         notificationService.sendToUser(admin._id, {
-          title: "Yeu cau ho tro can xu ly",
-          message: "Manager da escalate yeu cau MAINTENANCE muc do cao.",
+          title: "Yêu cầu hỗ trợ khẩn cấp",
+          message: `Quản lý đã chuyển cấp một yêu cầu bảo trì mức độ ưu tiên ${supportRequest.severity || 'cao'}.`,
           type: "SUPPORT",
           event_code: "SUPPORT_ESCALATED",
           dedupe_key: `SUPPORT_ESCALATED:${supportRequest.id}:${admin._id}`,
@@ -642,10 +658,12 @@ class SupportRequestService {
     return supportRequest;
   }
 
-  async getRoomChangeCandidates(requestId, actor, managerScope) {
+  async getRoomChangeCandidates(requestId, actor, managerScope, filters = {}) {
     if (this._getActorRole(actor) !== "manager") {
       throw createError("Only manager can view room-change candidates", 403);
     }
+
+    const { page = 1, limit = 20 } = filters;
 
     const supportRequest = await SupportRequest.findOne({ id: requestId });
     if (!supportRequest) {
@@ -682,12 +700,25 @@ class SupportRequestService {
     }
 
     const candidates = await this._getRoomChangeCandidates(booking, currentPod, resolvedCurrentCluster, managerScope);
+    const total = candidates.length;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedCandidates = candidates.slice(startIndex, endIndex);
 
     return {
       request: supportRequest,
       booking,
       current_pod: currentPod,
-      candidates,
+      candidates: paginatedCandidates,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        total_pages: Math.ceil(total / limitNum) || 1,
+      }
     };
   }
 
@@ -847,14 +878,14 @@ class SupportRequestService {
 
     if (requestType === "MAINTENANCE" && ["HIGH", "CRITICAL"].includes(normalizeUpper(supportRequest.severity))) {
       supportRequest.status = "ESCALATED";
-      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Escalated to admin after emergency room change";
+      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Đã chuyển cấp lên ban quản trị sau khi thực hiện dời phòng khẩn cấp do sự cố bảo trì.";
     } else {
       supportRequest.status = "RESOLVED";
     }
 
     supportRequest.resolution_note =
       String(payload.resolution_note || "").trim() ||
-      `Room changed from pod ${currentPod.code || currentPod.id} to ${nextPod.code || nextPod.id}`;
+      `Hệ thống đã dời khách hàng từ phòng ${currentPod.code || currentPod.id} sang phòng ${nextPod.code || nextPod.id}`;
 
     await supportRequest.save();
 
@@ -895,8 +926,8 @@ class SupportRequestService {
     }
 
     await notificationService.sendToUser(booking.user_id, {
-      title: "Support request room changed",
-      message: "Manager moved your booking to a new pod. Please check updated details.",
+      title: "Phòng của bạn đã được thay đổi",
+      message: "Quản lý đã sắp xếp lại phòng cho bạn để đảm bảo trải nghiệm. Vui lòng kiểm tra màn hình để lấy mã phòng và lối đi mới.",
       type: "SUPPORT",
       event_code: "SUPPORT_ROOM_CHANGED",
       dedupe_key: `SUPPORT_ROOM_CHANGED:${supportRequest.id}:${booking.id}`,
