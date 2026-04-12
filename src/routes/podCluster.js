@@ -69,9 +69,6 @@ router.get("/recommendations", podClusterController.getRecommendations);
  *             has_location_rule:
  *               type: boolean
  *               example: true
- *             has_pod_rule:
- *               type: boolean
- *               example: false
  *             effective_rule:
  *               type: object
  *               nullable: true
@@ -80,7 +77,7 @@ router.get("/recommendations", podClusterController.getRecommendations);
  *                   type: string
  *                 scope:
  *                   type: string
- *                   enum: [POD, LOCATION]
+ *                   enum: [LOCATION]
  *                 multiplier:
  *                   type: number
  *                 start_time:
@@ -105,6 +102,12 @@ router.get("/recommendations", podClusterController.getRecommendations);
  *         schema:
  *           type: string
  *         description: Filter by location ID
+ *       - in: query
+ *         name: at
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *         description: UTC datetime used to evaluate effective pricing rule in pricing_summary (default now)
  *     responses:
  *       200:
  *         description: List of pod clusters

@@ -40,4 +40,5 @@ module.exports = {
   MaintenanceTask: require("./MaintenanceTask"),
   Voucher: require("./Voucher"),
   BookingVoucher: require("./BookingVoucher"),
+  DebtRecord: require("./DebtRecord"),
 };
