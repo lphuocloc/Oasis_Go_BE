@@ -95,6 +95,21 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true,
     },
+    debt_status: {
+      type: String,
+      enum: ["NONE", "IN_DEBT", "BLACKLISTED"],
+      default: "NONE",
+      index: true,
+    },
+    debt_total_cached: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    debt_since: {
+      type: Date,
+      default: null,
+    },
     // OTP fields for email verification
     isVerified: {
       type: Boolean,

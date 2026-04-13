@@ -10,6 +10,7 @@ const WalletTransaction = require("../models/WalletTransaction");
 const { randomInt } = require("crypto");
 const notificationService = require("./notificationService");
 const walletService = require("./walletService");
+const debtService = require("./debtService");
 const mongoose = require("mongoose");
 
 class PaymentService {
@@ -835,8 +836,10 @@ class PaymentService {
     }
 
     let walletId = walletIdFromRef;
+    let walletUserId = null;
     let balanceBefore = 0;
     let balanceAfter = 0;
+    let isNewTopupApplied = false;
 
     const session = await mongoose.startSession();
     try {
@@ -855,6 +858,7 @@ class PaymentService {
         }
 
         walletId = wallet.id;
+        walletUserId = String(wallet.user_id || "");
 
         const existingWalletTopupAudit = await WalletTransaction.findOne({
           reference_id: txnRef,
@@ -887,6 +891,8 @@ class PaymentService {
           ],
           { session },
         );
+
+        isNewTopupApplied = true;
       });
     } catch (error) {
       if (error?.code === 11000) {
@@ -899,6 +905,8 @@ class PaymentService {
           walletId = existingWalletTopupAudit.wallet_id || walletIdFromRef;
           balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
           balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+          const wallet = await Wallet.findOne({ id: walletId }).select("user_id");
+          walletUserId = wallet ? String(wallet.user_id || "") : null;
         } else {
           throw error;
         }
@@ -907,6 +915,17 @@ class PaymentService {
       }
     } finally {
       session.endSession();
+    }
+
+    if (isNewTopupApplied && walletUserId) {
+      const debtSettlement = await debtService.settleUserDebtFromWallet({
+        userId: walletUserId,
+        trigger: `TOPUP:${txnRef}`,
+      });
+
+      if (Number.isFinite(Number(debtSettlement?.wallet_balance_after))) {
+        balanceAfter = Number(debtSettlement.wallet_balance_after);
+      }
     }
 
     return {

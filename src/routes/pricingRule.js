@@ -17,10 +17,6 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *           type: string
  *           nullable: true
  *           example: 0e54c1e0-413e-4f9d-b2a5-f92bf2aaf0f5
- *         pod_id:
- *           type: string
- *           nullable: true
- *           example: null
  *         start_time:
  *           type: string
  *           description: UTC time in HH:mm or HH:mm:ss
@@ -65,11 +61,13 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *         location_id:
  *           type: string
  *           nullable: true
- *           description: Exactly one of location_id or pod_id must be provided
- *         pod_id:
- *           type: string
- *           nullable: true
- *           description: Exactly one of location_id or pod_id must be provided
+ *           description: Location scope for single-create mode
+ *         location_ids:
+ *           type: array
+ *           description: Bulk-create mode. Create one rule per location_id.
+ *           items:
+ *             type: string
+ *           example: [loc-1, loc-2, loc-3]
  *         start_time:
  *           type: string
  *           example: "08:00"
@@ -98,9 +96,6 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *       description: Partial update payload
  *       properties:
  *         location_id:
- *           type: string
- *           nullable: true
- *         pod_id:
  *           type: string
  *           nullable: true
  *         start_time:
@@ -209,15 +204,57 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *               type: string
  *               format: date-time
  *               example: 2026-04-10T09:30:00.000Z
+ *             start_at_utc:
+ *               type: string
+ *               format: date-time
+ *               nullable: true
+ *             end_at_utc:
+ *               type: string
+ *               format: date-time
+ *               nullable: true
+ *             duration_hours:
+ *               type: number
+ *               nullable: true
+ *             pod_count:
+ *               type: integer
+ *               nullable: true
+ *             base_amount_per_hour:
+ *               type: number
+ *               nullable: true
+ *             amount_per_pod:
+ *               type: number
+ *               nullable: true
  *             base_amount:
  *               type: number
+ *               nullable: true
  *               example: 200000
  *             applied_modifier:
  *               type: number
+ *               nullable: true
  *               example: 1.2
  *             final_amount:
  *               type: number
  *               example: 240000
+ *             segments:
+ *               type: array
+ *               items:
+ *                 type: object
+ *                 properties:
+ *                   start_at_utc:
+ *                     type: string
+ *                     format: date-time
+ *                   end_at_utc:
+ *                     type: string
+ *                     format: date-time
+ *                   duration_hours:
+ *                     type: number
+ *                   applied_multiplier:
+ *                     type: number
+ *                   pricing_rule_id:
+ *                     type: string
+ *                     nullable: true
+ *                   amount:
+ *                     type: number
  *             effective_rule:
  *               type: object
  *               nullable: true
@@ -226,7 +263,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *                   type: string
  *                 scope:
  *                   type: string
- *                   enum: [POD, LOCATION]
+ *                   enum: [LOCATION]
  *                 multiplier:
  *                   type: number
  *             matched_rules:
@@ -238,7 +275,7 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *                     type: string
  *                   scope:
  *                     type: string
- *                     enum: [POD, LOCATION]
+ *                     enum: [LOCATION]
  *                   multiplier:
  *                     type: number
  *                   is_applied:
@@ -258,10 +295,6 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *     summary: List pricing rules for management
  *     tags: [PricingRules]
  *     parameters:
- *       - in: query
- *         name: pod_id
- *         schema:
- *           type: string
  *       - in: query
  *         name: location_id
  *         schema:
@@ -392,10 +425,6 @@ router.delete("/:id", protect, authorize("admin", "manager"), pricingRuleControl
  *     tags: [PricingRules]
  *     parameters:
  *       - in: query
- *         name: pod_id
- *         schema:
- *           type: string
- *       - in: query
  *         name: location_id
  *         schema:
  *           type: string
@@ -436,13 +465,8 @@ router.get("/effective", protect, authorize("admin", "manager"), pricingRuleCont
  *     tags: [PricingRules]
  *     parameters:
  *       - in: query
- *         name: base_amount
+ *         name: cluster_id
  *         required: true
- *         schema:
- *           type: number
- *           minimum: 0
- *       - in: query
- *         name: pod_id
  *         schema:
  *           type: string
  *       - in: query
@@ -455,6 +479,24 @@ router.get("/effective", protect, authorize("admin", "manager"), pricingRuleCont
  *         schema:
  *           type: string
  *           format: date-time
+ *       - in: query
+ *         name: start_at
+ *         description: UTC datetime (ISO-8601) for interval quote mode.
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: end_at
+ *         description: UTC datetime (ISO-8601) for interval quote mode.
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: pod_count
+ *         description: Optional multiplier for total quote in interval mode. Defaults to 1.
+ *         schema:
+ *           type: integer
+ *           minimum: 1
  *     security:
  *       - bearerAuth: []
  *     responses:
