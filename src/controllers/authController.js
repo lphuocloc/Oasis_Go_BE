@@ -248,17 +248,11 @@ exports.resetPassword = async (req, res) => {
 
 exports.handleUpdateToken = async (req, res) => {
   try {
-    const expoPushToken = String(req.body?.expoPushToken || "").trim();
-    const fcmToken = String(req.body?.fcmToken || "").trim();
-    const legacyToken = String(req.body?.token || "").trim();
-    const token = expoPushToken || fcmToken || legacyToken;
+    const { token } = req.body;
     const userId = req.user.id;
 
     if (!token) {
-      return res.status(400).json({
-        success: false,
-        message: "expoPushToken (or fcmToken/token) is required",
-      });
+      return res.status(400).json({ message: "Token không được để trống" });
     }
 
     await authService.updatePushToken(userId, token);
@@ -266,9 +260,6 @@ exports.handleUpdateToken = async (req, res) => {
     res.status(200).json({
       success: true,
       message: "Cập nhật địa chỉ thiết bị thành công",
-      data: {
-        token_field: expoPushToken ? "expoPushToken" : fcmToken ? "fcmToken" : "token",
-      },
     });
   } catch (error) {
     res.status(500).json({ success: false, message: error.message });
