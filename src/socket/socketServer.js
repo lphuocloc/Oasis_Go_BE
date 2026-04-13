@@ -16,6 +16,7 @@ const QR_ROTATION_INTERVAL_SECONDS = Number(process.env.QR_ROTATION_INTERVAL_SEC
 const createToken = () => randomBytes(16).toString("hex").toUpperCase();
 const getPodRoom = (podId) => `pod:${podId}`;
 const getCleanerRoom = (userId) => `cleaner:${userId}`;
+const getUserRoom = (userId) => `user:${userId}`;
 
 const normalizeCorsOrigins = () => {
     const envOrigins = process.env.SOCKET_CORS_ORIGIN;
@@ -248,6 +249,22 @@ const emitCleanerNotificationEvent = ({ user_id, notification = {} }) => {
     return getCleanerRoomClientCount(user_id) > 0;
 };
 
+const emitUserNotificationEvent = ({ user_id, notification = {} }) => {
+    if (!ioInstance || !user_id || !notification || typeof notification !== "object") {
+        return false;
+    }
+
+    const room = getUserRoom(user_id);
+    ioInstance.to(room).emit("user:notification", {
+        user_id,
+        sent_at: new Date().toISOString(),
+        ...notification,
+    });
+
+    const roomInfo = ioInstance.sockets.adapter.rooms.get(room);
+    return roomInfo ? roomInfo.size > 0 : false;
+};
+
 const initSocketServer = (httpServer) => {
     if (ioInstance) return ioInstance;
 
@@ -340,6 +357,40 @@ const initSocketServer = (httpServer) => {
             });
         };
 
+        const registerUser = async (payload = {}) => {
+            if (!authenticatedUser) {
+                authenticatedUser = await resolveSocketAuthUser(socket);
+            }
+
+            if (!authenticatedUser) {
+                socket.emit("socket:error", { message: "Unauthorized user subscription" });
+                return;
+            }
+
+            const requestedUserId = String(payload.user_id || "").trim();
+            if (
+                requestedUserId &&
+                requestedUserId !== authenticatedUser.id &&
+                requestedUserId !== String(authenticatedUser.public_id || "")
+            ) {
+                socket.emit("socket:error", { message: "User room subscription mismatch" });
+                return;
+            }
+
+            const resolvedUserId = authenticatedUser.id;
+
+            if (registeredUserId && registeredUserId !== resolvedUserId) {
+                socket.leave(getUserRoom(registeredUserId));
+            }
+
+            registeredUserId = resolvedUserId;
+            socket.join(getUserRoom(registeredUserId));
+
+            socket.emit("user:subscribed", {
+                user_id: registeredUserId,
+            });
+        };
+
         const handshakeData = {
             ...(socket.handshake.auth || {}),
             ...(socket.handshake.query || {}),
@@ -351,10 +402,16 @@ const initSocketServer = (httpServer) => {
             });
         }
 
-        if (handshakeData.cleaner_id || handshakeData.user_id) {
+        if (handshakeData.cleaner_id) {
             registerCleaner(handshakeData).catch((error) => {
                 socket.emit("socket:error", { message: error.message || "Failed to subscribe cleaner room" });
                 socket.disconnect(true);
+            });
+        }
+
+        if (handshakeData.user_id) {
+            registerUser(handshakeData).catch((error) => {
+                socket.emit("socket:error", { message: error.message || "Failed to subscribe user room" });
             });
         }
 
@@ -379,6 +436,12 @@ const initSocketServer = (httpServer) => {
         socket.on("cleaner:subscribe", (data = {}) => {
             registerCleaner(data).catch((error) => {
                 socket.emit("socket:error", { message: error.message || "Failed to subscribe cleaner room" });
+            });
+        });
+
+        socket.on("user:subscribe", (data = {}) => {
+            registerUser(data).catch((error) => {
+                socket.emit("socket:error", { message: error.message || "Failed to subscribe user room" });
             });
         });
 
@@ -407,4 +470,5 @@ module.exports = {
     emitDoorUnlockRequest,
     emitPodCheckinConfirmed,
     emitCleanerNotificationEvent,
+    emitUserNotificationEvent,
 };
