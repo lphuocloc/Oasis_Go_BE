@@ -69,9 +69,15 @@ exports.getAllMaintenanceTasks = async (query = {}) => {
   if (query.shift_assignment_id) filter.shift_assignment_id = query.shift_assignment_id;
   if (query.incident_id) filter.incident_id = query.incident_id;
   if (query.status) {
-    const normalizedStatus = normalizeStatus(query.status);
-    validateStatus(normalizedStatus);
-    filter.status = normalizedStatus;
+    const statusArray = String(query.status)
+      .split(",")
+      .map(normalizeStatus)
+      .filter(Boolean);
+    
+    statusArray.forEach(validateStatus);
+    if (statusArray.length > 0) {
+      filter.status = statusArray.length === 1 ? statusArray[0] : { $in: statusArray };
+    }
   }
 
   return MaintenanceTask.find(filter).sort({ created_at: -1 });

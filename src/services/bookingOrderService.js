@@ -1533,7 +1533,10 @@ class BookingOrderService {
       }
 
       if (status) {
-        query.status = status;
+        const statusArray = String(status).split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+        if (statusArray.length > 0) {
+          query.status = statusArray.length === 1 ? statusArray[0] : { $in: statusArray };
+        }
       }
 
       if (start_date || end_date) {
