@@ -23,35 +23,53 @@ bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace pe
 const cleaningTaskService = require("./services/cleaningTaskService");
 const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
 const debtService = require("./services/debtService");
-if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
+if (
+  String(
+    process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false",
+  ).toLowerCase() === "true"
+) {
   cleaningTaskService.startBackfillJob(
     Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
     {
       cleaner_access_only:
-        String(process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true").toLowerCase() === "true",
+        String(
+          process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true",
+        ).toLowerCase() === "true",
       limit: Number(process.env.CLEANING_TASK_BACKFILL_LIMIT || 200),
-      dry_run: String(process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false").toLowerCase() === "true",
-    }
+      dry_run:
+        String(
+          process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false",
+        ).toLowerCase() === "true",
+    },
   );
 }
 
-if (String(process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(
+    process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true",
+  ).toLowerCase() === "true"
+) {
   cleaningTaskService.startSlaReminderJob(
     Number(process.env.CLEANING_TASK_SLA_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15)
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15),
   );
 }
 
-if (String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() ===
+  "true"
+) {
   staffShiftAssignmentService.startShiftReminderJob(
     Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30)
+    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30),
   );
 }
 
-if (String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true"
+) {
   debtService.startAgingDebtJob(
-    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24)
+    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24),
   );
 }
 

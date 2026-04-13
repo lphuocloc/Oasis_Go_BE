@@ -69,7 +69,9 @@ class BookingOrderService {
     }
 
     const currentSeconds =
-      date.getUTCHours() * 3600 + date.getUTCMinutes() * 60 + date.getUTCSeconds();
+      date.getUTCHours() * 3600 +
+      date.getUTCMinutes() * 60 +
+      date.getUTCSeconds();
     const startSeconds = this._timeToSeconds(rule.start_time);
     const endSeconds = this._timeToSeconds(rule.end_time);
 
@@ -145,9 +147,10 @@ class BookingOrderService {
       const matchedRules = rules.filter((rule) =>
         this._isRuleMatchedAtUtc(rule, segmentStartDate),
       );
-      const appliedRule = matchedRules.sort(
-        (a, b) => Number(b.multiplier || 0) - Number(a.multiplier || 0),
-      )[0] || null;
+      const appliedRule =
+        matchedRules.sort(
+          (a, b) => Number(b.multiplier || 0) - Number(a.multiplier || 0),
+        )[0] || null;
 
       const appliedModifier = Number(appliedRule?.multiplier ?? 1);
       const durationHours = (segmentEndMs - segmentStartMs) / (1000 * 60 * 60);
@@ -772,7 +775,11 @@ class BookingOrderService {
 
         const debtStatus = String(user.debt_status || "NONE").toUpperCase();
         const debtAmount = Number(user.debt_total_cached || 0);
-        if (debtStatus === "IN_DEBT" || debtStatus === "BLACKLISTED" || debtAmount > 0) {
+        if (
+          debtStatus === "IN_DEBT" ||
+          debtStatus === "BLACKLISTED" ||
+          debtAmount > 0
+        ) {
           const error = new Error(
             "Account has outstanding debt. Please settle debt before creating a new booking.",
           );
@@ -893,19 +900,23 @@ class BookingOrderService {
           const segmentedPricing = this._calculateSegmentedPricingFromRules({
             startDate,
             endDate,
-            baseAmountPerHour: durationHours > 0 ? pricePerPod / durationHours : 0,
+            baseAmountPerHour:
+              durationHours > 0 ? pricePerPod / durationHours : 0,
             rules: locationRules,
           });
 
-          const calculatedAmount = this._roundMoney(segmentedPricing.final_amount);
+          const calculatedAmount = this._roundMoney(
+            segmentedPricing.final_amount,
+          );
           const appliedModifier =
             pricePerPod > 0 ? calculatedAmount / pricePerPod : 1;
 
           lockedPricingByPod[podId] = {
             booking_id: null,
             pricing_rule_id:
-              segmentedPricing.segments.find((segment) => segment.pricing_rule_id)
-                ?.pricing_rule_id || null,
+              segmentedPricing.segments.find(
+                (segment) => segment.pricing_rule_id,
+              )?.pricing_rule_id || null,
             applied_modifier: appliedModifier,
             calculated_amount: calculatedAmount,
             pricing_segments: segmentedPricing.segments,
@@ -1028,7 +1039,8 @@ class BookingOrderService {
         const pricingSegmentsByBookingId = createdBookings.reduce(
           (map, booking) => {
             map[String(booking.id)] =
-              lockedPricingByPod[String(booking.pod_id)]?.pricing_segments || [];
+              lockedPricingByPod[String(booking.pod_id)]?.pricing_segments ||
+              [];
             return map;
           },
           {},
@@ -1118,7 +1130,8 @@ class BookingOrderService {
             pricing_rule_id: detail.pricing_rule_id,
             applied_modifier: detail.applied_modifier,
             calculated_amount: detail.calculated_amount,
-            segments: pricingSegmentsByBookingId[String(detail.booking_id)] || [],
+            segments:
+              pricingSegmentsByBookingId[String(detail.booking_id)] || [],
           })),
           summary: {
             cluster_id,
@@ -1149,13 +1162,13 @@ class BookingOrderService {
           },
           applied_voucher: appliedVoucher
             ? {
-              voucher_id: appliedVoucher.id,
-              code: appliedVoucher.code,
-              discount_type: appliedVoucher.discount_type,
-              discount_value: appliedVoucher.discount_value,
-              max_discount: appliedVoucher.max_discount,
-              discount_amount: appliedVoucher.discount_amount,
-            }
+                voucher_id: appliedVoucher.id,
+                code: appliedVoucher.code,
+                discount_type: appliedVoucher.discount_type,
+                discount_value: appliedVoucher.discount_value,
+                max_discount: appliedVoucher.max_discount,
+                discount_amount: appliedVoucher.discount_amount,
+              }
             : null,
         };
       }); // End of withTransaction
@@ -1848,12 +1861,12 @@ class BookingOrderService {
 
         const requestedBookingIds = Array.isArray(options.booking_ids)
           ? [
-            ...new Set(
-              options.booking_ids
-                .map((id) => String(id).trim())
-                .filter(Boolean),
-            ),
-          ]
+              ...new Set(
+                options.booking_ids
+                  .map((id) => String(id).trim())
+                  .filter(Boolean),
+              ),
+            ]
           : [];
 
         let targetBookings = [];
@@ -2181,10 +2194,10 @@ class BookingOrderService {
     const orders =
       orderIds.length > 0
         ? await BookingOrder.find({ id: { $in: orderIds } })
-          .select(
-            "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
-          )
-          .lean()
+            .select(
+              "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
+            )
+            .lean()
         : [];
     const orderMap = orders.reduce((map, order) => {
       map[String(order.id)] = order;
