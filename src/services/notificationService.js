@@ -157,6 +157,19 @@ class NotificationService {
     try {
       const notification = await this.createNotification(userId, payload);
       const deliveryResult = await this.deliverNotification(notification);
+
+      try {
+        const socketServer = require("../socket/socketServer");
+        if (socketServer && typeof socketServer.emitUserNotificationEvent === 'function') {
+          socketServer.emitUserNotificationEvent({
+            user_id: String(userId),
+            notification: typeof notification.toObject === 'function' ? notification.toObject() : notification
+          });
+        }
+      } catch (err) {
+        console.error("Socket emitUserNotificationEvent Error:", err);
+      }
+
       return {
         success: deliveryResult.success,
         notification,

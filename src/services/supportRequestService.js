@@ -11,6 +11,8 @@ const TimeSlot = require("../models/TimeSlot");
 const User = require("../models/User");
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const LocationShift = require("../models/LocationShift");
+const StaffShift = require("../models/StaffShift");
+const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 const { getSocketServer } = require("../socket/socketServer");
@@ -388,6 +390,76 @@ class SupportRequestService {
     });
   }
 
+  async _notifyManagersForSupportRequest(supportRequest, podCode) {
+    if (!supportRequest || !supportRequest.location_id) return;
+
+    const locationShifts = await LocationShift.find({ location_id: String(supportRequest.location_id) }).select("id shift_id").lean();
+    if (!locationShifts.length) return;
+
+    const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
+    const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
+      .select("id")
+      .lean()
+      .then((rows) => rows.map((row) => String(row.id)));
+
+    if (!managerShiftIds.length) return;
+
+    const managerLocationShiftIds = locationShifts
+      .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
+      .map((entry) => String(entry.id));
+
+    if (!managerLocationShiftIds.length) return;
+
+    const now = new Date();
+    const assignments = await StaffShiftAssignment.find({
+      location_shift_id: { $in: managerLocationShiftIds },
+      status: "ASSIGNED",
+      start_date: { $lte: now },
+      end_date: { $gte: now },
+    })
+      .select("staff_id")
+      .lean();
+
+    const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
+    if (!assignmentStaffIds.length) return;
+
+    const assignmentObjectIds = assignmentStaffIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const managers = await User.find({
+      role: "manager",
+      isActive: true,
+      $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+    })
+      .select("_id")
+      .lean();
+
+    const managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
+
+    const typeLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "ve sinh" : "ho tro";
+    
+    await Promise.all(
+      managerUserIds.map((managerUserId) =>
+        notificationService.sendToUser(managerUserId, {
+          title: `Co yeu cau ${typeLabel} doc lap moi`,
+          message: `Khach hang tai Pod ${podCode || 'Khong ro'} vua gui yeu cau ${typeLabel}. Vui long kiem tra.`,
+          type: "SUPPORT",
+          event_code: "SUPPORT_REQUEST_CREATED",
+          dedupe_key: `SUPPORT_REQUEST_CREATED:${supportRequest.id}:${managerUserId}`,
+          data: {
+            support_request_id: supportRequest.id,
+            booking_id: supportRequest.booking_id,
+            pod_id: supportRequest.pod_id,
+            pod_code: podCode,
+            status: String(supportRequest.status || "PENDING").toUpperCase(),
+            type: normalizeUpper(supportRequest.type),
+          },
+        })
+      )
+    );
+  }
+
   async createSupportRequest(actor, payload = {}) {
     const actorId = this._getActorId(actor);
     const actorRole = this._getActorRole(actor);
@@ -473,6 +545,9 @@ class SupportRequestService {
       if (normalizedType === "CLEANING") {
         await this._notifyCleanersForCleaningSupport(supportRequest, booking);
       }
+      
+      const podCode = pod.code || pod.name || booking.pod_id;
+      await this._notifyManagersForSupportRequest(supportRequest, podCode);
 
       return supportRequest;
     } catch (error) {
