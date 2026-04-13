@@ -728,6 +728,7 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
 
 router.post("/reset-password", authController.resetPassword);
 const notificationService = require("../services/notificationService");
+router.patch("/update-push-token", protect, authController.handleUpdateToken);
 router.patch("/update-fcm-token", protect, authController.handleUpdateToken);
 
 // Đăng xuất (Để xóa token trong DB)

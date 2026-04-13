@@ -13,7 +13,7 @@ const mapEffectiveRulePayload = (rule) => {
 
     return {
         id: rule.id,
-        scope: rule.pod_id ? "POD" : "LOCATION",
+        scope: "LOCATION",
         multiplier: Number(rule.multiplier ?? rule.price_modifier ?? 1),
         start_time: rule.start_time,
         end_time: rule.end_time,
@@ -25,7 +25,6 @@ const mapEffectiveRulePayload = (rule) => {
 exports.listPricingRules = async (req, res) => {
     try {
         const {
-            pod_id,
             cluster_id,
             location_id,
             pricing_type,
@@ -35,7 +34,6 @@ exports.listPricingRules = async (req, res) => {
         } = req.query;
 
         const result = await pricingRuleService.listPricingRules({
-            pod_id,
             cluster_id,
             location_id,
             pricing_type,
@@ -61,10 +59,14 @@ exports.listPricingRules = async (req, res) => {
 exports.createPricingRule = async (req, res) => {
     try {
         const rule = await pricingRuleService.createPricingRule(req.body);
+        const isBulk = Array.isArray(rule);
 
         res.status(201).json({
             success: true,
-            message: "Pricing rule created successfully",
+            message: isBulk
+                ? "Pricing rules created successfully"
+                : "Pricing rule created successfully",
+            count: isBulk ? rule.length : 1,
             data: rule,
         });
     } catch (error) {
@@ -114,7 +116,6 @@ exports.deletePricingRule = async (req, res) => {
 exports.getEffectiveRule = async (req, res) => {
     try {
         const {
-            pod_id,
             cluster_id,
             location_id,
             pricing_type,
@@ -123,7 +124,6 @@ exports.getEffectiveRule = async (req, res) => {
         } = req.query;
 
         const rule = await pricingRuleService.getEffectiveRule({
-            pod_id,
             cluster_id,
             location_id,
             pricing_type,
@@ -148,20 +148,22 @@ exports.getEffectiveRule = async (req, res) => {
 exports.getProvisionalQuote = async (req, res) => {
     try {
         const {
-            pod_id,
             cluster_id,
             location_id,
             at,
-            base_amount,
+            start_at,
+            end_at,
+            pod_count,
             pricing_type,
         } = req.query;
 
         const quote = await pricingRuleService.getProvisionalQuote({
-            pod_id,
             cluster_id,
             location_id,
             at,
-            base_amount,
+            start_at,
+            end_at,
+            pod_count,
             pricing_type,
         });
 

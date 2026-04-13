@@ -18,7 +18,7 @@ const toEndOfDay = (value) => {
 
 const parseTimeParts = (timeValue) => {
   const text = String(timeValue || "").trim();
-  const match = text.match(/^(\d{2}):(\d{2})(?::(\d{2}))?$/);
+  const match = text.match(/^(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?$/);
   if (!match) return null;
 
   const hours = Number(match[1]);
@@ -37,6 +37,24 @@ const parseTimeParts = (timeValue) => {
   }
 
   return { hours, minutes, seconds };
+};
+
+const resolveAssignmentTimeValue = (assignment, kind) => {
+  if (!assignment) return null;
+
+  const keyPairs =
+    kind === "start"
+      ? ["start_time", "checkin_at"]
+      : ["end_time", "checkout_at"];
+
+  for (const key of keyPairs) {
+    const value = assignment[key];
+    if (value !== null && value !== undefined && String(value).trim() !== "") {
+      return value;
+    }
+  }
+
+  return null;
 };
 
 const withTime = (baseDate, parts) => {
@@ -120,8 +138,11 @@ class StaffAttendanceLogService {
   }
 
   resolveShiftWindow(assignment, now = new Date()) {
-    const startParts = parseTimeParts(assignment.start_time);
-    const endParts = parseTimeParts(assignment.end_time);
+    const assignmentStartTime = resolveAssignmentTimeValue(assignment, "start");
+    const assignmentEndTime = resolveAssignmentTimeValue(assignment, "end");
+
+    const startParts = parseTimeParts(assignmentStartTime);
+    const endParts = parseTimeParts(assignmentEndTime);
 
     if (!startParts || !endParts) {
       const error = new Error("Ca lam viec chua duoc cau hinh gio bat dau/ket thuc");
