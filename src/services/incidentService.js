@@ -284,11 +284,38 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     .session(session)
     .lean();
 
+  const resolvedIncidentIds = resolvedIncidents
+    .map((incident) => String(incident.id || ""))
+    .filter(Boolean);
+  const incidentDetailMap = await buildIncidentDetailMap(resolvedIncidentIds, session);
+
   const incidentBreakdown = [];
   let totalResolvedIncidentDamage = 0;
   for (const incident of resolvedIncidents) {
     const amount = await getIncidentDamageTotal(incident);
     if (amount <= 0) continue;
+
+    const incidentDetails = (incidentDetailMap[String(incident.id || "")] || []).map((detail) => ({
+      type: String(detail.type || "").toUpperCase(),
+      item_id: detail.item_id ? String(detail.item_id) : null,
+      service_catalog_id: detail.service_catalog_id ? String(detail.service_catalog_id) : null,
+      name_snapshot: detail.name_snapshot || null,
+      quantity: Number(detail.quantity || 0),
+      unit_cost_snapshot: Number(detail.unit_cost_snapshot || 0),
+      total_cost: Number(detail.total_cost || 0),
+      note: detail.note || null,
+    }));
+
+    const damagedProducts = incidentDetails
+      .filter((detail) => detail.type === "ITEM")
+      .map((detail) => ({
+        item_id: detail.item_id,
+        name_snapshot: detail.name_snapshot,
+        quantity: detail.quantity,
+        unit_cost_snapshot: detail.unit_cost_snapshot,
+        total_cost: detail.total_cost,
+        note: detail.note,
+      }));
 
     totalResolvedIncidentDamage += amount;
     incidentBreakdown.push({
@@ -296,6 +323,8 @@ const settleOrderDepositAfterIncidentsInternal = async ({
       booking_id: String(incident.booking_id || ""),
       amount,
       status: String(incident.status || "").toUpperCase(),
+      incident_details: incidentDetails,
+      damaged_products: damagedProducts,
     });
   }
 
@@ -727,14 +756,20 @@ const buildIncidentPhotoMap = async (incidentIds = []) => {
   }, {});
 };
 
-const buildIncidentDetailMap = async (incidentIds = []) => {
+const buildIncidentDetailMap = async (incidentIds = [], session = null) => {
   if (!Array.isArray(incidentIds) || incidentIds.length === 0) {
     return {};
   }
 
-  const details = await IncidentDetail.find({ incident_id: { $in: incidentIds } })
+  let query = IncidentDetail.find({ incident_id: { $in: incidentIds } })
     .select("incident_id type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
     .lean();
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  const details = await query;
 
   return details.reduce((map, item) => {
     if (!map[item.incident_id]) map[item.incident_id] = [];
