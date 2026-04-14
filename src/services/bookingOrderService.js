@@ -2517,41 +2517,14 @@ class BookingOrderService {
       await booking.save();
 
       auto_assign.total += 1;
-
-      try {
-        const assignResult = await autoAssignTaskForBooking(booking, {
-          trigger: "BOOKING_ORDER_CHECKOUT",
-        });
-        const reason = assignResult?.reason || "UNKNOWN";
-        const created = Boolean(assignResult?.created);
-
-        if (created) {
-          auto_assign.success_count += 1;
-        } else {
-          auto_assign.skipped_count += 1;
-        }
-
-        auto_assign.results.push({
-          booking_id: booking.id,
-          created,
-          reason,
-          task_id: assignResult?.task?.id || null,
-          cleaner_id: assignResult?.task?.cleaner_id || null,
-        });
-      } catch (error) {
-        auto_assign.failed_count += 1;
-        auto_assign.results.push({
-          booking_id: booking.id,
-          created: false,
-          reason: "ERROR",
-          error: error.message || "UNKNOWN_ERROR",
-        });
-
-        console.error(
-          `Auto assign cleaning task failed (trigger=BOOKING_ORDER_CHECKOUT, booking_id=${booking.id || "unknown"}):`,
-          error.message || error,
-        );
-      }
+      auto_assign.skipped_count += 1;
+      auto_assign.results.push({
+        booking_id: booking.id,
+        created: false,
+        reason: "CHECKOUT_AUTO_ASSIGN_DISABLED",
+        task_id: null,
+        cleaner_id: null,
+      });
 
       // Create review record after checkout
       await reviewService.createReviewIfNotExists(booking).catch((err) => {

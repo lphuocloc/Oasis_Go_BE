@@ -469,7 +469,6 @@ const getDueTimeWithMinutes = (booking, fallbackTime, bufferMinutes) => {
 
 const TRIGGER_REQUEST_SOURCE_RULES = Object.freeze({
   BOOKING_ORDER_CREATED: "AUTO_AFTER_CHECKOUT",
-  BOOKING_ORDER_CHECKOUT: "AUTO_AFTER_CHECKOUT",
   BOOKING_CREATED: "AUTO_AFTER_CHECKOUT",
   SYSTEM_RETRY_BACKFILL: "SYSTEM_RETRY",
 });
@@ -991,6 +990,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const includeDebug = options.include_debug === true;
   const dryRun = options.dry_run === true;
   const trigger = options.trigger || "UNKNOWN";
+  const normalizedTrigger = String(trigger || "").toUpperCase();
 
   const debugInfo = {
     trigger: options.trigger || "UNKNOWN",
@@ -1023,6 +1023,37 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const bookingCheckinState = bookingLike && bookingLike.checkin_state
     ? String(bookingLike.checkin_state).toUpperCase()
     : null;
+  const bookingStatus = String(bookingLike?.status || "").toUpperCase();
+
+  if (normalizedTrigger === "BOOKING_ORDER_CHECKOUT") {
+    debugInfo.skip_reason = "CHECKOUT_AUTO_ASSIGN_DISABLED";
+    return withDebug(
+      {
+        created: false,
+        reason: "CHECKOUT_AUTO_ASSIGN_DISABLED",
+        booking_id: bookingId,
+      },
+      debugInfo,
+      includeDebug
+    );
+  }
+
+  if (
+    (normalizedTrigger === "SET_CLEANER_ACCESS_TRUE" ||
+      normalizedTrigger === "BOOKING_UPDATED_CLEANER_ACCESS_TRUE") &&
+    bookingStatus !== "IN_USE"
+  ) {
+    debugInfo.skip_reason = "USER_REQUEST_ONLY_IN_USE";
+    return withDebug(
+      {
+        created: false,
+        reason: "USER_REQUEST_ONLY_IN_USE",
+        booking_id: bookingId,
+      },
+      debugInfo,
+      includeDebug
+    );
+  }
 
   if (bookingCheckinState === "NO_SHOW") {
     debugInfo.skip_reason = "NO_SHOW_BLOCKED";
@@ -1050,6 +1081,48 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
           reason: "NO_SHOW_BLOCKED",
           booking_id: bookingId,
           cancelled_task_count,
+        },
+        debugInfo,
+        includeDebug
+      );
+    }
+  }
+
+  // Resolve request_source early so the dedup guard can be scoped by task type.
+  // "Turnover" tasks (AUTO_AFTER_CHECKOUT, SYSTEM_RETRY) share a dedup group:
+  //   only one should be active at a time per booking.
+  // "Interim" tasks (USER_REQUEST) are scoped independently:
+  //   they should not be blocked by a turnover task or block one.
+  const requestSource = getRequestSourceByTrigger(trigger, bookingLike);
+
+  // Dedup guard: skip creation if an active task of the same group already exists
+  // for this booking. This prevents double-assign when multiple triggers fire
+  // (e.g. repeated BOOKING_ORDER_CREATED calls, or repeated
+  // SET_CLEANER_ACCESS_TRUE calls).
+  if (!dryRun) {
+    const TURNOVER_SOURCES = ["AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
+    const dedupSources = TURNOVER_SOURCES.includes(requestSource)
+      ? TURNOVER_SOURCES
+      : [requestSource];
+
+    const existingActiveTask = await CleaningTask.findOne({
+      booking_id: bookingId,
+      request_source: { $in: dedupSources },
+      status: { $in: ACTIVE_TASK_STATUSES },
+    })
+      .select("id status request_source")
+      .lean();
+
+    if (existingActiveTask) {
+      debugInfo.skip_reason = "ACTIVE_TASK_EXISTS";
+      return withDebug(
+        {
+          created: false,
+          reason: "ACTIVE_TASK_EXISTS",
+          booking_id: bookingId,
+          existing_task_id: existingActiveTask.id,
+          existing_task_status: existingActiveTask.status,
+          existing_task_source: existingActiveTask.request_source,
         },
         debugInfo,
         includeDebug
@@ -1111,7 +1184,6 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "NO_CLEANER_LOCATION_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
-  const requestSource = getRequestSourceByTrigger(trigger, bookingLike);
   const bufferConfig = await resolveCleaningBufferMinutes({
     podId,
     clusterId: cluster.id,
