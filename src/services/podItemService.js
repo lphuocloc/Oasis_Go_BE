@@ -1,6 +1,7 @@
 const PodItem = require("../models/PodItem");
 const Pod = require("../models/Pod");
 const Item = require("../models/Item");
+const PodCluster = require("../models/PodCluster");
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -85,6 +86,101 @@ class PodItemService {
       ...podItem.toObject(),
       item: item,
       ...statusInfo,
+    };
+  }
+
+  async createPodItemsForCluster(data) {
+    const { cluster_id, items } = data || {};
+
+    if (!cluster_id) {
+      throw createError("cluster_id is required", 400);
+    }
+
+    if (!Array.isArray(items) || items.length === 0) {
+      throw createError("items must be a non-empty array", 400);
+    }
+
+    const cluster = await PodCluster.findOne({ id: cluster_id }).select("id").lean();
+    if (!cluster) {
+      throw createError("Pod cluster not found", 404);
+    }
+
+    const pods = await Pod.find({ cluster_id }).select("id").lean();
+    if (!pods.length) {
+      throw createError("No pods found in this pod cluster", 404);
+    }
+
+    const normalizedItemsMap = new Map();
+    items.forEach((entry, idx) => {
+      if (!entry || !entry.item_id) {
+        throw createError(`items[${idx}].item_id is required`, 400);
+      }
+
+      const itemId = String(entry.item_id);
+      const expectedQuantity = validateQuantity(entry.expected_quantity ?? 0, `items[${idx}].expected_quantity`);
+      const currentQuantity = validateQuantity(entry.current_quantity ?? 0, `items[${idx}].current_quantity`);
+
+      normalizedItemsMap.set(itemId, {
+        item_id: itemId,
+        expected_quantity: expectedQuantity,
+        current_quantity: currentQuantity,
+      });
+    });
+
+    const normalizedItems = [...normalizedItemsMap.values()];
+    const itemIds = normalizedItems.map((entry) => entry.item_id);
+    const podIds = pods.map((pod) => pod.id);
+
+    const existingItems = await Item.find({ id: { $in: itemIds } }).select("id").lean();
+    const existingItemIdSet = new Set(existingItems.map((item) => item.id));
+    const missingItemIds = itemIds.filter((itemId) => !existingItemIdSet.has(itemId));
+    if (missingItemIds.length > 0) {
+      throw createError(`Item not found: ${missingItemIds.join(", ")}`, 404);
+    }
+
+    const existingPodItems = await PodItem.find({
+      pod_id: { $in: podIds },
+      item_id: { $in: itemIds },
+    })
+      .select("pod_id item_id")
+      .lean();
+
+    const existingPairSet = new Set(existingPodItems.map((entry) => `${entry.pod_id}::${entry.item_id}`));
+
+    const docsToInsert = [];
+    for (const podId of podIds) {
+      for (const itemEntry of normalizedItems) {
+        const pairKey = `${podId}::${itemEntry.item_id}`;
+        if (existingPairSet.has(pairKey)) {
+          continue;
+        }
+
+        docsToInsert.push({
+          pod_id: podId,
+          item_id: itemEntry.item_id,
+          expected_quantity: itemEntry.expected_quantity,
+          current_quantity: itemEntry.current_quantity,
+        });
+      }
+    }
+
+    let created = [];
+    if (docsToInsert.length > 0) {
+      created = await PodItem.insertMany(docsToInsert, { ordered: false });
+    }
+
+    return {
+      cluster_id,
+      pod_count: podIds.length,
+      input_item_count: items.length,
+      unique_item_count: normalizedItems.length,
+      total_target_pairs: podIds.length * normalizedItems.length,
+      created_count: created.length,
+      skipped_existing_count: existingPodItems.length,
+      message:
+        created.length > 0
+          ? "Pod items assigned to cluster pods successfully"
+          : "No new pod items were created (all selected items already existed on all pods)",
     };
   }
 

@@ -10,10 +10,28 @@ exports.createInventoryCheckoutLog = async (req, res) => {
   }
 };
 
+exports.createInventoryCheckoutLogsBulk = async (req, res) => {
+  try {
+    const result = await inventoryCheckoutLogService.createInventoryCheckoutLogsBulk(req.body, req.user);
+    res.status(201).json({
+      success: true,
+      message: "Inventory checkout logs created successfully",
+      count: result.count,
+      data: result.logs,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error creating inventory checkout logs",
+    });
+  }
+};
+
 exports.getShiftInventoryEstimation = async (req, res) => {
   try {
-    const estimation = await inventoryCheckoutLogService.estimateByShiftAssignment(
-      req.params.shift_assignment_id,
+    const estimation = await inventoryCheckoutLogService.estimateByCleanerDay(
+      req.params.cleaner_id,
       req.user,
       req.query
     );
@@ -24,7 +42,21 @@ exports.getShiftInventoryEstimation = async (req, res) => {
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
-    res.status(statusCode).json({ success: false, message: error.message || "Error estimating inventory by shift" });
+    res.status(statusCode).json({ success: false, message: error.message || "Error estimating daily inventory" });
+  }
+};
+
+exports.getCleanerDailyCheckoutLogs = async (req, res) => {
+  try {
+    const result = await inventoryCheckoutLogService.getCleanerDailyCheckoutLogs(
+      req.params.cleaner_id,
+      req.user,
+      req.query
+    );
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error fetching daily checkout logs" });
   }
 };
 

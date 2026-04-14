@@ -60,6 +60,27 @@ const normalizeShiftAssignmentId = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
+const normalizeCleanerId = (value) => {
+  if (value === undefined || value === null) return null;
+  const normalized = String(value).trim();
+  return normalized.length > 0 ? normalized : null;
+};
+
+const buildDayRange = (dateValue) => {
+  const target = dateValue ? new Date(dateValue) : new Date();
+  if (Number.isNaN(target.getTime())) {
+    throw createError("Invalid date", 400);
+  }
+
+  const dayStart = new Date(target);
+  dayStart.setHours(0, 0, 0, 0);
+
+  const dayEnd = new Date(target);
+  dayEnd.setHours(23, 59, 59, 999);
+
+  return { dayStart, dayEnd };
+};
+
 const normalizeActionType = (value) => {
   if (value === undefined || value === null) return value;
   return String(value).trim().toUpperCase();
@@ -364,6 +385,148 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
   }
 };
 
+exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
+  const payload = data || {};
+  const logs = Array.isArray(payload.logs) ? payload.logs : [];
+
+  if (logs.length === 0) {
+    throw createError("logs must be a non-empty array", 400);
+  }
+
+  if (logs.length > 100) {
+    throw createError("Maximum 100 logs per request", 400);
+  }
+
+  const effectiveActor = actor || (payload.actor_id ? { id: payload.actor_id } : null);
+  const resolvedParticipants = resolveCheckoutParticipants({ actor: effectiveActor, staffId: payload.staff_id });
+  const staff = await findStaffUser(resolvedParticipants.staff_id);
+
+  if (!staff) throw createError("Staff user not found", 404);
+  if (!staff.isActive) throw createError("Staff user is inactive", 403);
+
+  const session = await mongoose.startSession();
+
+  try {
+    session.startTransaction();
+
+    const createdLogs = [];
+    const notificationDrafts = [];
+
+    for (let index = 0; index < logs.length; index += 1) {
+      const entry = logs[index] || {};
+      const logLabel = `logs[${index}]`;
+
+      const inventoryStockId = normalizeTaskId(entry.inventory_stock_id);
+      if (!inventoryStockId) {
+        throw createError(`${logLabel}.inventory_stock_id is required`, 400);
+      }
+
+      const normalizedActionType = normalizeActionType(entry.action_type || "CHECKOUT");
+      const normalizedShiftAssignmentId = normalizeShiftAssignmentId(entry.shift_assignment_id);
+      const normalizedCleaningTaskId = normalizeTaskId(entry.cleaning_task_id);
+      const normalizedMaintenanceTaskId = normalizeTaskId(entry.maintenance_task_id);
+      const normalizedQuantity = normalizeQuantity(entry.quantity);
+      const normalizedReason = entry.reason === undefined || entry.reason === null ? null : String(entry.reason).trim();
+
+      validateLogBusinessRules({
+        actionType: normalizedActionType,
+        reason: normalizedReason,
+        cleaningTaskId: normalizedCleaningTaskId,
+        maintenanceTaskId: normalizedMaintenanceTaskId,
+      });
+
+      const stock = await InventoryStock.findOne({ id: inventoryStockId })
+        .select("id item_id warehouse_id")
+        .session(session)
+        .lean();
+      if (!stock) {
+        throw createError(`${logLabel}: Inventory stock not found`, 404);
+      }
+
+      await Promise.all([
+        validateShiftAssignmentReference(normalizedShiftAssignmentId),
+        validateTaskReference(normalizedCleaningTaskId, CleaningTask, `${logLabel}: Cleaning task not found`),
+        validateTaskReference(normalizedMaintenanceTaskId, MaintenanceTask, `${logLabel}: Maintenance task not found`),
+      ]);
+
+      await validateCleanerOwnership({
+        actor: effectiveActor,
+        staffId: resolvedParticipants.staff_id,
+        shiftAssignmentId: normalizedShiftAssignmentId,
+        cleaningTaskId: normalizedCleaningTaskId,
+        maintenanceTaskId: normalizedMaintenanceTaskId,
+      });
+
+      const delta = getStockDelta(normalizedActionType, normalizedQuantity);
+      await applyStockDelta(inventoryStockId, delta, session);
+
+      const [createdLog] = await InventoryCheckoutLog.create(
+        [
+          {
+            inventory_stock_id: inventoryStockId,
+            staff_id: resolvedParticipants.staff_id,
+            actor_id: resolvedParticipants.actor_id,
+            cleaning_task_id: normalizedCleaningTaskId,
+            maintenance_task_id: normalizedMaintenanceTaskId,
+            quantity: normalizedQuantity,
+            action_type: normalizedActionType,
+            reason: normalizedReason,
+          },
+        ],
+        { session }
+      );
+
+      createdLogs.push(createdLog);
+      notificationDrafts.push({
+        logId: createdLog.id,
+        stock,
+        quantity: normalizedQuantity,
+        actionType: normalizedActionType,
+      });
+    }
+
+    await session.commitTransaction();
+
+    if (String(staff.role || "").toLowerCase() === "cleaner") {
+      for (const draft of notificationDrafts) {
+        if (draft.actionType !== "CHECKOUT") continue;
+
+        const [item, warehouse] = await Promise.all([
+          Item.findOne({ id: draft.stock.item_id }).select("id name").lean(),
+          Warehouse.findOne({ id: draft.stock.warehouse_id }).select("id name").lean(),
+        ]);
+
+        await notificationService.sendToUser(staff._id, {
+          title: "Xac nhan xuat kho",
+          message: `Ban da xuat ${draft.quantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+          type: "INVENTORY",
+          event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+          dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${draft.logId}:${String(staff._id)}`,
+          data: {
+            checkout_log_id: draft.logId,
+            inventory_stock_id: draft.stock.id,
+            quantity: String(draft.quantity),
+            item_id: draft.stock.item_id || null,
+            item_name: item?.name || null,
+            warehouse_id: draft.stock.warehouse_id || null,
+            warehouse_name: warehouse?.name || null,
+          },
+        });
+      }
+    }
+
+    return {
+      count: createdLogs.length,
+      logs: createdLogs,
+    };
+  } catch (error) {
+    await session.abortTransaction();
+    throw error;
+  } finally {
+    session.endSession();
+  }
+};
+
 exports.getAllInventoryCheckoutLogs = async (query = {}) => {
   const filter = {};
   if (query.inventory_stock_id) filter.inventory_stock_id = query.inventory_stock_id;
@@ -528,50 +691,191 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   });
 };
 
-exports.estimateByShiftAssignment = async (shiftAssignmentId, actor = null, options = {}) => {
-  const normalizedShiftAssignmentId = normalizeShiftAssignmentId(shiftAssignmentId);
-  if (!normalizedShiftAssignmentId) {
-    throw createError("shift_assignment_id is required", 400);
-  }
-
-  const assignment = await StaffShiftAssignment.findOne({ id: normalizedShiftAssignmentId })
-    .select("id staff_id location_shift_id")
-    .lean();
-  if (!assignment) {
-    throw createError("Shift assignment not found", 404);
+exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = {}) => {
+  const normalizedCleanerId = normalizeCleanerId(cleanerId);
+  if (!normalizedCleanerId) {
+    throw createError("cleaner_id is required", 400);
   }
 
   const actorRole = String(actor?.role || "").toLowerCase();
   const actorId = getUserIdentity(actor);
-  if (actorRole === "cleaner" && String(assignment.staff_id || "") !== String(actorId || "")) {
-    throw createError("You are not owner of this shift assignment", 403);
+  if (actorRole === "cleaner" && String(actorId || "") !== normalizedCleanerId) {
+    throw createError("Cleaners can only view their own checkout logs", 403);
   }
 
-  const locationShift = await LocationShift.findOne({ id: assignment.location_shift_id })
-    .select("id location_id")
+  const cleaner = await findStaffUser(normalizedCleanerId);
+  if (!cleaner) {
+    throw createError("Cleaner not found", 404);
+  }
+
+  const { dayStart, dayEnd } = buildDayRange(options.date);
+
+  const logs = await InventoryCheckoutLog.find({
+    staff_id: normalizedCleanerId,
+    action_type: "CHECKOUT",
+    created_at: { $gte: dayStart, $lte: dayEnd },
+  })
+    .sort({ created_at: -1 })
     .lean();
-  if (!locationShift) {
-    throw createError("Location shift not found", 404);
+
+  if (logs.length === 0) {
+    return {
+      cleaner_id: normalizedCleanerId,
+      date: dayStart.toISOString().slice(0, 10),
+      day_start: dayStart,
+      day_end: dayEnd,
+      total_checkout_count: 0,
+      total_quantity: 0,
+      logs: [],
+    };
   }
 
-  const includeDone = String(options.include_done || "false").toLowerCase() === "true";
-  const taskStatuses = includeDone
-    ? ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "DONE"]
-    : ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+  const stockIds = [...new Set(logs.map((l) => String(l.inventory_stock_id || "")).filter(Boolean))];
+  const stocks = await InventoryStock.find({ id: { $in: stockIds } })
+    .select("id item_id warehouse_id")
+    .lean();
+  const stockById = new Map(stocks.map((s) => [String(s.id), s]));
+
+  const itemIds = [...new Set(stocks.map((s) => String(s.item_id || "")).filter(Boolean))];
+  const warehouseIds = [...new Set(stocks.map((s) => String(s.warehouse_id || "")).filter(Boolean))];
+
+  const [items, warehouses] = await Promise.all([
+    itemIds.length > 0 ? Item.find({ id: { $in: itemIds } }).select("id name").lean() : Promise.resolve([]),
+    warehouseIds.length > 0 ? Warehouse.find({ id: { $in: warehouseIds } }).select("id name").lean() : Promise.resolve([]),
+  ]);
+
+  const itemById = new Map(items.map((i) => [String(i.id), i]));
+  const warehouseById = new Map(warehouses.map((w) => [String(w.id), w]));
+
+  const enrichedLogs = logs.map((log) => {
+    const stock = stockById.get(String(log.inventory_stock_id || "")) || null;
+    const item = stock ? itemById.get(String(stock.item_id || "")) || null : null;
+    const warehouse = stock ? warehouseById.get(String(stock.warehouse_id || "")) || null : null;
+    return {
+      ...log,
+      item_id: stock?.item_id || null,
+      item_name: item?.name || null,
+      warehouse_id: stock?.warehouse_id || null,
+      warehouse_name: warehouse?.name || null,
+    };
+  });
+
+  const totalQuantity = enrichedLogs.reduce((sum, l) => sum + Number(l.quantity || 0), 0);
+
+  // Group by item for summary
+  const summaryByItem = new Map();
+  for (const log of enrichedLogs) {
+    const itemId = String(log.item_id || "");
+    if (!itemId) continue;
+    if (!summaryByItem.has(itemId)) {
+      summaryByItem.set(itemId, {
+        item_id: itemId,
+        item_name: log.item_name,
+        total_quantity: 0,
+        log_count: 0,
+      });
+    }
+    const entry = summaryByItem.get(itemId);
+    entry.total_quantity += Number(log.quantity || 0);
+    entry.log_count += 1;
+  }
+
+  return {
+    cleaner_id: normalizedCleanerId,
+    date: dayStart.toISOString().slice(0, 10),
+    day_start: dayStart,
+    day_end: dayEnd,
+    total_checkout_count: enrichedLogs.length,
+    total_quantity: totalQuantity,
+    summary_by_item: [...summaryByItem.values()],
+    logs: enrichedLogs,
+  };
+};
+
+exports.estimateByShiftAssignment = async (cleanerId, actor = null, options = {}) => {
+  return exports.estimateByCleanerDay(cleanerId, actor, options);
+};
+
+exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => {
+  const normalizedCleanerId = normalizeCleanerId(cleanerId);
+  if (!normalizedCleanerId) {
+    throw createError("cleaner_id is required", 400);
+  }
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  const actorId = getUserIdentity(actor);
+  if (actorRole === "cleaner" && String(actorId || "") !== normalizedCleanerId) {
+    throw createError("Cleaners can only estimate inventory for themselves", 403);
+  }
+
+  const cleaner = await findStaffUser(normalizedCleanerId);
+  if (!cleaner) {
+    throw createError("Cleaner not found", 404);
+  }
+
+  const { dayStart, dayEnd } = buildDayRange(options.date);
+  const taskStatuses = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+
+  const assignments = await StaffShiftAssignment.find({
+    staff_id: normalizedCleanerId,
+    start_date: { $lte: dayEnd },
+    end_date: { $gte: dayStart },
+  })
+    .select("id location_shift_id start_date end_date")
+    .lean();
+
+  if (assignments.length === 0) {
+    throw createError("Cleaner is not scheduled to work in selected date", 400);
+  }
+
+  const assignmentIds = assignments.map((assignment) => String(assignment.id || "")).filter(Boolean);
 
   const tasks = await CleaningTask.find({
-    shift_assignment_id: normalizedShiftAssignmentId,
+    cleaner_id: normalizedCleanerId,
     status: { $in: taskStatuses },
+    estimated_start_time: { $gte: dayStart, $lte: dayEnd },
   })
-    .select("id pod_id status")
+    .select("id pod_id status shift_assignment_id")
     .lean();
+
+  if (tasks.length === 0) {
+    return {
+      cleaner_id: normalizedCleanerId,
+      date: dayStart.toISOString().slice(0, 10),
+      day_start: dayStart,
+      day_end: dayEnd,
+      shift_assignment_ids: assignmentIds,
+      location_ids: [],
+      task_count: 0,
+      pod_count: 0,
+      warehouse_scope_ids: [],
+      items: [],
+      summary: {
+        total_required_quantity: 0,
+        total_available_quantity: 0,
+        total_shortage_quantity: 0,
+      },
+    };
+  }
+
+  const locationShiftIds = [...new Set(assignments.map((item) => String(item.location_shift_id || "")).filter(Boolean))];
+  const locationShifts = locationShiftIds.length > 0
+    ? await LocationShift.find({ id: { $in: locationShiftIds } })
+      .select("id location_id")
+      .lean()
+    : [];
+  const locationIds = [...new Set(locationShifts.map((item) => String(item.location_id || "")).filter(Boolean))];
 
   const podIds = [...new Set(tasks.map((task) => String(task.pod_id || "")).filter(Boolean))];
   if (podIds.length === 0) {
     return {
-      shift_assignment_id: normalizedShiftAssignmentId,
-      location_id: locationShift.location_id,
-      task_count: 0,
+      cleaner_id: normalizedCleanerId,
+      date: dayStart.toISOString().slice(0, 10),
+      day_start: dayStart,
+      day_end: dayEnd,
+      shift_assignment_ids: assignmentIds,
+      location_ids: locationIds,
+      task_count: tasks.length,
       pod_count: 0,
       warehouse_scope_ids: [],
       items: [],
@@ -587,24 +891,49 @@ exports.estimateByShiftAssignment = async (shiftAssignmentId, actor = null, opti
     .select("pod_id item_id expected_quantity current_quantity")
     .lean();
 
+  const podItemItemIds = [...new Set(podItems.map((item) => String(item.item_id || "")).filter(Boolean))];
+  const consumableItems = podItemItemIds.length > 0
+    ? await Item.find({ id: { $in: podItemItemIds }, item_type: "CONSUMABLE" })
+      .select("id")
+      .lean()
+    : [];
+  const consumableItemIdSet = new Set(consumableItems.map((item) => String(item.id || "")));
+
+  // Count how many tasks are assigned to each pod (a pod may be cleaned multiple times)
+  const taskCountByPod = new Map();
+  for (const task of tasks) {
+    const podId = String(task.pod_id || "");
+    if (podId) {
+      taskCountByPod.set(podId, (taskCountByPod.get(podId) || 0) + 1);
+    }
+  }
+
   const requiredByItem = new Map();
   for (const podItem of podItems) {
     const itemId = String(podItem.item_id || "");
     if (!itemId) continue;
 
-    const expected = Number(podItem.expected_quantity || 0);
-    const current = Number(podItem.current_quantity || 0);
-    const needed = Math.max(0, expected - current);
+    if (!consumableItemIdSet.has(itemId)) continue;
 
-    if (needed <= 0) continue;
+    const expectedPerPod = Math.max(0, Number(podItem.expected_quantity || 0));
+    if (expectedPerPod <= 0) continue;
+
+    // Multiply by number of tasks for this pod so repeated cleanings are counted
+    const taskCount = taskCountByPod.get(String(podItem.pod_id || "")) || 1;
+    const needed = expectedPerPod * taskCount;
+
     requiredByItem.set(itemId, (requiredByItem.get(itemId) || 0) + needed);
   }
 
   const itemIds = [...requiredByItem.keys()];
   if (itemIds.length === 0) {
     return {
-      shift_assignment_id: normalizedShiftAssignmentId,
-      location_id: locationShift.location_id,
+      cleaner_id: normalizedCleanerId,
+      date: dayStart.toISOString().slice(0, 10),
+      day_start: dayStart,
+      day_end: dayEnd,
+      shift_assignment_ids: assignmentIds,
+      location_ids: locationIds,
       task_count: tasks.length,
       pod_count: podIds.length,
       warehouse_scope_ids: [],
@@ -618,9 +947,11 @@ exports.estimateByShiftAssignment = async (shiftAssignmentId, actor = null, opti
   }
 
   const preferredWarehouseId = normalizeTaskId(options.warehouse_id);
-  const locationWarehouses = await LocationWarehouse.find({ location_id: locationShift.location_id })
-    .select("warehouse_id")
-    .lean();
+  const locationWarehouses = locationIds.length > 0
+    ? await LocationWarehouse.find({ location_id: { $in: locationIds } })
+      .select("warehouse_id")
+      .lean()
+    : [];
   const linkedWarehouseIds = [...new Set(locationWarehouses.map((item) => String(item.warehouse_id || "")).filter(Boolean))];
 
   const warehouseScopeIds = preferredWarehouseId
@@ -686,8 +1017,12 @@ exports.estimateByShiftAssignment = async (shiftAssignmentId, actor = null, opti
   const totalShortage = estimationItems.reduce((sum, item) => sum + item.shortage_quantity, 0);
 
   return {
-    shift_assignment_id: normalizedShiftAssignmentId,
-    location_id: locationShift.location_id,
+    cleaner_id: normalizedCleanerId,
+    date: dayStart.toISOString().slice(0, 10),
+    day_start: dayStart,
+    day_end: dayEnd,
+    shift_assignment_ids: assignmentIds,
+    location_ids: locationIds,
     task_count: tasks.length,
     pod_count: podIds.length,
     warehouse_scope_ids: warehouseScopeIds,
