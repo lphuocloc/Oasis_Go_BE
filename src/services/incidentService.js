@@ -135,7 +135,7 @@ const getOrCreateWalletByUserId = async (userId, session = null) => {
 
 const resolveOrderById = async (orderId, session = null) => {
   let query = BookingOrder.findOne({ id: String(orderId || "") })
-    .select("id user_id status deposit_total deposit_settlement_status outstanding_damage_amount");
+    .select("id user_id status deposit_total deposit_settlement_status outstanding_damage_amount deposit_settled_at");
   if (session) query = query.session(session);
   return query;
 };
@@ -146,18 +146,53 @@ const settleOrderDepositAfterIncidentsInternal = async ({
   session,
 } = {}) => {
   const normalizedOrderId = String(orderId || "").trim();
+  const logPrefix = "[DepositSettlement][Incident]";
+
+  console.info(`${logPrefix} Start`, {
+    order_id: normalizedOrderId || null,
+    trigger,
+  });
+
   if (!normalizedOrderId) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "MISSING_ORDER_ID",
+      trigger,
+    });
     return { settled: false, reason: "MISSING_ORDER_ID" };
   }
 
   const order = await resolveOrderById(normalizedOrderId, session);
-  if (!order) return { settled: false, reason: "ORDER_NOT_FOUND" };
+  if (!order) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "ORDER_NOT_FOUND",
+      order_id: normalizedOrderId,
+      trigger,
+    });
+    return { settled: false, reason: "ORDER_NOT_FOUND" };
+  }
+
+  console.info(`${logPrefix} OrderLoaded`, {
+    order_id: normalizedOrderId,
+    order_status: String(order.status || ""),
+    deposit_settlement_status: String(order.deposit_settlement_status || ""),
+    deposit_total: Number(order.deposit_total || 0),
+  });
 
   if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || "").toUpperCase())) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "ORDER_NOT_ELIGIBLE",
+      order_id: normalizedOrderId,
+      order_status: String(order.status || ""),
+    });
     return { settled: false, reason: "ORDER_NOT_ELIGIBLE", order_id: normalizedOrderId };
   }
 
   if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "ORDER_ALREADY_SETTLED",
+      order_id: normalizedOrderId,
+      deposit_settlement_status: String(order.deposit_settlement_status || ""),
+    });
     return {
       settled: false,
       reason: "ORDER_ALREADY_SETTLED",
@@ -171,7 +206,16 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     .session(session)
     .lean();
 
+  console.info(`${logPrefix} BookingsLoaded`, {
+    order_id: normalizedOrderId,
+    booking_count: bookings.length,
+  });
+
   if (!bookings.length) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "ORDER_BOOKINGS_NOT_FOUND",
+      order_id: normalizedOrderId,
+    });
     return { settled: false, reason: "ORDER_BOOKINGS_NOT_FOUND", order_id: normalizedOrderId };
   }
 
@@ -181,6 +225,11 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     (booking) => !ORDER_BOOKING_TERMINAL_STATUSES.includes(String(booking.status || "").toUpperCase())
   );
   if (hasNonTerminalBooking) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "ORDER_BOOKINGS_NOT_TERMINAL",
+      order_id: normalizedOrderId,
+      booking_statuses: bookings.map((booking) => String(booking.status || "").toUpperCase()),
+    });
     return { settled: false, reason: "ORDER_BOOKINGS_NOT_TERMINAL", order_id: normalizedOrderId };
   }
 
@@ -192,6 +241,12 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     .session(session)
     .lean();
   if (unfinishedTask) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "CLEANING_NOT_COMPLETED",
+      order_id: normalizedOrderId,
+      task_id: String(unfinishedTask.id || ""),
+      task_status: String(unfinishedTask.status || ""),
+    });
     return {
       settled: false,
       reason: "CLEANING_NOT_COMPLETED",
@@ -208,6 +263,11 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     .session(session)
     .lean();
   if (pendingIncident) {
+    console.warn(`${logPrefix} Stop`, {
+      reason: "PENDING_INCIDENT_EXISTS",
+      order_id: normalizedOrderId,
+      incident_id: String(pendingIncident.id || ""),
+    });
     return {
       settled: false,
       reason: "PENDING_INCIDENT_EXISTS",
@@ -224,11 +284,38 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     .session(session)
     .lean();
 
+  const resolvedIncidentIds = resolvedIncidents
+    .map((incident) => String(incident.id || ""))
+    .filter(Boolean);
+  const incidentDetailMap = await buildIncidentDetailMap(resolvedIncidentIds, session);
+
   const incidentBreakdown = [];
   let totalResolvedIncidentDamage = 0;
   for (const incident of resolvedIncidents) {
     const amount = await getIncidentDamageTotal(incident);
     if (amount <= 0) continue;
+
+    const incidentDetails = (incidentDetailMap[String(incident.id || "")] || []).map((detail) => ({
+      type: String(detail.type || "").toUpperCase(),
+      item_id: detail.item_id ? String(detail.item_id) : null,
+      service_catalog_id: detail.service_catalog_id ? String(detail.service_catalog_id) : null,
+      name_snapshot: detail.name_snapshot || null,
+      quantity: Number(detail.quantity || 0),
+      unit_cost_snapshot: Number(detail.unit_cost_snapshot || 0),
+      total_cost: Number(detail.total_cost || 0),
+      note: detail.note || null,
+    }));
+
+    const damagedProducts = incidentDetails
+      .filter((detail) => detail.type === "ITEM")
+      .map((detail) => ({
+        item_id: detail.item_id,
+        name_snapshot: detail.name_snapshot,
+        quantity: detail.quantity,
+        unit_cost_snapshot: detail.unit_cost_snapshot,
+        total_cost: detail.total_cost,
+        note: detail.note,
+      }));
 
     totalResolvedIncidentDamage += amount;
     incidentBreakdown.push({
@@ -236,6 +323,8 @@ const settleOrderDepositAfterIncidentsInternal = async ({
       booking_id: String(incident.booking_id || ""),
       amount,
       status: String(incident.status || "").toUpperCase(),
+      incident_details: incidentDetails,
+      damaged_products: damagedProducts,
     });
   }
 
@@ -251,6 +340,16 @@ const settleOrderDepositAfterIncidentsInternal = async ({
   let outstandingAmount = damageAfterDeposit;
   let wallet = null;
 
+  console.info(`${logPrefix} AmountCalculated`, {
+    order_id: normalizedOrderId,
+    resolved_incident_count: resolvedIncidents.length,
+    resolved_damage_total: totalResolvedIncidentDamage,
+    deposit_total: depositTotal,
+    deposit_used: depositUsed,
+    refunded_to_wallet_amount: refundedToWalletAmount,
+    damage_after_deposit: damageAfterDeposit,
+  });
+
   if (damageAfterDeposit > 0) {
     wallet = await getOrCreateWalletByUserId(order.user_id, session);
 
@@ -262,6 +361,14 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     if (walletDebitAmount > 0) {
       wallet.balance = balanceAfter;
       await wallet.save({ session });
+
+      console.info(`${logPrefix} WalletDebited`, {
+        order_id: normalizedOrderId,
+        user_id: String(order.user_id || ""),
+        wallet_debit_amount: walletDebitAmount,
+        balance_before: balanceBefore,
+        balance_after: balanceAfter,
+      });
 
       const createdPenaltyTx = await Transaction.create(
         [
@@ -303,6 +410,14 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     const balanceAfter = roundMoney(balanceBefore + refundedToWalletAmount);
     wallet.balance = balanceAfter;
     await wallet.save({ session });
+
+    console.info(`${logPrefix} WalletRefunded`, {
+      order_id: normalizedOrderId,
+      user_id: String(order.user_id || ""),
+      refunded_to_wallet_amount: refundedToWalletAmount,
+      balance_before: balanceBefore,
+      balance_after: balanceAfter,
+    });
 
     const createdRefundTx = await Transaction.create(
       [
@@ -359,6 +474,13 @@ const settleOrderDepositAfterIncidentsInternal = async ({
   order.deposit_settlement_snapshot = snapshot;
   await order.save({ session });
 
+  console.info(`${logPrefix} OrderUpdated`, {
+    order_id: normalizedOrderId,
+    settlement_status: settlementStatus,
+    outstanding_amount: outstandingAmount,
+    settled_at: settledAt.toISOString(),
+  });
+
   await debtService.recordOrderOutstandingDebt(
     {
       userId: order.user_id,
@@ -371,6 +493,17 @@ const settleOrderDepositAfterIncidentsInternal = async ({
     },
     session,
   );
+
+  console.info(`${logPrefix} DebtSynced`, {
+    order_id: normalizedOrderId,
+    outstanding_amount: outstandingAmount,
+    incident_count: incidentBreakdown.length,
+  });
+
+  console.info(`${logPrefix} Done`, {
+    order_id: normalizedOrderId,
+    settlement_status: settlementStatus,
+  });
 
   return {
     settled: true,
@@ -392,11 +525,30 @@ const settleOrderDepositAfterIncidentsInternal = async ({
 exports.settleOrderDepositAfterIncidents = async ({ orderId, trigger = "SYSTEM" } = {}) => {
   let settlementResult = null;
   const session = await mongoose.startSession();
+  const logPrefix = "[DepositSettlement][Incident]";
 
   try {
+    console.info(`${logPrefix} TransactionStart`, {
+      order_id: String(orderId || "").trim() || null,
+      trigger,
+    });
+
     await session.withTransaction(async () => {
       settlementResult = await settleOrderDepositAfterIncidentsInternal({ orderId, trigger, session });
     });
+
+    console.info(`${logPrefix} TransactionCommitted`, {
+      order_id: String(orderId || "").trim() || null,
+      settled: Boolean(settlementResult?.settled),
+      reason: settlementResult?.reason || null,
+    });
+  } catch (error) {
+    console.error(`${logPrefix} TransactionFailed`, {
+      order_id: String(orderId || "").trim() || null,
+      trigger,
+      error: error?.message || String(error),
+    });
+    throw error;
   } finally {
     await session.endSession();
   }
@@ -604,14 +756,20 @@ const buildIncidentPhotoMap = async (incidentIds = []) => {
   }, {});
 };
 
-const buildIncidentDetailMap = async (incidentIds = []) => {
+const buildIncidentDetailMap = async (incidentIds = [], session = null) => {
   if (!Array.isArray(incidentIds) || incidentIds.length === 0) {
     return {};
   }
 
-  const details = await IncidentDetail.find({ incident_id: { $in: incidentIds } })
+  let query = IncidentDetail.find({ incident_id: { $in: incidentIds } })
     .select("incident_id type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
     .lean();
+
+  if (session) {
+    query = query.session(session);
+  }
+
+  const details = await query;
 
   return details.reduce((map, item) => {
     if (!map[item.incident_id]) map[item.incident_id] = [];
@@ -1236,6 +1394,14 @@ exports.createDamageReport = async (
 exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   const { status, resolution_note, escalation_note } = payload;
   const normalizedStatus = normalizeStatus(status);
+  const logPrefix = "[IncidentReview][SettlementGate]";
+
+  console.info(`${logPrefix} Start`, {
+    incident_id: String(incidentId || ""),
+    requested_status: normalizedStatus || null,
+    actor_role: String(actor?.role || "").toLowerCase() || null,
+    actor_id: resolveActorId(actor),
+  });
 
   if (!INCIDENT_STATUSES.includes(normalizedStatus)) {
     throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
@@ -1257,6 +1423,12 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   }
 
   const previousStatus = String(incident.status || "").toUpperCase();
+  console.info(`${logPrefix} CurrentStatus`, {
+    incident_id: String(incident.id || incidentId || ""),
+    previous_status: previousStatus,
+    requested_status: normalizedStatus,
+  });
+
   if (previousStatus !== normalizedStatus && previousStatus !== "PENDING") {
     throw createError("Only incidents in PENDING status can be reviewed", 400);
   }
@@ -1275,6 +1447,8 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
     booking_order_id: null,
     refunded_to_wallet_amount: 0,
     refunded_transaction_id: null,
+    settlement_applied: false,
+    settlement_reason: null,
   };
 
   incident.status = normalizedStatus;
@@ -1296,6 +1470,15 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   }
 
   const isManagerReviewFlow = actorRole === "manager" && ["RESOLVED", "DISMISSED"].includes(normalizedStatus);
+  console.info(`${logPrefix} SettlementGateDecision`, {
+    incident_id: String(incident.id || incidentId || ""),
+    actor_role: actorRole,
+    previous_status: previousStatus,
+    requested_status: normalizedStatus,
+    is_manager_review_flow: isManagerReviewFlow,
+    has_real_status_transition: previousStatus !== normalizedStatus,
+  });
+
   if (isManagerReviewFlow && previousStatus !== normalizedStatus) {
     const reporter = await User.findOne({
       $or: [
@@ -1332,10 +1515,31 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
       ? await Booking.findOne({ id: incident.booking_id }).select("order_id").lean()
       : null;
 
+    console.info(`${logPrefix} BookingResolved`, {
+      incident_id: String(incident.id || incidentId || ""),
+      booking_id: String(incident.booking_id || ""),
+      booking_found: Boolean(booking),
+      booking_order_id: booking?.order_id ? String(booking.order_id) : null,
+    });
+
     if (booking?.order_id) {
+      console.info(`${logPrefix} TriggerSettlement`, {
+        incident_id: String(incident.id || incidentId || ""),
+        order_id: String(booking.order_id),
+        trigger: `INCIDENT_${normalizedStatus}`,
+      });
+
       const settlementResult = await exports.settleOrderDepositAfterIncidents({
         orderId: booking.order_id,
         trigger: `INCIDENT_${normalizedStatus}`,
+      });
+
+      console.info(`${logPrefix} SettlementResult`, {
+        incident_id: String(incident.id || incidentId || ""),
+        order_id: String(booking.order_id),
+        settled: Boolean(settlementResult?.settled),
+        reason: settlementResult?.reason || null,
+        has_summary: Boolean(settlementResult?.summary),
       });
 
       if (settlementResult?.summary) {
@@ -1344,7 +1548,48 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
         damageBilling.deposit_deducted_value = settlementResult.summary.deposit_deducted_value;
         damageBilling.total_amount_value = settlementResult.summary.outstanding_amount;
         damageBilling.refunded_to_wallet_amount = settlementResult.summary.refunded_to_wallet_amount;
+        damageBilling.settlement_applied = true;
+        damageBilling.settlement_reason = null;
+      } else {
+        damageBilling.booking_order_id = booking.order_id;
+        damageBilling.settlement_applied = false;
+        damageBilling.settlement_reason = settlementResult?.reason || "SETTLEMENT_NOT_APPLIED";
       }
+    } else {
+      console.warn(`${logPrefix} SkipSettlement`, {
+        incident_id: String(incident.id || incidentId || ""),
+        reason: "BOOKING_ORDER_NOT_FOUND",
+        booking_id: String(incident.booking_id || ""),
+      });
+
+      damageBilling.settlement_applied = false;
+      damageBilling.settlement_reason = "BOOKING_ORDER_NOT_FOUND";
+    }
+  } else {
+    console.info(`${logPrefix} SkipSettlement`, {
+      incident_id: String(incident.id || incidentId || ""),
+      reason: "GATE_NOT_PASSED",
+      actor_role: actorRole,
+      previous_status: previousStatus,
+      requested_status: normalizedStatus,
+    });
+
+    const isSettlementTargetStatus = ["RESOLVED", "DISMISSED"].includes(normalizedStatus);
+    const hasRealStatusTransition = previousStatus !== normalizedStatus;
+
+    if (isSettlementTargetStatus && hasRealStatusTransition) {
+      damageBilling.settlement_applied = false;
+
+      if (!actorRole) {
+        damageBilling.settlement_reason = "ACTOR_ROLE_MISSING";
+      } else if (actorRole !== "manager") {
+        damageBilling.settlement_reason = "ACTOR_ROLE_NOT_ELIGIBLE_FOR_SETTLEMENT";
+      } else {
+        damageBilling.settlement_reason = "SETTLEMENT_GATE_NOT_PASSED";
+      }
+    } else if (isSettlementTargetStatus && !hasRealStatusTransition) {
+      damageBilling.settlement_applied = false;
+      damageBilling.settlement_reason = "STATUS_NOT_CHANGED";
     }
   }
 

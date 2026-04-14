@@ -1,5 +1,6 @@
 const Location = require("../models/Location");
 const PodCluster = require("../models/PodCluster");
+const Pod = require("../models/Pod");
 
 // Location Type Hierarchy Configuration
 // Định nghĩa quan hệ cha → con được phép
@@ -98,6 +99,101 @@ class LocationService {
         }
 
         return Location.getDescendants(locationId);
+    }
+
+    /**
+     * Tính tỉ lệ pod hoạt động/chiếm dụng tại tất cả location con của location cha
+     */
+    async getPodOccupancyRateByParentLocation(parentLocationId) {
+        const parentLocation = await Location.findOne({ id: parentLocationId });
+
+        if (!parentLocation) {
+            const error = new Error("Parent location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        const descendants = await Location.getDescendants(parentLocationId);
+        const childLocationIds = descendants.map((location) => location.id);
+
+        if (childLocationIds.length === 0) {
+            return {
+                parentLocation: {
+                    id: parentLocation.id,
+                    name: parentLocation.name,
+                    type: parentLocation.type,
+                },
+                childLocationCount: 0,
+                totalPods: 0,
+                availablePods: 0,
+                activePods: 0,
+                occupiedPods: 0,
+                activeRate: 0,
+                occupancyRate: 0,
+                primaryRate: {
+                    type: "ACTIVE_RATE",
+                    value: 0,
+                },
+            };
+        }
+
+        const clusters = await PodCluster.find({ location_id: { $in: childLocationIds } })
+            .select("id")
+            .lean();
+        const clusterIds = clusters.map((cluster) => cluster.id);
+
+        if (clusterIds.length === 0) {
+            return {
+                parentLocation: {
+                    id: parentLocation.id,
+                    name: parentLocation.name,
+                    type: parentLocation.type,
+                },
+                childLocationCount: childLocationIds.length,
+                totalPods: 0,
+                availablePods: 0,
+                activePods: 0,
+                occupiedPods: 0,
+                activeRate: 0,
+                occupancyRate: 0,
+                primaryRate: {
+                    type: "ACTIVE_RATE",
+                    value: 0,
+                },
+            };
+        }
+
+        const pods = await Pod.find({ cluster_id: { $in: clusterIds } })
+            .select("status")
+            .lean();
+
+        const totalPods = pods.length;
+        const availablePods = pods.filter((pod) => pod.status === "AVAILABLE").length;
+        const activePods = pods.filter((pod) => ["AVAILABLE", "OCCUPIED"].includes(pod.status)).length;
+        const occupiedPods = pods.filter((pod) => pod.status === "OCCUPIED").length;
+        const activeRate =
+            totalPods > 0 ? Number(((activePods / totalPods) * 100).toFixed(2)) : 0;
+        const occupancyRate =
+            totalPods > 0 ? Number(((occupiedPods / totalPods) * 100).toFixed(2)) : 0;
+
+        return {
+            parentLocation: {
+                id: parentLocation.id,
+                name: parentLocation.name,
+                type: parentLocation.type,
+            },
+            childLocationCount: childLocationIds.length,
+            totalPods,
+            availablePods,
+            activePods,
+            occupiedPods,
+            activeRate,
+            occupancyRate,
+            primaryRate: {
+                type: "ACTIVE_RATE",
+                value: activeRate,
+            },
+        };
     }
 
     /**
