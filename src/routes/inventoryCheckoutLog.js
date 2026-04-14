@@ -3,6 +3,7 @@ const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
   createInventoryCheckoutLog,
+  getShiftInventoryEstimation,
   getAllInventoryCheckoutLogs,
   getInventoryCheckoutLogById,
   updateInventoryCheckoutLog,
@@ -74,6 +75,10 @@ const {
  *           nullable: true
  *           description: Defaults to the authenticated user; managers can override when needed
  *           example: user_001
+ *         shift_assignment_id:
+ *           type: string
+ *           nullable: true
+ *           description: Used for ownership/permission guard only, not persisted to inventory_checkout_logs
  *         cleaning_task_id:
  *           type: string
  *           nullable: true
@@ -91,6 +96,35 @@ const {
  *         reason:
  *           type: string
  *           nullable: true
+ *     InventoryEstimationItem:
+ *       type: object
+ *       properties:
+ *         item_id:
+ *           type: string
+ *         item_name:
+ *           type: string
+ *           nullable: true
+ *         required_quantity:
+ *           type: number
+ *         available_quantity:
+ *           type: number
+ *         shortage_quantity:
+ *           type: number
+ *         suggested_stocks:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               inventory_stock_id:
+ *                 type: string
+ *               warehouse_id:
+ *                 type: string
+ *                 nullable: true
+ *               warehouse_name:
+ *                 type: string
+ *                 nullable: true
+ *               quantity_available:
+ *                 type: number
  */
 
 /**
@@ -102,19 +136,6 @@ const {
  *     responses:
  *       200:
  *         description: Inventory checkout logs retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: number
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/InventoryCheckoutLog'
  */
 router.get("/", getAllInventoryCheckoutLogs);
 
@@ -133,15 +154,6 @@ router.get("/", getAllInventoryCheckoutLogs);
  *     responses:
  *       200:
  *         description: Inventory checkout log retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   $ref: '#/components/schemas/InventoryCheckoutLog'
  *       404:
  *         description: Inventory checkout log not found
  */
@@ -164,14 +176,42 @@ router.get("/:id", getInventoryCheckoutLogById);
  *     responses:
  *       201:
  *         description: Inventory checkout log created successfully
- *       400:
- *         description: Validation error
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden
  */
-router.post("/", protect, authorize("admin", "manager"), createInventoryCheckoutLog);
+router.post("/", protect, authorize("admin", "manager", "cleaner"), createInventoryCheckoutLog);
+
+/**
+ * @swagger
+ * /api/inventory-checkout-logs/estimate/{shift_assignment_id}:
+ *   get:
+ *     summary: Estimate required inventory by shift assignment
+ *     tags: [Inventory Checkout Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: shift_assignment_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: include_done
+ *         schema:
+ *           type: boolean
+ *           default: false
+ *       - in: query
+ *         name: warehouse_id
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Estimation generated successfully
+ */
+router.get(
+  "/estimate/:shift_assignment_id",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  getShiftInventoryEstimation
+);
 
 /**
  * @swagger
@@ -196,12 +236,6 @@ router.post("/", protect, authorize("admin", "manager"), createInventoryCheckout
  *     responses:
  *       200:
  *         description: Inventory checkout log updated successfully
- *       404:
- *         description: Inventory checkout log not found
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden
  */
 router.put("/:id", protect, authorize("admin", "manager"), updateInventoryCheckoutLog);
 
@@ -222,12 +256,6 @@ router.put("/:id", protect, authorize("admin", "manager"), updateInventoryChecko
  *     responses:
  *       200:
  *         description: Inventory checkout log deleted successfully
- *       404:
- *         description: Inventory checkout log not found
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden
  */
 router.delete("/:id", protect, authorize("admin"), deleteInventoryCheckoutLog);
 

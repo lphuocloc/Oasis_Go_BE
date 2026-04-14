@@ -10,6 +10,24 @@ exports.createInventoryCheckoutLog = async (req, res) => {
   }
 };
 
+exports.getShiftInventoryEstimation = async (req, res) => {
+  try {
+    const estimation = await inventoryCheckoutLogService.estimateByShiftAssignment(
+      req.params.shift_assignment_id,
+      req.user,
+      req.query
+    );
+
+    res.status(200).json({
+      success: true,
+      data: estimation,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error estimating inventory by shift" });
+  }
+};
+
 exports.getAllInventoryCheckoutLogs = async (req, res) => {
   try {
     const logs = await inventoryCheckoutLogService.getAllInventoryCheckoutLogs(req.query);
