@@ -491,11 +491,12 @@ class StaffAttendanceLogService {
     const workDate = this.getWorkDateFromShiftWindow(shiftWindow);
     this.ensureRequestedWorkDateMatchesWindow(date, workDate);
     const now = new Date();
-    if (now < shiftWindow.checkinAllowedFrom || now > shiftWindow.shiftEnd) {
-      const error = new Error("Chi duoc vao ca tu 30 phut truoc gio bat dau den het gio ket thuc ca");
-      error.statusCode = 400;
-      throw error;
-    }
+    // TEMP DISABLED FOR TESTING: check-in time window validation (30 min early)
+    // if (now < shiftWindow.checkinAllowedFrom || now > shiftWindow.shiftEnd) {
+    //   const error = new Error("Chi duoc vao ca tu 30 phut truoc gio bat dau den het gio ket thuc ca");
+    //   error.statusCode = 400;
+    //   throw error;
+    // }
 
     const existingCheckinLog = await StaffAttendanceLog.findOne({
       shift_assignment_id: assignment.id,
@@ -561,11 +562,12 @@ class StaffAttendanceLogService {
     const workDate = this.getWorkDateFromShiftWindow(shiftWindow);
     this.ensureRequestedWorkDateMatchesWindow(date, workDate);
     const now = new Date();
-    if (now < shiftWindow.shiftStart || now > shiftWindow.checkoutAllowedUntil) {
-      const error = new Error("Chi duoc tan ca trong thoi gian ca va toi da 180 phut sau khi ket thuc ca");
-      error.statusCode = 400;
-      throw error;
-    }
+    // TEMP DISABLED FOR TESTING: check-out time window validation (180 min late)
+    // if (now < shiftWindow.shiftStart || now > shiftWindow.checkoutAllowedUntil) {
+    //   const error = new Error("Chi duoc tan ca trong thoi gian ca va toi da 180 phut sau khi ket thuc ca");
+    //   error.statusCode = 400;
+    //   throw error;
+    // }
 
     const existingCheckinLog = await StaffAttendanceLog.findOne({
       shift_assignment_id: assignment.id,

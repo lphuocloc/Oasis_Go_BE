@@ -3,6 +3,9 @@ const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
   createInventoryCheckoutLog,
+  createInventoryCheckoutLogsBulk,
+  getShiftInventoryEstimation,
+  getCleanerDailyCheckoutLogs,
   getAllInventoryCheckoutLogs,
   getInventoryCheckoutLogById,
   updateInventoryCheckoutLog,
@@ -51,6 +54,47 @@ const {
  *         reason:
  *           type: string
  *           nullable: true
+ *     InventoryCheckoutLogBulkInput:
+ *       type: object
+ *       required:
+ *         - logs
+ *       properties:
+ *         staff_id:
+ *           type: string
+ *           nullable: true
+ *           description: Defaults to authenticated user if omitted
+ *         logs:
+ *           type: array
+ *           minItems: 1
+ *           maxItems: 100
+ *           items:
+ *             type: object
+ *             required:
+ *               - inventory_stock_id
+ *               - quantity
+ *             properties:
+ *               inventory_stock_id:
+ *                 type: string
+ *               cleaning_task_id:
+ *                 type: string
+ *                 nullable: true
+ *               maintenance_task_id:
+ *                 type: string
+ *                 nullable: true
+ *               shift_assignment_id:
+ *                 type: string
+ *                 nullable: true
+ *                 description: Used for ownership/permission guard only, not persisted
+ *               action_type:
+ *                 type: string
+ *                 enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *                 default: CHECKOUT
+ *               quantity:
+ *                 type: number
+ *                 minimum: 1
+ *               reason:
+ *                 type: string
+ *                 nullable: true
  *           example: Use for routine cleaning
  *         actor_id:
  *           type: string
@@ -74,6 +118,10 @@ const {
  *           nullable: true
  *           description: Defaults to the authenticated user; managers can override when needed
  *           example: user_001
+ *         shift_assignment_id:
+ *           type: string
+ *           nullable: true
+ *           description: Used for ownership/permission guard only, not persisted to inventory_checkout_logs
  *         cleaning_task_id:
  *           type: string
  *           nullable: true
@@ -91,6 +139,35 @@ const {
  *         reason:
  *           type: string
  *           nullable: true
+ *     InventoryEstimationItem:
+ *       type: object
+ *       properties:
+ *         item_id:
+ *           type: string
+ *         item_name:
+ *           type: string
+ *           nullable: true
+ *         required_quantity:
+ *           type: number
+ *         available_quantity:
+ *           type: number
+ *         shortage_quantity:
+ *           type: number
+ *         suggested_stocks:
+ *           type: array
+ *           items:
+ *             type: object
+ *             properties:
+ *               inventory_stock_id:
+ *                 type: string
+ *               warehouse_id:
+ *                 type: string
+ *                 nullable: true
+ *               warehouse_name:
+ *                 type: string
+ *                 nullable: true
+ *               quantity_available:
+ *                 type: number
  */
 
 /**
@@ -102,19 +179,6 @@ const {
  *     responses:
  *       200:
  *         description: Inventory checkout logs retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: number
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/InventoryCheckoutLog'
  */
 router.get("/", getAllInventoryCheckoutLogs);
 
@@ -133,15 +197,6 @@ router.get("/", getAllInventoryCheckoutLogs);
  *     responses:
  *       200:
  *         description: Inventory checkout log retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   $ref: '#/components/schemas/InventoryCheckoutLog'
  *       404:
  *         description: Inventory checkout log not found
  */
@@ -164,14 +219,103 @@ router.get("/:id", getInventoryCheckoutLogById);
  *     responses:
  *       201:
  *         description: Inventory checkout log created successfully
- *       400:
- *         description: Validation error
- *       401:
- *         description: Unauthorized
+ */
+router.post("/", protect, authorize("admin", "manager", "cleaner"), createInventoryCheckoutLog);
+
+/**
+ * @swagger
+ * /api/inventory-checkout-logs/bulk:
+ *   post:
+ *     summary: Create multiple inventory checkout logs in one request
+ *     tags: [Inventory Checkout Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/InventoryCheckoutLogBulkInput'
+ *     responses:
+ *       201:
+ *         description: Inventory checkout logs created successfully
+ */
+router.post("/bulk", protect, authorize("admin", "manager", "cleaner"), createInventoryCheckoutLogsBulk);
+
+/**
+ * @swagger
+ * /api/inventory-checkout-logs/estimate/{cleaner_id}:
+ *   get:
+ *     summary: Estimate required inventory for a cleaner in a day (default today)
+ *     tags: [Inventory Checkout Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: cleaner_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: date
+ *         description: Date to estimate (ISO date, default is server local today)
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: include_done
+ *         schema:
+ *           type: boolean
+ *           default: true
+ *       - in: query
+ *         name: warehouse_id
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Daily estimation generated successfully
+ */
+router.get(
+  "/estimate/:cleaner_id",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  getShiftInventoryEstimation
+);
+
+/**
+ * @swagger
+ * /api/inventory-checkout-logs/daily/{cleaner_id}:
+ *   get:
+ *     summary: Get all CHECKOUT logs for a cleaner on a specific day
+ *     tags: [Inventory Checkout Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: cleaner_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: date
+ *         description: Date to query (ISO date e.g. 2026-04-15, default today)
+ *         schema:
+ *           type: string
+ *           format: date
+ *     responses:
+ *       200:
+ *         description: Daily checkout logs retrieved successfully
  *       403:
  *         description: Forbidden
+ *       404:
+ *         description: Cleaner not found
  */
-router.post("/", protect, authorize("admin", "manager"), createInventoryCheckoutLog);
+router.get(
+  "/daily/:cleaner_id",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  getCleanerDailyCheckoutLogs
+);
 
 /**
  * @swagger
@@ -196,12 +340,6 @@ router.post("/", protect, authorize("admin", "manager"), createInventoryCheckout
  *     responses:
  *       200:
  *         description: Inventory checkout log updated successfully
- *       404:
- *         description: Inventory checkout log not found
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden
  */
 router.put("/:id", protect, authorize("admin", "manager"), updateInventoryCheckoutLog);
 
@@ -222,12 +360,6 @@ router.put("/:id", protect, authorize("admin", "manager"), updateInventoryChecko
  *     responses:
  *       200:
  *         description: Inventory checkout log deleted successfully
- *       404:
- *         description: Inventory checkout log not found
- *       401:
- *         description: Unauthorized
- *       403:
- *         description: Forbidden
  */
 router.delete("/:id", protect, authorize("admin"), deleteInventoryCheckoutLog);
 
