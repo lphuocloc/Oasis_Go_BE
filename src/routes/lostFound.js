@@ -1,12 +1,34 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
   createLostFoundItem,
   getLostFoundItems,
+  getMyLostFoundItems,
   getLostFoundItemById,
   updateLostFoundStatus,
 } = require("../controllers/lostFoundController");
+
+const uploadLostFoundPhotoInMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+});
+
+const handleLostFoundPhotoUpload = (req, res, next) => {
+  uploadLostFoundPhotoInMemory.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "image", maxCount: 1 },
+  ])(req, res, (error) => {
+    if (!error) return next();
+    const isMulterError = error && error.name === "MulterError";
+    const statusCode = isMulterError ? 400 : 500;
+    return res.status(statusCode).json({
+      success: false,
+      message: isMulterError ? error.message : "File upload error",
+    });
+  });
+};
 
 /**
  * @swagger
@@ -25,12 +47,9 @@ const {
  *         id:
  *           type: string
  *           example: 9c9f1555-f20f-4e1d-b597-c8f6f421648d
- *         cleaning_task_id:
- *           type: string
- *           nullable: true
- *           example: 129bc093-80fd-4eb7-9f04-d3e2c2390ef8
  *         pod_id:
  *           type: string
+ *           nullable: true
  *           example: 8f1a7c3f-9d42-4418-aa0f-f129eb0e2b8d
  *         booking_id:
  *           type: string
@@ -39,6 +58,10 @@ const {
  *         found_by_user_id:
  *           type: string
  *           example: 87098f0d-a69a-466f-b9c4-9e44383d5882
+ *         warehouse_id:
+ *           type: string
+ *           nullable: true
+ *           example: d4e5f6a7-b8c9-4d0e-a1b2-c3d4e5f6a7b8
  *         item_name:
  *           type: string
  *           example: iPhone 14 Pro
@@ -46,13 +69,17 @@ const {
  *           type: string
  *           nullable: true
  *           example: Black color phone found under seat
+ *         photo_url:
+ *           type: string
+ *           nullable: true
+ *           example: https://res.cloudinary.com/oasisgo/lost-found/item.jpg
  *         found_at:
  *           type: string
  *           format: date-time
  *         status:
  *           type: string
- *           enum: [FOUND, STORED, CLAIMED, DISPOSED]
- *           example: STORED
+ *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
+ *           example: FOUND
  *         claimed_by_user_id:
  *           type: string
  *           nullable: true
@@ -72,26 +99,34 @@ const {
  *       required:
  *         - item_name
  *       properties:
- *         cleaning_task_id:
- *           type: string
- *           nullable: true
- *           description: Use this when item was found during a known cleaning task
- *           example: 129bc093-80fd-4eb7-9f04-d3e2c2390ef8
  *         pod_id:
  *           type: string
  *           nullable: true
- *           description: Use this when no cleaning_task_id is available
  *           example: 8f1a7c3f-9d42-4418-aa0f-f129eb0e2b8d
  *         booking_id:
  *           type: string
  *           nullable: true
  *           example: 98484f31-7549-42fd-8df8-a692bd3da3a4
+ *         warehouse_id:
+ *           type: string
+ *           nullable: true
+ *           description: Kho cơ sở nơi lưu giữ đồ vật
+ *           example: d4e5f6a7-b8c9-4d0e-a1b2-c3d4e5f6a7b8
  *         item_name:
  *           type: string
  *           example: Wallet
  *         description:
  *           type: string
  *           example: Brown leather wallet with card holder
+ *         photo:
+ *           type: string
+ *           format: binary
+ *           description: Ảnh thực tế món đồ (multipart/form-data). Nếu không upload file, có thể truyền photo_url hoặc base64 data URI.
+ *         photo_url:
+ *           type: string
+ *           nullable: true
+ *           description: URL ảnh trực tiếp hoặc base64 data URI (dùng thay cho field photo)
+ *           example: https://res.cloudinary.com/oasisgo/lost-found/item.jpg
  *         found_at:
  *           type: string
  *           format: date-time
@@ -103,7 +138,7 @@ const {
  *       properties:
  *         status:
  *           type: string
- *           enum: [FOUND, STORED, CLAIMED, DISPOSED]
+ *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
  *           example: CLAIMED
  */
 
@@ -116,10 +151,6 @@ const {
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: cleaning_task_id
- *         schema:
- *           type: string
  *       - in: query
  *         name: pod_id
  *         schema:
@@ -136,7 +167,7 @@ const {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [FOUND, STORED, CLAIMED, DISPOSED]
+ *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
  *       - in: query
  *         name: page
  *         schema:
@@ -183,25 +214,98 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundI
  * @swagger
  * /api/lost-found-items:
  *   post:
- *     summary: Create lost & found item (independent flow)
+ *     summary: Báo cáo đồ thất lạc tìm được (Cleaner/Manager/Admin)
  *     tags: [Lost Found]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
  *       required: true
  *       content:
+ *         multipart/form-data:
+ *           schema:
+ *             $ref: '#/components/schemas/LostFoundCreateInput'
  *         application/json:
  *           schema:
  *             $ref: '#/components/schemas/LostFoundCreateInput'
  *     responses:
  *       201:
- *         description: Lost & found item created successfully
+ *         description: Tạo lost & found item thành công
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/LostFoundItem'
  *       400:
- *         description: Invalid input
+ *         description: Thiếu thông tin bắt buộc hoặc ảnh không hợp lệ
  *       404:
- *         description: Cleaning task or pod not found
+ *         description: Pod không tồn tại
+ *       413:
+ *         description: Ảnh vượt quá giới hạn 8MB
  */
-router.post("/", protect, authorize("admin", "manager", "cleaner"), createLostFoundItem);
+router.post("/", protect, authorize("admin", "manager", "cleaner"), handleLostFoundPhotoUpload, createLostFoundItem);
+
+/**
+ * @swagger
+ * /api/lost-found-items/my:
+ *   get:
+ *     summary: Lấy danh sách đồ thất lạc do tôi tìm thấy
+ *     description: Trả về tất cả các món đồ mà người dùng đang đăng nhập đã báo cáo tìm thấy. Hỗ trợ filter theo status và phân trang.
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Danh sách đồ tìm thấy của tôi
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/LostFoundItem'
+ *                 pagination:
+ *                   type: object
+ *                   nullable: true
+ *                   properties:
+ *                     current_page:
+ *                       type: integer
+ *                     total_pages:
+ *                       type: integer
+ *                     total_items:
+ *                       type: integer
+ *                     items_per_page:
+ *                       type: integer
+ */
+router.get("/my", protect, authorize("admin", "manager", "cleaner"), getMyLostFoundItems);
 
 /**
  * @swagger
