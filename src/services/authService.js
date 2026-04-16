@@ -29,8 +29,8 @@ class AuthService {
     if (user.otpRequestCount >= 3) {
       const timeLeft = Math.ceil(
         (user.otpLastRequestAt.getTime() + 15 * 60 * 1000 - now.getTime()) /
-        1000 /
-        60,
+          1000 /
+          60,
       );
       return {
         allowed: false,
@@ -379,7 +379,10 @@ class AuthService {
   /**
    * Cập nhật profile user
    */
-  async updateProfile(userId, { name, avatar, phone, bank_name, bank_account_number }) {
+  async updateProfile(
+    userId,
+    { name, avatar, phone, bank_name, bank_account_number },
+  ) {
     const user = await User.findById(userId);
 
     if (!user) {
@@ -391,8 +394,11 @@ class AuthService {
     if (name !== undefined) user.name = String(name || "").trim() || null;
     if (avatar !== undefined) user.avatar = String(avatar || "").trim() || null;
     if (phone !== undefined) user.phone = String(phone || "").trim() || null;
-    if (bank_name !== undefined) user.bank_name = String(bank_name || "").trim() || null;
-    if (bank_account_number !== undefined) user.bank_account_number = String(bank_account_number || "").trim() || null;
+    if (bank_name !== undefined)
+      user.bank_name = String(bank_name || "").trim() || null;
+    if (bank_account_number !== undefined)
+      user.bank_account_number =
+        String(bank_account_number || "").trim() || null;
 
     await user.save();
 

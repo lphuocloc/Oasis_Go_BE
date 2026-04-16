@@ -19,6 +19,7 @@ const { autoAssignTaskForBooking } = require("./cleaningTaskService");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
 const depositPolicyService = require("./depositPolicyService");
+const Notification = require("../models/Notification");
 
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
@@ -1631,10 +1632,22 @@ class BookingOrderService {
           ? await PodCluster.findOne({ id: clusterIds[0] }).lean()
           : null;
 
+      //  deposit
+
+      const settlementNotification = await Notification.findOne({
+        user_id: order.user_id,
+        "data.order_id": orderId,
+        event_code: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
+      })
+        .sort({ createdAt: -1 })
+        .lean();
+
+      const settlement_details = settlementNotification?.data || null;
       return {
         order,
         bookings: bookingsWithPods,
         podcluster,
+        settlement_details,
       };
     } catch (error) {
       throw error;
@@ -1693,9 +1706,13 @@ class BookingOrderService {
       }
 
       if (status) {
-        const statusArray = String(status).split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+        const statusArray = String(status)
+          .split(",")
+          .map((s) => s.trim().toUpperCase())
+          .filter(Boolean);
         if (statusArray.length > 0) {
-          query.status = statusArray.length === 1 ? statusArray[0] : { $in: statusArray };
+          query.status =
+            statusArray.length === 1 ? statusArray[0] : { $in: statusArray };
         }
       }
 
