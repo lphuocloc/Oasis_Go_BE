@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
-const LOST_FOUND_STATUSES = ["FOUND", "STORED", "CLAIMED", "DISPOSED"];
+const LOST_FOUND_STATUSES = ["FOUND", "CLAIMED", "DISPOSED", "RETURNED_TO_USER"];
 
 const lostFoundItemSchema = new mongoose.Schema(
   {
@@ -11,15 +11,9 @@ const lostFoundItemSchema = new mongoose.Schema(
       unique: true,
       required: true,
     },
-    cleaning_task_id: {
-      type: String,
-      default: null,
-      ref: "CleaningTask",
-      index: true,
-    },
     pod_id: {
       type: String,
-      required: [true, "pod_id is required"],
+      default: null,
       ref: "Pod",
       index: true,
     },
@@ -35,6 +29,12 @@ const lostFoundItemSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
+    warehouse_id: {
+      type: String,
+      default: null,
+      ref: "Warehouse",
+      index: true,
+    },
     item_name: {
       type: String,
       required: [true, "item_name is required"],
@@ -44,6 +44,10 @@ const lostFoundItemSchema = new mongoose.Schema(
       type: String,
       default: null,
       trim: true,
+    },
+    photo_url: {
+      type: String,
+      default: null,
     },
     found_at: {
       type: Date,
