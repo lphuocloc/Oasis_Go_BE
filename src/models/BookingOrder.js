@@ -89,6 +89,19 @@ const bookingOrderSchema = new mongoose.Schema(
       },
       default: "PENDING_INSPECTION",
     },
+    outstanding_damage_amount: {
+      type: Number,
+      default: 0,
+      min: [0, "Outstanding damage amount cannot be negative"],
+    },
+    deposit_settled_at: {
+      type: Date,
+      default: null,
+    },
+    deposit_settlement_snapshot: {
+      type: depositSettlementSnapshotSchema,
+      default: null,
+    },
     status: {
       type: String,
       enum: {
