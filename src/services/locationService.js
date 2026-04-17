@@ -22,6 +22,8 @@ const LEAF_TYPES = ["terminal", "floor", "waiting_lounge"];
 // Tất cả types hợp lệ (phải sync với Model enum)
 const VALID_TYPES = Object.keys(LOCATION_HIERARCHY);
 
+const escapeRegex = (value = "") => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
 class LocationService {
     /**
      * Lấy tất cả locations với filters
@@ -205,6 +207,21 @@ class LocationService {
             throw new Error("Type and name are required");
         }
 
+        const normalizedName = String(name).trim();
+        if (!normalizedName) {
+            throw new Error("Type and name are required");
+        }
+
+        const duplicateLocation = await Location.findOne({
+            name: new RegExp(`^${escapeRegex(normalizedName)}$`, "i"),
+        }).select("id name");
+
+        if (duplicateLocation) {
+            const error = new Error("Location name already exists");
+            error.statusCode = 409;
+            throw error;
+        }
+
         // Validate type có trong danh sách hợp lệ (từ Model enum)
         if (!VALID_TYPES.includes(type)) {
             throw new Error(`Invalid type. Must be one of: ${VALID_TYPES.join(", ")}`);
@@ -236,7 +253,7 @@ class LocationService {
         // Create location
         const location = await Location.create({
             type,
-            name,
+            name: normalizedName,
             description,
             parent_id: parent_id || null,
             address,
@@ -261,6 +278,25 @@ class LocationService {
             throw error;
         }
 
+        let normalizedName = null;
+        if (name !== undefined) {
+            normalizedName = String(name).trim();
+            if (!normalizedName) {
+                throw new Error("Location name is required");
+            }
+
+            const duplicateLocation = await Location.findOne({
+                id: { $ne: locationId },
+                name: new RegExp(`^${escapeRegex(normalizedName)}$`, "i"),
+            }).select("id name");
+
+            if (duplicateLocation) {
+                const error = new Error("Location name already exists");
+                error.statusCode = 409;
+                throw error;
+            }
+        }
+
         // Validate type if changing
         if (type && type !== location.type) {
             if (!VALID_TYPES.includes(type)) {
@@ -270,7 +306,7 @@ class LocationService {
 
         // Update fields
         if (type) location.type = type;
-        if (name) location.name = name;
+        if (name !== undefined) location.name = normalizedName;
         if (description !== undefined) location.description = description;
         if (parent_id !== undefined) location.parent_id = parent_id;
         if (address !== undefined) location.address = address;
@@ -289,7 +325,7 @@ class LocationService {
     async deleteLocation(locationId) {
         const location = await Location.findOne({ id: locationId });
         if (!location) {
-            const error = new Error("Location not found");
+            const error = new Error("Không tìm thấy location");
             error.statusCode = 404;
             throw error;
         }
@@ -297,7 +333,7 @@ class LocationService {
         // Kiểm tra có children không
         const children = await Location.find({ parent_id: locationId });
         if (children.length > 0) {
-            const error = new Error("Cannot delete location with children. Delete children first.");
+            const error = new Error("Không thể xóa location có children. Vui lòng xóa children trước.");
             error.statusCode = 400;
             throw error;
         }
@@ -305,14 +341,14 @@ class LocationService {
         // Kiểm tra có pod clusters không
         const podClusters = await PodCluster.find({ location_id: locationId });
         if (podClusters.length > 0) {
-            const error = new Error("Cannot delete location with pod clusters. Delete pod clusters first.");
+            const error = new Error("Không thể xóa location có pod clusters. Vui lòng xóa pod clusters trước.");
             error.statusCode = 400;
             throw error;
         }
 
         await Location.deleteOne({ id: locationId });
 
-        return { message: "Location deleted successfully" };
+        return { message: "Xóa thành công vị trí!" };
     }
 
     /**
