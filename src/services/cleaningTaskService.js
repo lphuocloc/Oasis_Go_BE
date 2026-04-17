@@ -986,6 +986,8 @@ const cancelOpenTasksForNoShowBooking = async (bookingId) => {
   return cancelledCount;
 };
 
+exports.cancelOpenTasksForNoShowBooking = cancelOpenTasksForNoShowBooking;
+
 exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const includeDebug = options.include_debug === true;
   const dryRun = options.dry_run === true;

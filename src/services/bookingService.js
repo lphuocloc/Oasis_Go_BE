@@ -15,10 +15,21 @@ const {
 const notificationService = require("./notificationService");
 const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
-const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = readEnvMinutes("BOOKING_AUTO_ACTIVATE_GRACE_MINUTES", 15, 1);
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
-const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_LATE_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_LATE_WINDOW_MINUTES", 15, 0);
+const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+const CHECKIN_LATE_WINDOW_MS = CHECKIN_LATE_WINDOW_MINUTES * 60 * 1000;
 const POD_TYPE_STANDARD = "STANDARD";
 const POD_TYPE_SERVICE = "SERVICE";
 const POD_DETAILS_SELECT =
@@ -259,9 +270,11 @@ class BookingService {
   async autoCheckoutExpiredBookings() {
     const now = new Date();
 
-    // Find bookings that are still IN_USE but past their end_time
+    // AUTO_ACTIVATED bookings are handled by NO_SHOW flow, not auto-checkout.
+    // This avoids state races when both jobs run in parallel.
     const expiredBookings = await Booking.find({
       status: "IN_USE",
+      checkin_state: { $ne: "AUTO_ACTIVATED" },
       end_time: { $lte: now },
     }).select("id user_id pod_id order_id start_time end_time status");
 
@@ -912,7 +925,7 @@ class BookingService {
       const bookedInWindow = candidateBookings.find((item) => {
         if (item.status !== "BOOKED") return false;
         const startMs = new Date(item.start_time).getTime();
-        return nowMs >= startMs - CHECKIN_GRACE_PERIOD_MS && nowMs <= startMs + CHECKIN_GRACE_PERIOD_MS;
+        return nowMs >= startMs - CHECKIN_EARLY_WINDOW_MS && nowMs <= startMs + CHECKIN_LATE_WINDOW_MS;
       });
       const latestPastBooked = candidateBookings.find((item) => {
         if (item.status !== "BOOKED") return false;

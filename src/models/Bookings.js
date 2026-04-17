@@ -1,6 +1,17 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_LATE_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_LATE_WINDOW_MINUTES", 15, 0);
+
 const bookingSchema = new mongoose.Schema(
   {
     id: {
@@ -151,16 +162,15 @@ bookingSchema.methods.startUsing = async function () {
     throw new Error(`Cannot start using from ${this.status} status`);
   }
 
-  const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+  const earlyWindowMs = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+  const lateWindowMs = CHECKIN_LATE_WINDOW_MINUTES * 60 * 1000;
   const now = Date.now();
-  const startWindow =
-    new Date(this.start_time).getTime() - CHECKIN_GRACE_PERIOD_MS;
-  const endWindow =
-    new Date(this.start_time).getTime() + CHECKIN_GRACE_PERIOD_MS;
+  const startWindow = new Date(this.start_time).getTime() - earlyWindowMs;
+  const endWindow = new Date(this.start_time).getTime() + lateWindowMs;
 
   if (now < startWindow || now > endWindow) {
     throw new Error(
-      "Check-in is only allowed from 15 minutes before start_time to 15 minutes after start_time",
+      `Check-in is only allowed from ${CHECKIN_EARLY_WINDOW_MINUTES} minutes before start_time to ${CHECKIN_LATE_WINDOW_MINUTES} minutes after start_time`,
     );
   }
 
