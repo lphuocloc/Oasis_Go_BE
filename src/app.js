@@ -18,7 +18,9 @@ bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 
 // Start booking auto-activation checkin job
 const bookingService = require("./services/bookingService");
-bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
+const bookingAutoActivateJobIntervalMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE_JOB_INTERVAL_MINUTES || 1);
+const bookingAutoActivateGraceMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE_GRACE_MINUTES || 15);
+bookingService.startAutoActivateCheckinJob(bookingAutoActivateJobIntervalMinutes, bookingAutoActivateGraceMinutes);
 
 const cleaningTaskService = require("./services/cleaningTaskService");
 const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");

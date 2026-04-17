@@ -21,6 +21,14 @@ const notificationService = require("./notificationService");
 const depositPolicyService = require("./depositPolicyService");
 const Notification = require("../models/Notification");
 
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
 // Slot configuration
 const DEFAULT_SLOT_DURATION_MINUTES = 30;
 const HOLD_EXPIRATION_MINUTES = 10;
@@ -28,6 +36,8 @@ const MINIMUM_DURATION_MINUTES = 60; // Minimum booking: 1 hour
 const PRICE_UNIT_MULTIPLIER = 10000;
 const REFUND_CANCEL_WINDOW_HOURS = 48;
 const REFUND_RATE_BEFORE_48H = 1;
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_LATE_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_LATE_WINDOW_MINUTES", 15, 0);
 
 class BookingOrderService {
   _roundMoney(value) {
@@ -2739,13 +2749,14 @@ class BookingOrderService {
       const podMap = pods.reduce((map, p) => ({ ...map, [p.id]: p }), {});
 
       const now = new Date().getTime();
-      const BUFFER = 15 * 60 * 1000;
+      const earlyWindowMs = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+      const lateWindowMs = CHECKIN_LATE_WINDOW_MINUTES * 60 * 1000;
 
       return bookings.map((b) => {
         const startTime = new Date(b.start_time).getTime();
 
         const isWithinCheckinWindow =
-          now >= startTime - BUFFER && now <= startTime + BUFFER;
+          now >= startTime - earlyWindowMs && now <= startTime + lateWindowMs;
 
         return {
           bookingId: b.id,

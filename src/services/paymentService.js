@@ -13,6 +13,16 @@ const walletService = require("./walletService");
 const debtService = require("./debtService");
 const mongoose = require("mongoose");
 
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+
 class PaymentService {
   _parseDateOrThrow(value, fieldName) {
     const parsed = new Date(value);
@@ -199,7 +209,7 @@ class PaymentService {
     const existingKeyByBookingAndType = new Set(
       existingKeys.map((key) => `${key.booking_id}:${key.key_type}`),
     );
-    const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+    const checkinEarlyWindowMs = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
     const CLEANER_EXTRA_MINUTES_MS = 30 * 60 * 1000;
 
     const docsToCreate = [];
@@ -221,7 +231,7 @@ class PaymentService {
               ? new Date(booking.start_time)
               : new Date(
                 new Date(booking.start_time).getTime() -
-                CHECKIN_GRACE_PERIOD_MS,
+                checkinEarlyWindowMs,
               ),
           valid_to:
             keyType === "CLEANER"
