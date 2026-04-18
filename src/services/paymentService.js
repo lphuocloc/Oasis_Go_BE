@@ -22,6 +22,7 @@ const readEnvMinutes = (key, fallback, min = 0) => {
 };
 
 const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
 
 class PaymentService {
   _parseDateOrThrow(value, fieldName) {
@@ -209,7 +210,6 @@ class PaymentService {
     const existingKeyByBookingAndType = new Set(
       existingKeys.map((key) => `${key.booking_id}:${key.key_type}`),
     );
-    const checkinEarlyWindowMs = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
     const CLEANER_EXTRA_MINUTES_MS = 30 * 60 * 1000;
 
     const docsToCreate = [];
@@ -228,10 +228,13 @@ class PaymentService {
           key_token: await this._generateOnlineKeyToken(),
           valid_from:
             keyType === "CLEANER"
-              ? new Date(booking.start_time)
+              ? new Date(
+                new Date(booking.start_time).getTime() -
+                CHECKIN_EARLY_WINDOW_MS,
+              )
               : new Date(
                 new Date(booking.start_time).getTime() -
-                checkinEarlyWindowMs,
+                CHECKIN_EARLY_WINDOW_MS,
               ),
           valid_to:
             keyType === "CLEANER"
