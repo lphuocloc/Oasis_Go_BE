@@ -5,13 +5,20 @@ const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
+const PodQrCode = require("../models/PodQrCode");
 const SupportRequest = require("../models/SupportRequest");
 const TimeSlot = require("../models/TimeSlot");
 const User = require("../models/User");
+const StaffShiftAssignment = require("../models/StaffShiftAssignment");
+const LocationShift = require("../models/LocationShift");
+const StaffShift = require("../models/StaffShift");
+const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
+const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const { getSocketServer } = require("../socket/socketServer");
 
 const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
-const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"];
+const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED"];
 const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
 const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
@@ -42,7 +49,14 @@ class SupportRequestService {
     let current = await Location.findOne({ id: currentLocationId }).select("id parent_id").lean();
     if (!current) return null;
 
+    const visited = new Set([currentLocationId]);
+
     while (current.parent_id) {
+      if (visited.has(String(current.parent_id))) {
+        break;
+      }
+      visited.add(String(current.parent_id));
+
       const parent = await Location.findOne({ id: current.parent_id }).select("id parent_id").lean();
       if (!parent) break;
       current = parent;
@@ -165,7 +179,7 @@ class SupportRequestService {
       id: { $ne: String(currentPod.id) },
     };
 
-    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status").lean();
+    const rawPods = await Pod.find(podQuery).select("id code name cluster_id status type").lean();
     const pods = scopedPodIds.size > 0
       ? rawPods.filter((item) => scopedPodIds.has(String(item.id)))
       : rawPods;
@@ -181,9 +195,11 @@ class SupportRequestService {
     });
 
     const candidates = [];
-    for (const pod of pods) {
+
+    // Process all pods concurrently to avoid N+1 query stalling
+    const podPromises = pods.map(async (pod) => {
       const podCluster = clusterById.get(String(pod.cluster_id));
-      if (!podCluster) continue;
+      if (!podCluster) return null;
 
       const bufferMinutes = await this._resolveCleaningBufferMinutes({
         podId: pod.id,
@@ -193,7 +209,7 @@ class SupportRequestService {
 
       const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
       if (remainingStart >= bufferedEnd) {
-        continue;
+        return null; // Time exhausted
       }
 
       const isBookingAvailable = await Booking.isPodAvailable(
@@ -204,7 +220,7 @@ class SupportRequestService {
       );
 
       if (!isBookingAvailable) {
-        continue;
+        return null;
       }
 
       const conflictingTimeSlot = await TimeSlot.findOne({
@@ -217,20 +233,26 @@ class SupportRequestService {
         .lean();
 
       if (conflictingTimeSlot) {
-        continue;
+        return null;
       }
 
-      candidates.push({
+      return {
         pod_id: pod.id,
         pod_code: pod.code,
         pod_name: pod.name,
         cluster_id: String(pod.cluster_id),
         location_id: String(podCluster.location_id),
         scope_level: String(pod.cluster_id) === String(currentCluster.id) ? "SAME_CLUSTER" : "SAME_PARENT_LOCATION",
+        type: pod.type || "STANDARD",
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
-      });
+      };
+    });
+
+    const results = await Promise.all(podPromises);
+    for (const res of results) {
+      if (res) candidates.push(res);
     }
 
     candidates.sort((a, b) => {
@@ -238,7 +260,8 @@ class SupportRequestService {
       return a.scope_level === "SAME_CLUSTER" ? -1 : 1;
     });
 
-    return candidates;
+    const standardCandidates = candidates.filter(c => c.type === "STANDARD");
+    return standardCandidates.length > 0 ? standardCandidates : candidates;
   }
 
   async _notifyAdminsForEscalation(supportRequest, booking) {
@@ -250,8 +273,8 @@ class SupportRequestService {
     await Promise.all(
       admins.map((admin) =>
         notificationService.sendToUser(admin._id, {
-          title: "Yeu cau ho tro can xu ly",
-          message: "Manager da escalate yeu cau MAINTENANCE muc do cao.",
+          title: "Yêu cầu hỗ trợ khẩn cấp",
+          message: `Quản lý đã chuyển cấp một yêu cầu bảo trì mức độ ưu tiên ${supportRequest.severity || 'cao'}.`,
           type: "SUPPORT",
           event_code: "SUPPORT_ESCALATED",
           dedupe_key: `SUPPORT_ESCALATED:${supportRequest.id}:${admin._id}`,
@@ -260,6 +283,177 @@ class SupportRequestService {
             booking_id: booking ? booking.id : supportRequest.booking_id,
             severity: supportRequest.severity || "UNKNOWN",
             status: supportRequest.status,
+          },
+        })
+      )
+    );
+  }
+
+  async _notifyCleanersForCleaningSupport(supportRequest, booking) {
+    if (!supportRequest || normalizeUpper(supportRequest.type) !== "CLEANING") {
+      return;
+    }
+
+    const locationShiftIds = await LocationShift.find({ location_id: String(supportRequest.location_id) })
+      .distinct("id");
+
+    if (!locationShiftIds || locationShiftIds.length === 0) {
+      return;
+    }
+
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const assignments = await StaffShiftAssignment.find({
+      location_shift_id: { $in: locationShiftIds },
+      start_date: { $lte: endOfDay },
+      end_date: { $gte: startOfDay },
+      status: { $in: ["CHECKED_IN", "ASSIGNED"] },
+    })
+      .select("staff_id")
+      .lean();
+
+    if (!assignments || assignments.length === 0) {
+      return;
+    }
+
+    const staffIds = [...new Set(assignments.map((item) => String(item.staff_id || "")).filter(Boolean))];
+    if (staffIds.length === 0) {
+      return;
+    }
+
+    const staffObjectIds = staffIds
+      .filter((id) => /^[a-f\d]{24}$/i.test(id))
+      .map((id) => id);
+
+    const cleaners = await User.find({
+      isActive: true,
+      role: "cleaner",
+      $or: [
+        { id: { $in: staffIds } },
+        { _id: { $in: staffObjectIds } },
+      ],
+    })
+      .select("_id id")
+      .lean();
+
+    if (!cleaners || cleaners.length === 0) {
+      return;
+    }
+
+    const pod = await Pod.findOne({ id: booking.pod_id }).select("id code").lean();
+    const podCode = pod?.code || booking.pod_id || "Unknown";
+    const description = String(supportRequest.description || "").trim() || "(khong co mo ta)";
+
+    await Promise.all(
+      cleaners.map((cleaner) => {
+        const cleanerId = cleaner.id || cleaner._id;
+        return notificationService.sendToUser(cleanerId, {
+          title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
+          message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+          type: "SUPPORT",
+          event_code: "SUPPORT_CLEANING_REQUEST",
+          dedupe_key: `SUPPORT_CLEANING_REQUEST:${supportRequest.id}:${String(cleanerId)}`,
+          data: {
+            support_request_id: supportRequest.id,
+            booking_id: booking.id,
+            pod_id: booking.pod_id,
+            pod_code: podCode,
+            description,
+          },
+        });
+      })
+    );
+
+    cleaners.forEach((cleaner) => {
+      const cleanerId = String(cleaner._id || cleaner.id || "");
+      if (!cleanerId) return;
+
+      emitCleanerNotificationEvent({
+        user_id: cleanerId,
+        notification: {
+          event: "SUPPORT_CLEANING_REQUEST",
+          payload: {
+            support_request_id: supportRequest.id,
+            booking_id: booking.id,
+            pod_id: booking.pod_id,
+            pod_code: podCode,
+            description,
+            title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
+            message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+          },
+        },
+      });
+    });
+  }
+
+  async _notifyManagersForSupportRequest(supportRequest, podCode) {
+    if (!supportRequest || !supportRequest.location_id) return;
+
+    const locationShifts = await LocationShift.find({ location_id: String(supportRequest.location_id) }).select("id shift_id").lean();
+    if (!locationShifts.length) return;
+
+    const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
+    const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
+      .select("id")
+      .lean()
+      .then((rows) => rows.map((row) => String(row.id)));
+
+    if (!managerShiftIds.length) return;
+
+    const managerLocationShiftIds = locationShifts
+      .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
+      .map((entry) => String(entry.id));
+
+    if (!managerLocationShiftIds.length) return;
+
+    const now = new Date();
+    const assignments = await StaffShiftAssignment.find({
+      location_shift_id: { $in: managerLocationShiftIds },
+      status: "ASSIGNED",
+      start_date: { $lte: now },
+      end_date: { $gte: now },
+    })
+      .select("staff_id")
+      .lean();
+
+    const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
+    if (!assignmentStaffIds.length) return;
+
+    const assignmentObjectIds = assignmentStaffIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+
+    const managers = await User.find({
+      role: "manager",
+      isActive: true,
+      $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+    })
+      .select("_id")
+      .lean();
+
+    const managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
+
+    const typeLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "ve sinh" : "ho tro";
+    
+    await Promise.all(
+      managerUserIds.map((managerUserId) =>
+        notificationService.sendToUser(managerUserId, {
+          title: `Co yeu cau ${typeLabel} doc lap moi`,
+          message: `Khach hang tai Pod ${podCode || 'Khong ro'} vua gui yeu cau ${typeLabel}. Vui long kiem tra.`,
+          type: "SUPPORT",
+          event_code: "SUPPORT_REQUEST_CREATED",
+          dedupe_key: `SUPPORT_REQUEST_CREATED:${supportRequest.id}:${managerUserId}`,
+          data: {
+            support_request_id: supportRequest.id,
+            booking_id: supportRequest.booking_id,
+            pod_id: supportRequest.pod_id,
+            pod_code: podCode,
+            status: String(supportRequest.status || "PENDING").toUpperCase(),
+            type: normalizeUpper(supportRequest.type),
           },
         })
       )
@@ -348,6 +542,13 @@ class SupportRequestService {
         status: "PENDING",
       });
 
+      if (normalizedType === "CLEANING") {
+        await this._notifyCleanersForCleaningSupport(supportRequest, booking);
+      }
+      
+      const podCode = pod.code || pod.name || booking.pod_id;
+      await this._notifyManagersForSupportRequest(supportRequest, podCode);
+
       return supportRequest;
     } catch (error) {
       if (error && error.code === 11000) {
@@ -404,6 +605,32 @@ class SupportRequestService {
     };
   }
 
+  async getSupportRequestById(requestId, actor, managerScope) {
+    const role = this._getActorRole(actor);
+    const actorId = this._getActorId(actor);
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId })
+      .populate("booking", "id user_id pod_id status start_time end_time")
+      .populate("handler", "_id name email role")
+      .populate("user", "_id id name email role");
+
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    if (role === "user") {
+      if (String(supportRequest.user_id) !== actorId) {
+        throw createError("Not authorized to view this support request", 403);
+      }
+    } else if (role === "manager") {
+      await this._assertManagerScopeAccess(supportRequest, managerScope);
+    } else {
+      throw createError("Not authorized to view support requests", 403);
+    }
+
+    return supportRequest;
+  }
+
   async updateSupportRequestStatus(requestId, actor, managerScope, payload = {}) {
     const actorId = this._getActorId(actor);
     const actorRole = this._getActorRole(actor);
@@ -432,12 +659,13 @@ class SupportRequestService {
 
     const currentStatus = normalizeSupportStatus(supportRequest.status);
     const allowedTransitions = {
-      PENDING: ["PROCESSING", "REJECTED"],
-      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED"],
+      PENDING: ["PROCESSING", "REJECTED", "CANCELED"],
+      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED", "CANCELED"],
       IN_PROGRESS: ["ESCALATED", "RESOLVED", "REJECTED"],
       ESCALATED: ["IN_PROGRESS", "RESOLVED", "REJECTED"],
       RESOLVED: [],
       REJECTED: [],
+      CANCELED: [],
     };
 
     if (currentStatus !== normalizedStatus) {
@@ -493,13 +721,24 @@ class SupportRequestService {
       await this._notifyAdminsForEscalation(supportRequest, booking);
     }
 
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${supportRequest.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+      });
+    }
+
     return supportRequest;
   }
 
-  async getRoomChangeCandidates(requestId, actor, managerScope) {
+  async getRoomChangeCandidates(requestId, actor, managerScope, filters = {}) {
     if (this._getActorRole(actor) !== "manager") {
       throw createError("Only manager can view room-change candidates", 403);
     }
+
+    const { page = 1, limit = 20 } = filters;
 
     const supportRequest = await SupportRequest.findOne({ id: requestId });
     if (!supportRequest) {
@@ -536,12 +775,25 @@ class SupportRequestService {
     }
 
     const candidates = await this._getRoomChangeCandidates(booking, currentPod, resolvedCurrentCluster, managerScope);
+    const total = candidates.length;
+
+    const pageNum = Math.max(parseInt(page, 10) || 1, 1);
+    const limitNum = Math.max(parseInt(limit, 10) || 20, 1);
+    const startIndex = (pageNum - 1) * limitNum;
+    const endIndex = startIndex + limitNum;
+    const paginatedCandidates = candidates.slice(startIndex, endIndex);
 
     return {
       request: supportRequest,
       booking,
       current_pod: currentPod,
-      candidates,
+      candidates: paginatedCandidates,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        total_pages: Math.ceil(total / limitNum) || 1,
+      }
     };
   }
 
@@ -600,13 +852,15 @@ class SupportRequestService {
     }
 
     const [currentCluster, nextCluster] = await Promise.all([
-      PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id"),
-      PodCluster.findOne({ id: nextPod.cluster_id }).select("id location_id"),
+      PodCluster.findOne({ id: currentPod.cluster_id }).select("id name location_id"),
+      PodCluster.findOne({ id: nextPod.cluster_id }).select("id name location_id"),
     ]);
 
     if (!currentCluster || !nextCluster) {
       throw createError("Pod cluster not found", 404);
     }
+
+    const nextLocation = await Location.findOne({ id: nextCluster.location_id }).select("id name");
 
     const currentParent = await this._resolveTopParentLocationId(currentCluster.location_id);
     const nextParent = await this._resolveTopParentLocationId(nextCluster.location_id);
@@ -699,14 +953,14 @@ class SupportRequestService {
 
     if (requestType === "MAINTENANCE" && ["HIGH", "CRITICAL"].includes(normalizeUpper(supportRequest.severity))) {
       supportRequest.status = "ESCALATED";
-      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Escalated to admin after emergency room change";
+      supportRequest.escalation_note = String(payload.escalation_note || "").trim() || "Đã chuyển cấp lên ban quản trị sau khi thực hiện dời phòng khẩn cấp do sự cố bảo trì.";
     } else {
       supportRequest.status = "RESOLVED";
     }
 
     supportRequest.resolution_note =
       String(payload.resolution_note || "").trim() ||
-      `Room changed from pod ${currentPod.code || currentPod.id} to ${nextPod.code || nextPod.id}`;
+      `Hệ thống đã dời khách hàng từ phòng ${currentPod.code || currentPod.id} sang phòng ${nextPod.code || nextPod.id}`;
 
     await supportRequest.save();
 
@@ -714,18 +968,45 @@ class SupportRequestService {
       await this._notifyAdminsForEscalation(supportRequest, booking);
     }
 
+    const latestPodQr = await PodQrCode.findOne({
+      pod_id: nextPod.id,
+      is_active: true,
+      expires_at: { $gt: new Date() },
+    }).sort({ createdAt: -1 });
+
+    const newPodQrToken = latestPodQr ? latestPodQr.qr_token : null;
+
+    const roomChangeData = {
+      support_request_id: supportRequest.id,
+      booking_id: booking.id,
+      old_pod_id: currentPod.id,
+      new_pod_id: nextPod.id,
+      new_pod_code: nextPod.code,
+      new_pod_name: nextPod.name,
+      new_cluster_id: nextCluster.id,
+      new_cluster_name: nextCluster.name,
+      new_location_id: nextLocation ? nextLocation.id : nextCluster.location_id,
+      new_location_name: nextLocation ? nextLocation.name : null,
+      new_pod_qr_token: newPodQrToken,
+    };
+
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${booking.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+        room_change_data: roomChangeData
+      });
+    }
+
     await notificationService.sendToUser(booking.user_id, {
-      title: "Support request room changed",
-      message: "Manager moved your booking to a new pod. Please check updated details.",
+      title: "Phòng của bạn đã được thay đổi",
+      message: "Quản lý đã sắp xếp lại phòng cho bạn để đảm bảo trải nghiệm. Vui lòng kiểm tra màn hình để lấy mã phòng và lối đi mới.",
       type: "SUPPORT",
       event_code: "SUPPORT_ROOM_CHANGED",
       dedupe_key: `SUPPORT_ROOM_CHANGED:${supportRequest.id}:${booking.id}`,
-      data: {
-        support_request_id: supportRequest.id,
-        booking_id: booking.id,
-        old_pod_id: currentPod.id,
-        new_pod_id: nextPod.id,
-      },
+      data: roomChangeData,
     });
 
     return {
@@ -733,9 +1014,46 @@ class SupportRequestService {
       booking,
       old_pod: currentPod,
       new_pod: nextPod,
+      new_pod_qr_token: newPodQrToken,
       buffer_minutes_applied: bufferMinutes,
       escalated_to_admin: supportRequest.status === "ESCALATED",
     };
+  }
+
+  async cancelSupportRequest(requestId, actor) {
+    const actorId = this._getActorId(actor);
+
+    if (this._getActorRole(actor) !== "user") {
+      throw createError("Only users can cancel their support request", 403);
+    }
+
+    const supportRequest = await SupportRequest.findOne({ id: requestId });
+    if (!supportRequest) {
+      throw createError("Support request not found", 404);
+    }
+
+    if (String(supportRequest.user_id) !== actorId) {
+      throw createError("Not authorized to cancel this request", 403);
+    }
+
+    const currentStatus = normalizeSupportStatus(supportRequest.status);
+    if (!["PENDING", "PROCESSING"].includes(currentStatus)) {
+      throw createError(`Cannot cancel request in ${currentStatus} status`, 400);
+    }
+
+    supportRequest.status = "CANCELED";
+    await supportRequest.save();
+
+    const socketServer = getSocketServer();
+    if (socketServer) {
+      socketServer.to(`user:${supportRequest.user_id}`).emit("SUPPORT_REQUEST_UPDATED", {
+        request_id: supportRequest.id,
+        status: supportRequest.status,
+        updated_at: new Date(),
+      });
+    }
+
+    return supportRequest;
   }
 }
 

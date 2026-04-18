@@ -106,6 +106,26 @@ exports.getLocationDescendants = async (req, res) => {
     }
 };
 
+// @desc    Get pod occupancy/active rate for all child locations of a parent location
+// @route   GET /api/locations/:id/pod-occupancy-rate
+// @access  Public
+exports.getPodOccupancyRateByParentLocation = async (req, res) => {
+    try {
+        const result = await locationService.getPodOccupancyRateByParentLocation(req.params.id);
+
+        res.status(200).json({
+            success: true,
+            data: result,
+        });
+    } catch (error) {
+        const statusCode = error.statusCode || 500;
+        res.status(statusCode).json({
+            success: false,
+            message: error.message || "Error fetching pod occupancy rate",
+        });
+    }
+};
+
 // @desc    Create new location
 // @route   POST /api/locations
 // @access  Private (Admin)

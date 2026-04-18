@@ -238,6 +238,8 @@ router.post("/checkin", protect, bookingController.checkinWithQrAndKey);
  *   get:
  *     summary: Check pod availability for time range
  *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
  *     parameters:
  *       - in: path
  *         name: podId
@@ -259,8 +261,17 @@ router.post("/checkin", protect, bookingController.checkinWithQrAndKey);
  *     responses:
  *       200:
  *         description: Availability checked
+ *       403:
+ *         description: Role is not allowed to use this pod type for booking
+ *       404:
+ *         description: Pod not found
  */
-router.get("/check-availability/:podId", bookingController.checkAvailability);
+router.get(
+	"/check-availability/:podId",
+	protect,
+	authorize("admin", "manager", "user"),
+	bookingController.checkAvailability
+);
 
 /**
  * @swagger

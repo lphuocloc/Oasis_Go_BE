@@ -1,269 +1,372 @@
 const bookingOrderService = require("../services/bookingOrderService");
 
 class BookingOrderController {
-    /**
-     * Create a new booking order
-     * @route POST /api/booking-orders
-     */
-    async createBookingOrder(req, res) {
-        try {
-            // Get user_id from authenticated user (middleware)
-            const user_id = req.user._id;
-            const {
-                cluster_id,
-                start_time,
-                end_time,
-                pod_count,
-                total_discount,
-                require_adjacent,
-                floor_preference,
-                accept_fragmented,
-                accept_mixed_floor
-            } = req.body;
+  /**
+   * Create a new booking order
+   * @route POST /api/booking-orders
+   */
+  async createBookingOrder(req, res) {
+    try {
+      // Get user_id from authenticated user (middleware)
+      const user_id = req.user._id;
+      const {
+        cluster_id,
+        start_time,
+        end_time,
+        pod_count,
+        total_discount,
+        voucher_code,
+        require_adjacent,
+        floor_preference,
+        accept_fragmented,
+        accept_mixed_floor,
+      } = req.body;
 
-            // Validate required fields
-            if (!cluster_id || !start_time || !end_time) {
-                return res.status(400).json({
-                    success: false,
-                    message: "Missing required fields: cluster_id, start_time, end_time"
-                });
-            }
+      // Validate required fields
+      if (!cluster_id || !start_time || !end_time) {
+        return res.status(400).json({
+          success: false,
+          message: "Missing required fields: cluster_id, start_time, end_time",
+        });
+      }
 
-            const result = await bookingOrderService.createBookingOrder({
-                user_id,
-                cluster_id,
-                start_time,
-                end_time,
-                pod_count: pod_count || 1,
-                total_discount: total_discount || 0,
-                require_adjacent: require_adjacent || false,
-                floor_preference: floor_preference || null,
-                accept_fragmented: accept_fragmented || false,
-                accept_mixed_floor: accept_mixed_floor || false
-            });
+      const result = await bookingOrderService.createBookingOrder({
+        user_id,
+        cluster_id,
+        start_time,
+        end_time,
+        pod_count: pod_count || 1,
+        total_discount: total_discount || 0,
+        voucher_code: voucher_code || null,
+        require_adjacent: require_adjacent || false,
+        floor_preference: floor_preference || null,
+        accept_fragmented: accept_fragmented || false,
+        accept_mixed_floor: accept_mixed_floor || false,
+      });
 
-            return res.status(201).json({
-                success: true,
-                message: "Booking order created successfully",
-                data: result
-            });
-        } catch (error) {
-            console.error("Error creating booking order:", error);
-            const responsePayload = {
-                success: false,
-                message: error.message || "Failed to create booking order"
-            };
-            if (error.code) responsePayload.code = error.code;
-            if (error.data) responsePayload.data = error.data;
+      return res.status(201).json({
+        success: true,
+        message: "Booking order created successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error creating booking order:", error);
+      const responsePayload = {
+        success: false,
+        message: error.message || "Failed to create booking order",
+      };
+      if (error.code) responsePayload.code = error.code;
+      if (error.data) responsePayload.data = error.data;
 
-            return res.status(error.statusCode || 500).json(responsePayload);
-        }
+      return res.status(error.statusCode || 500).json(responsePayload);
     }
+  }
 
-    /**
-     * Get booking order by ID
-     * @route GET /api/booking-orders/:id
-     */
-    async getBookingOrderById(req, res) {
-        try {
-            const { id } = req.params;
+  /**
+   * Get booking order by ID
+   * @route GET /api/booking-orders/:id
+   */
+  async getBookingOrderById(req, res) {
+    try {
+      const { id } = req.params;
 
-            const result = await bookingOrderService.getBookingOrderById(id, {
-                actor: req.user,
-                managerScope: req.managerScope,
-            });
+      const result = await bookingOrderService.getBookingOrderById(id, {
+        actor: req.user,
+        managerScope: req.managerScope,
+      });
 
-            return res.status(200).json({
-                success: true,
-                data: result
-            });
-        } catch (error) {
-            console.error("Error getting booking order:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to get booking order"
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error getting booking order:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to get booking order",
+      });
     }
+  }
 
-    /**
-     * Get all booking orders with filters
-     * @route GET /api/booking-orders
-     */
-    async getAllBookingOrders(req, res) {
-        try {
-            const filters = {
-                user_id: req.query.user_id,
-                status: req.query.status,
-                start_date: req.query.start_date,
-                end_date: req.query.end_date,
-                pod_ids: req.query.pod_ids,
-                page: parseInt(req.query.page) || 1,
-                limit: parseInt(req.query.limit) || 20
-            };
+  /**
+   * Get all booking orders with filters
+   * @route GET /api/booking-orders
+   */
+  async getAllBookingOrders(req, res) {
+    try {
+      const filters = {
+        user_id: req.query.user_id,
+        status: req.query.status,
+        start_date: req.query.start_date,
+        end_date: req.query.end_date,
+        pod_ids: req.query.pod_ids,
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 20,
+      };
 
-            const result = await bookingOrderService.getAllBookingOrders(filters, {
-                actor: req.user,
-                managerScope: req.managerScope,
-            });
+      const result = await bookingOrderService.getAllBookingOrders(filters, {
+        actor: req.user,
+        managerScope: req.managerScope,
+      });
 
-            return res.status(200).json({
-                success: true,
-                data: result
-            });
-        } catch (error) {
-            console.error("Error getting booking orders:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to get booking orders"
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error getting booking orders:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to get booking orders",
+      });
     }
+  }
 
-    /**
-     * Cancel booking order
-     * @route PUT /api/booking-orders/:id/cancel
-     */
-    async cancelBookingOrder(req, res) {
-        try {
-            const { id } = req.params;
-            const { booking_id, booking_ids } = req.body || {};
+  /**
+   * Cancel booking order
+   * @route PUT /api/booking-orders/:id/cancel
+   */
+  async cancelBookingOrder(req, res) {
+    try {
+      const { id } = req.params;
+      const { booking_id, booking_ids } = req.body || {};
 
-            const order = await bookingOrderService.cancelBookingOrder(id, req.user, {
-                booking_ids: [
-                    ...(Array.isArray(booking_ids) ? booking_ids : []),
-                    ...(booking_id ? [booking_id] : []),
-                ],
-            });
+      const order = await bookingOrderService.cancelBookingOrder(id, req.user, {
+        booking_ids: [
+          ...(Array.isArray(booking_ids) ? booking_ids : []),
+          ...(booking_id ? [booking_id] : []),
+        ],
+      });
 
-            return res.status(200).json({
-                success: true,
-                message: "Booking order cancellation processed successfully",
-                data: order
-            });
-        } catch (error) {
-            console.error("Error cancelling booking order:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to cancel booking order"
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        message: "Booking order cancellation processed successfully",
+        data: order,
+      });
+    } catch (error) {
+      console.error("Error cancelling booking order:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to cancel booking order",
+      });
     }
+  }
 
-    /**
-     * Checkout booking order (all or selected bookings)
-     * @route POST /api/booking-orders/:id/checkout
-     */
-    async checkoutBookingOrder(req, res) {
-        try {
-            const { id } = req.params;
-            const { scope, booking_id, booking_ids } = req.body || {};
+  /**
+   * Checkout booking order (all or selected bookings)
+   * @route POST /api/booking-orders/:id/checkout
+   */
+  async checkoutBookingOrder(req, res) {
+    try {
+      const { id } = req.params;
+      const { scope, booking_id, booking_ids } = req.body || {};
 
-            const result = await bookingOrderService.checkoutOrder(id, req.user, {
-                scope,
-                booking_id,
-                booking_ids,
-            });
+      const result = await bookingOrderService.checkoutOrder(id, req.user, {
+        scope,
+        booking_id,
+        booking_ids,
+      });
 
-            return res.status(200).json({
-                success: true,
-                message: "Booking order checkout processed",
-                data: result,
-            });
-        } catch (error) {
-            console.error("Error checkout booking order:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to checkout booking order",
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        message: "Booking order checkout processed",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error checkout booking order:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to checkout booking order",
+      });
     }
+  }
 
-    /**
-     * Initiate repayment for PENDING order
-     * @route POST /api/booking-orders/:id/repay
-     */
-    async initiateRepayment(req, res) {
-        try {
-            const { id } = req.params;
-            const paymentService = require("../services/paymentService");
-            const ipAddr = req.ip || req.connection.remoteAddress;
+  /**
+   * Apply voucher to order (phase 2)
+   * @route POST /api/booking-orders/:id/voucher/apply
+   */
+  async applyVoucher(req, res) {
+    try {
+      const { id } = req.params;
+      const { code } = req.body || {};
 
-            const result = await paymentService.initiateRepayment(id, req.user, ipAddr);
+      const result = await bookingOrderService.applyVoucherToOrder(
+        id,
+        req.user,
+        { code },
+      );
 
-            return res.status(201).json({
-                success: true,
-                message: result.message,
-                data: result
-            });
-        } catch (error) {
-            console.error("Error initiating repayment:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to initiate repayment"
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        message: "Voucher applied successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error applying voucher:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to apply voucher",
+      });
     }
+  }
 
-    /**
-     * Get pending refund requests that manager can process
-     * @route GET /api/booking-orders/refunds/pending
-     */
-    async getPendingRefundRequests(req, res) {
-        try {
-            const filters = {
-                pod_ids: req.query.pod_ids,
-                order_id: req.query.order_id,
-                page: parseInt(req.query.page) || 1,
-                limit: parseInt(req.query.limit) || 20,
-            };
+  /**
+   * Remove voucher from order (phase 2)
+   * @route DELETE /api/booking-orders/:id/voucher
+   */
+  async removeVoucher(req, res) {
+    try {
+      const { id } = req.params;
+      const result = await bookingOrderService.removeVoucherFromOrder(
+        id,
+        req.user,
+      );
 
-            const result = await bookingOrderService.getPendingRefundRequests(filters, {
-                actor: req.user,
-                managerScope: req.managerScope,
-            });
-
-            return res.status(200).json({
-                success: true,
-                data: result,
-            });
-        } catch (error) {
-            console.error("Error getting pending refund requests:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to get pending refund requests",
-            });
-        }
+      return res.status(200).json({
+        success: true,
+        message: "Voucher removed successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error removing voucher:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to remove voucher",
+      });
     }
+  }
 
-    /**
-     * Process a pending refund request (approve/reject)
-     * @route POST /api/booking-orders/refunds/:refundId/process
-     */
-    async processRefundRequest(req, res) {
-        try {
-            const { refundId } = req.params;
-            const { action, note } = req.body || {};
+  /**
+   * Initiate repayment for PENDING order
+   * @route POST /api/booking-orders/:id/repay
+   */
+  async initiateRepayment(req, res) {
+    try {
+      const { id } = req.params;
+      const paymentService = require("../services/paymentService");
+      const ipAddr = req.ip || req.connection.remoteAddress;
 
-            const result = await bookingOrderService.processRefundRequest(refundId, req.user, {
-                action,
-                note,
-                managerScope: req.managerScope,
-            });
+      const result = await paymentService.initiateRepayment(
+        id,
+        req.user,
+        ipAddr,
+      );
 
-            return res.status(200).json({
-                success: true,
-                message: "Refund request processed successfully",
-                data: result,
-            });
-        } catch (error) {
-            console.error("Error processing refund request:", error);
-            return res.status(error.statusCode || 500).json({
-                success: false,
-                message: error.message || "Failed to process refund request",
-            });
-        }
+      return res.status(201).json({
+        success: true,
+        message: result.message,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error initiating repayment:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to initiate repayment",
+      });
     }
+  }
+
+  /**
+   * Get pending refund requests that manager can process
+   * @route GET /api/booking-orders/refunds/pending
+   */
+  async getPendingRefundRequests(req, res) {
+    try {
+      const filters = {
+        pod_ids: req.query.pod_ids,
+        order_id: req.query.order_id,
+        page: parseInt(req.query.page) || 1,
+        limit: parseInt(req.query.limit) || 20,
+      };
+
+      const result = await bookingOrderService.getPendingRefundRequests(
+        filters,
+        {
+          actor: req.user,
+          managerScope: req.managerScope,
+        },
+      );
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error getting pending refund requests:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to get pending refund requests",
+      });
+    }
+  }
+
+  /**
+   * Process a pending refund request (approve/reject)
+   * @route POST /api/booking-orders/refunds/:refundId/process
+   */
+  async processRefundRequest(req, res) {
+    try {
+      const { refundId } = req.params;
+      const { action, note } = req.body || {};
+
+      const result = await bookingOrderService.processRefundRequest(
+        refundId,
+        req.user,
+        {
+          action,
+          note,
+          managerScope: req.managerScope,
+        },
+      );
+
+      return res.status(200).json({
+        success: true,
+        message: "Refund request processed successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error processing refund request:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to process refund request",
+      });
+    }
+  }
+  async getMyTodayBookings(req, res) {
+    try {
+      const user_id = req.user._id;
+
+      const result = await bookingOrderService.getMyTodayBookings(user_id);
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Quick Check-in API Error:", error);
+      return res.status(500).json({
+        success: false,
+        message: "Không thể lấy danh sách phòng hôm nay",
+      });
+    }
+  }
+
+  async getMyAnalytics(req, res) {
+    try {
+      const result = await bookingOrderService.getBookingAnalytics({
+        user_id: req.user.id,
+        start_date: req.query.start_date,
+        end_date: req.query.end_date,
+      });
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      return res.status(500).json({ success: false, message: error.message });
+    }
+  }
 }
 
 module.exports = new BookingOrderController();

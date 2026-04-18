@@ -8,18 +8,73 @@ const TimeSlot = require("../models/TimeSlot");
 const BookingSlot = require("../models/BookingSlot");
 const OnlineKey = require("../models/OnlineKey");
 const PodQrCode = require("../models/PodQrCode");
-const { autoAssignTaskForBooking, cancelOpenTasksForNoShowBooking } = require("./cleaningTaskService");
+const {
+  autoAssignTaskForBooking,
+  cancelOpenTasksForNoShowBooking,
+} = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
 const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
-const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = 15;
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const AUTO_ACTIVATE_GRACE_PERIOD_MINUTES = readEnvMinutes("BOOKING_AUTO_ACTIVATE_GRACE_MINUTES", 15, 1);
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+const CHECKOUT_REMINDER_LEAD_MINUTES = 15;
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_LATE_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_LATE_WINDOW_MINUTES", 15, 0);
+const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+const CHECKIN_LATE_WINDOW_MS = CHECKIN_LATE_WINDOW_MINUTES * 60 * 1000;
+const POD_TYPE_STANDARD = "STANDARD";
+const POD_TYPE_SERVICE = "SERVICE";
 const POD_DETAILS_SELECT =
   "id cluster_id code name description status maintenance_status " +
   "soundproof_level ventilation_level power_outlets wifi_available " +
   "max_session_duration last_cleaned_at createdAt updatedAt";
 
 class BookingService {
+  _normalizeRole(role) {
+    return String(role || "").trim().toLowerCase();
+  }
+
+  _normalizePodType(type) {
+    return String(type || "").trim().toUpperCase();
+  }
+
+  _isPodTypeAllowedForRole(role, podType) {
+    const normalizedRole = this._normalizeRole(role);
+    const normalizedType = this._normalizePodType(podType);
+
+    if (normalizedRole === "user") {
+      return normalizedType === POD_TYPE_STANDARD;
+    }
+
+    return [POD_TYPE_STANDARD, POD_TYPE_SERVICE].includes(normalizedType);
+  }
+
+  _buildPodTypeNotAllowedError(role, podType) {
+    const normalizedRole = this._normalizeRole(role) || "unknown";
+    const normalizedType = this._normalizePodType(podType) || "UNKNOWN";
+    const error = new Error(
+      `Role ${normalizedRole} is not allowed to use pod type ${normalizedType} for booking`
+    );
+    error.statusCode = 403;
+    error.errorCode = "POD_TYPE_NOT_ALLOWED_FOR_ROLE";
+    return error;
+  }
+
+  _createError(message, statusCode, errorCode) {
+    const error = new Error(message);
+    error.statusCode = statusCode;
+    error.errorCode = errorCode;
+    return error;
+  }
+
   async _revokeCleanerKeysForBooking(bookingId) {
     if (!bookingId) return;
     await OnlineKey.updateMany(
@@ -215,9 +270,11 @@ class BookingService {
   async autoCheckoutExpiredBookings() {
     const now = new Date();
 
-    // Find bookings that are still IN_USE but past their end_time
+    // AUTO_ACTIVATED bookings are handled by NO_SHOW flow, not auto-checkout.
+    // This avoids state races when both jobs run in parallel.
     const expiredBookings = await Booking.find({
       status: "IN_USE",
+      checkin_state: { $ne: "AUTO_ACTIVATED" },
       end_time: { $lte: now },
     }).select("id user_id pod_id order_id start_time end_time status");
 
@@ -292,6 +349,62 @@ class BookingService {
     };
   }
 
+  async notifyUpcomingCheckoutBookings(leadMinutes = CHECKOUT_REMINDER_LEAD_MINUTES) {
+    const safeLeadMinutes = Math.max(1, Number(leadMinutes) || CHECKOUT_REMINDER_LEAD_MINUTES);
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + safeLeadMinutes * 60 * 1000);
+
+    // Only remind bookings that were manually checked in by user.
+    const upcomingBookings = await Booking.find({
+      status: "IN_USE",
+      checkin_state: "MANUAL_CHECKED_IN",
+      end_time: { $gt: now, $lte: windowEnd },
+    }).select("id user_id pod_id order_id end_time checkin_state status");
+
+    if (upcomingBookings.length === 0) {
+      return { found: 0, reminded: 0, failed: 0, lead_minutes: safeLeadMinutes };
+    }
+
+    let remindedCount = 0;
+    let failedCount = 0;
+
+    for (const booking of upcomingBookings) {
+      try {
+        await notificationService.sendToUser(booking.user_id, {
+          title: "Nhắc nhở sắp checkout",
+          message: `Phiên sử dụng sẽ kết thúc trong khoảng ${safeLeadMinutes} phút nữa. Vui lòng chuẩn bị checkout đúng giờ.`,
+          type: "BOOKING",
+          event_code: "BOOKING_REMINDER",
+          dedupe_key: `BOOKING_CHECKOUT_REMINDER_${safeLeadMinutes}M:${booking.id}`,
+          data: {
+            type: "BOOKING_CHECKOUT_REMINDER",
+            booking_id: booking.id,
+            order_id: booking.order_id,
+            pod_id: booking.pod_id,
+            end_time: booking.end_time,
+            minutes_left: String(safeLeadMinutes),
+            reminder_type: `CHECKOUT_${safeLeadMinutes}M`,
+          },
+        });
+
+        remindedCount += 1;
+      } catch (error) {
+        failedCount += 1;
+        console.error(
+          `Checkout reminder notification failed (booking_id=${booking.id || "unknown"}):`,
+          error.message || error
+        );
+      }
+    }
+
+    return {
+      found: upcomingBookings.length,
+      reminded: remindedCount,
+      failed: failedCount,
+      lead_minutes: safeLeadMinutes,
+    };
+  }
+
   startAutoActivateCheckinJob(intervalMinutes = 1, graceMinutes = AUTO_ACTIVATE_GRACE_PERIOD_MINUTES) {
     const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 1);
 
@@ -303,6 +416,7 @@ class BookingService {
       this.autoActivateOverdueCheckins(graceMinutes),
       this.markNoShowForExpiredAutoActivatedBookings(),
       this.autoCheckoutExpiredBookings(),
+      this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
     ]).catch((error) => {
       console.error("Initial auto-activate checkin job failed:", error);
     });
@@ -313,6 +427,7 @@ class BookingService {
           this.autoActivateOverdueCheckins(graceMinutes),
           this.markNoShowForExpiredAutoActivatedBookings(),
           this.autoCheckoutExpiredBookings(),
+          this.notifyUpcomingCheckoutBookings(CHECKOUT_REMINDER_LEAD_MINUTES),
         ]);
       } catch (error) {
         console.error("Auto-activate checkin job error:", error);
@@ -390,7 +505,7 @@ class BookingService {
    * @param {Object} bookingData - Booking data
    * @returns {Promise<Object>} Created booking
    */
-  async createBooking(bookingData) {
+  async createBooking(bookingData, actor = null) {
     const {
       order_id,
       user_id,
@@ -417,6 +532,10 @@ class BookingService {
     const pod = await Pod.findOne({ id: pod_id });
     if (!pod) {
       throw new Error("Pod not found");
+    }
+
+    if (!this._isPodTypeAllowedForRole(actor?.role, pod.type)) {
+      throw this._buildPodTypeNotAllowedError(actor?.role, pod.type);
     }
 
     // Check pod availability
@@ -498,7 +617,7 @@ class BookingService {
     // If no pagination params, return all results
     if (!page && !limit) {
       const bookings = await Booking.find(query)
-        .sort({ created_at: -1 })
+        .sort({ createdAt: -1 })
         .populate("user", "id name email phone")
         .populate("pod", "id name description status")
         .populate("order", "id final_total_price payable_total_price deposit_total deposit_settlement_status status");
@@ -512,7 +631,7 @@ class BookingService {
 
     const [bookings, total] = await Promise.all([
       Booking.find(query)
-        .sort({ created_at: -1 })
+        .sort({ createdAt: -1 })
         .skip(skip)
         .limit(limitNum)
         .populate("user", "id name email phone")
@@ -774,7 +893,6 @@ class BookingService {
     }
 
     const now = new Date();
-
     // ============= CUSTOMER CHECK-IN (QR ONLY) =============
     if (qr_token) {
       const qrCode = await PodQrCode.findOne({ qr_token, is_active: true });
@@ -802,10 +920,28 @@ class BookingService {
         throw error;
       }
 
-      let booking = candidateBookings.find((item) => item.status === "BOOKED");
-      if (!booking) {
-        booking = candidateBookings.find((item) => item.status === "IN_USE") || candidateBookings[0];
-      }
+      const nowMs = now.getTime();
+      const inUseBooking = candidateBookings.find((item) => item.status === "IN_USE");
+      const bookedInWindow = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        const startMs = new Date(item.start_time).getTime();
+        return nowMs >= startMs - CHECKIN_EARLY_WINDOW_MS && nowMs <= startMs + CHECKIN_LATE_WINDOW_MS;
+      });
+      const latestPastBooked = candidateBookings.find((item) => {
+        if (item.status !== "BOOKED") return false;
+        return new Date(item.start_time).getTime() <= nowMs;
+      });
+      const earliestFutureBooked = [...candidateBookings]
+        .filter((item) => item.status === "BOOKED" && new Date(item.start_time).getTime() > nowMs)
+        .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
+
+      // Priority: active session -> valid check-in window booking -> nearest past booking -> nearest future booking.
+      const booking =
+        inUseBooking ||
+        bookedInWindow ||
+        latestPastBooked ||
+        earliestFutureBooked ||
+        candidateBookings[0];
 
       if (booking.checkin_state === "NO_SHOW") {
         const error = new Error("Booking đã được đánh dấu NO_SHOW và không thể check-in lại");
@@ -821,7 +957,7 @@ class BookingService {
 
         if (needsManualSync) {
           booking.checkin_state = "MANUAL_CHECKED_IN";
-          booking.checked_in_at = booking.checked_in_at || new Date();
+          booking.checked_in_at = new Date();
           booking.checkin_source = "USER_QR";
           booking.no_show_marked_at = null;
           await booking.save();
@@ -1004,7 +1140,18 @@ class BookingService {
    * @param {Date} endTime - End time
    * @returns {Promise<Boolean>} True if available
    */
-  async checkAvailability(podId, startTime, endTime) {
+  async checkAvailability(podId, startTime, endTime, actor = null) {
+    const pod = await Pod.findOne({ id: podId }).select("id type").lean();
+    if (!pod) {
+      const error = new Error("Pod not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (!this._isPodTypeAllowedForRole(actor?.role, pod.type)) {
+      throw this._buildPodTypeNotAllowedError(actor?.role, pod.type);
+    }
+
     return await Booking.isPodAvailable(podId, startTime, endTime);
   }
 

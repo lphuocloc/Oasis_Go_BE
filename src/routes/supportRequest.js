@@ -82,6 +82,71 @@ router.post("/", protect, authorize("user"), supportRequestController.createSupp
  *       200:
  *         description: Support requests retrieved
  */
+/**
+ * @swagger
+ * /api/support-requests/my-requests:
+ *   get:
+ *     summary: Get user's own support requests
+ *     tags: [SupportRequests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [PENDING, PROCESSING, IN_PROGRESS, ESCALATED, RESOLVED, REJECTED]
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
+ *     responses:
+ *       200:
+ *         description: Support requests retrieved
+ */
+router.get(
+	"/my-requests",
+	protect,
+	authorize("user"),
+	supportRequestController.getSupportRequests
+);
+
+/**
+ * @swagger
+ * /api/support-requests/{id}:
+ *   get:
+ *     summary: Get details of a support request
+ *     tags: [SupportRequests]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Support request retrieved
+ *       403:
+ *         description: Not authorized
+ *       404:
+ *         description: Not found
+ */
+router.get(
+	"/:id",
+	protect,
+	authorize("manager", "user"),
+	loadManagerScope,
+	supportRequestController.getSupportRequestById
+);
+
 router.get(
 	"/",
 	protect,

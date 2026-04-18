@@ -10,7 +10,16 @@ const StaffShift = require("../models/StaffShift");
 const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
 const Location = require("../models/Location");
+const OnlineKey = require("../models/OnlineKey");
+const notificationService = require("./notificationService");
+const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const BookingOrder = require("../models/BookingOrder");
+const Incident = require("../models/Incidents");
+const Transaction = require("../models/Transaction");
+const Wallet = require("../models/Wallet");
+const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
+const { randomInt } = require("crypto");
 
 const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
@@ -24,13 +33,308 @@ const CLEANING_TASK_STATUSES = [
 
 const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
 const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
+const REFUND_TRIGGER_TERMINAL_STATUSES = ["DONE", "CANCELLED", "MISSED"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
+const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 
-const createError = (message, statusCode) => {
+const resolveOrderForTaskBooking = async (bookingId, session = null) => {
+  if (!bookingId) return null;
+
+  const bookingQuery = Booking.findOne({ id: String(bookingId) }).select("id order_id");
+  const booking = session ? await bookingQuery.session(session).lean() : await bookingQuery.lean();
+  if (!booking || !booking.order_id) return null;
+
+  const orderQuery = BookingOrder.findOne({ id: String(booking.order_id) })
+    .select("id user_id status deposit_total deposit_settlement_status");
+  const order = session ? await orderQuery.session(session) : await orderQuery;
+  if (!order) return null;
+
+  return { booking, order };
+};
+
+const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
+  const normalizedBookingId = String(bookingId || "").trim();
+  if (!normalizedBookingId) {
+    console.warn("Auto refund skipped", {
+      reason: "MISSING_BOOKING_ID",
+      booking_id: bookingId || null,
+    });
+    return;
+  }
+
+  const resolved = await resolveOrderForTaskBooking(normalizedBookingId);
+  if (!resolved) {
+    console.warn("Auto refund skipped", {
+      reason: "BOOKING_OR_ORDER_NOT_FOUND",
+      booking_id: normalizedBookingId,
+    });
+    return;
+  }
+
+  const { order } = resolved;
+  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || ""))) {
+    console.warn("Auto refund skipped", {
+      reason: "ORDER_STATUS_NOT_ELIGIBLE",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      order_status: String(order.status || ""),
+    });
+    return;
+  }
+  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
+    console.warn("Auto refund skipped", {
+      reason: "SETTLEMENT_STATUS_NOT_PENDING_INSPECTION",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      deposit_settlement_status: String(order.deposit_settlement_status || ""),
+    });
+    return;
+  }
+
+  const depositAmount = Number(order.deposit_total || 0);
+  if (depositAmount <= 0) {
+    console.warn("Auto refund skipped", {
+      reason: "DEPOSIT_AMOUNT_NOT_POSITIVE",
+      booking_id: normalizedBookingId,
+      order_id: String(order.id || ""),
+      deposit_amount: depositAmount,
+    });
+    return;
+  }
+
+  let refundNotificationPayload = null;
+  let pendingIncidentSettlementOrderId = null;
+
+  const session = await mongoose.startSession();
+  try {
+    await session.withTransaction(async () => {
+      const freshResolved = await resolveOrderForTaskBooking(normalizedBookingId, session);
+      if (!freshResolved) {
+        console.warn("Auto refund skipped", {
+          reason: "BOOKING_OR_ORDER_NOT_FOUND_IN_TX",
+          booking_id: normalizedBookingId,
+        });
+        return;
+      }
+
+      const freshOrder = freshResolved.order;
+      const freshDepositAmount = Number(freshOrder.deposit_total || 0);
+
+      if (!["PAID", "PARTIAL_CANCEL"].includes(String(freshOrder.status || ""))) {
+        console.warn("Auto refund skipped", {
+          reason: "ORDER_STATUS_NOT_ELIGIBLE_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          order_status: String(freshOrder.status || ""),
+        });
+        return;
+      }
+      if (String(freshOrder.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
+        console.warn("Auto refund skipped", {
+          reason: "SETTLEMENT_STATUS_NOT_PENDING_INSPECTION_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          deposit_settlement_status: String(freshOrder.deposit_settlement_status || ""),
+        });
+        return;
+      }
+      if (freshDepositAmount <= 0) {
+        console.warn("Auto refund skipped", {
+          reason: "DEPOSIT_AMOUNT_NOT_POSITIVE_IN_TX",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          deposit_amount: freshDepositAmount,
+        });
+        return;
+      }
+
+      const orderBookings = await Booking.find({
+        order_id: freshOrder.id,
+        status: { $ne: "CANCELLED" },
+      })
+        .select("id")
+        .session(session)
+        .lean();
+
+      if (!orderBookings.length) {
+        console.warn("Auto refund skipped", {
+          reason: "NO_ACTIVE_BOOKING_IN_ORDER",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+        });
+        return;
+      }
+
+      const orderBookingIds = orderBookings.map((item) => item.id);
+
+      const unfinishedTask = await CleaningTask.findOne({
+        booking_id: { $in: orderBookingIds },
+        status: { $in: REFUND_BLOCKING_TASK_STATUSES },
+      })
+        .select("id status booking_id")
+        .session(session)
+        .lean();
+
+      if (unfinishedTask) {
+        console.warn("Auto refund skipped", {
+          reason: "UNFINISHED_CLEANING_TASK_EXISTS",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          task_id: String(unfinishedTask.id || ""),
+          task_status: String(unfinishedTask.status || ""),
+          task_booking_id: String(unfinishedTask.booking_id || ""),
+        });
+        return;
+      }
+
+      const hasIncident = await Incident.exists({
+        booking_id: { $in: orderBookingIds },
+      }).session(session);
+
+      if (hasIncident) {
+        pendingIncidentSettlementOrderId = String(freshOrder.id || "");
+        console.warn("Auto refund skipped", {
+          reason: "INCIDENT_EXISTS_BLOCKING_REFUND",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+        });
+        return;
+      }
+
+      const settlementUpdate = await BookingOrder.updateOne(
+        {
+          id: freshOrder.id,
+          deposit_settlement_status: "PENDING_INSPECTION",
+          deposit_total: { $gt: 0 },
+        },
+        {
+          $set: {
+            deposit_settlement_status: "REFUNDED",
+          },
+        },
+        { session }
+      );
+
+      if (settlementUpdate.modifiedCount !== 1) {
+        console.warn("Auto refund skipped", {
+          reason: "SETTLEMENT_UPDATE_NOT_MODIFIED",
+          booking_id: normalizedBookingId,
+          order_id: String(freshOrder.id || ""),
+          modified_count: Number(settlementUpdate.modifiedCount || 0),
+        });
+        return;
+      }
+
+      let wallet = await Wallet.findOne({ user_id: freshOrder.user_id }).session(session);
+      if (!wallet) {
+        const createdWallet = await Wallet.create(
+          [
+            {
+              user_id: freshOrder.user_id,
+              balance: 0,
+              status: "ACTIVE",
+            },
+          ],
+          { session }
+        );
+        wallet = createdWallet[0];
+      }
+
+      const balanceBefore = Number(wallet.balance || 0);
+      const balanceAfter = Number((balanceBefore + freshDepositAmount).toFixed(2));
+      wallet.balance = balanceAfter;
+      await wallet.save({ session });
+
+      const createdRefundTx = await Transaction.create(
+        [
+          {
+            order_id: freshOrder.id,
+            amount: freshDepositAmount,
+            currency: "VND",
+            type: "REFUND",
+            method: "WALLET",
+            status: "SUCCESS",
+            provider_reference: "AUTO_REFUND_DEPOSIT_CLEANING_DONE",
+          },
+        ],
+        { session }
+      );
+
+      const refundTx = createdRefundTx[0];
+
+      await WalletTransaction.create(
+        [
+          {
+            wallet_id: wallet.id,
+            amount: freshDepositAmount,
+            type: "REFUND",
+            transaction_id: refundTx.id,
+            reference_id: freshOrder.id,
+            description: `Hoan tien coc don ${freshOrder.id} sau khi cleaner hoan tat va khong co su co`,
+            balance_before: balanceBefore,
+            balance_after: balanceAfter,
+          },
+        ],
+        { session }
+      );
+
+      refundNotificationPayload = {
+        user_id: String(freshOrder.user_id || ""),
+        order_id: String(freshOrder.id || ""),
+        deposit_amount: freshDepositAmount,
+        refunded_transaction_id: String(refundTx.id || ""),
+      };
+    });
+
+    if (refundNotificationPayload && refundNotificationPayload.user_id) {
+      await notificationService.sendToUser(refundNotificationPayload.user_id, {
+        title: "Hoan tien coc thanh cong",
+        message: `He thong da hoan ${Number(refundNotificationPayload.deposit_amount || 0).toLocaleString("vi-VN")} VND tien coc vao vi cua ban.`,
+        type: "PAYMENT",
+        event_code: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
+        dedupe_key: `PAYMENT_DEPOSIT_REFUND_SUCCESS:${refundNotificationPayload.order_id}:${refundNotificationPayload.refunded_transaction_id || "NO_TX"}`,
+        data: {
+          type: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
+          order_id: refundNotificationPayload.order_id,
+          refund_amount: String(refundNotificationPayload.deposit_amount || 0),
+          deposit_amount: String(refundNotificationPayload.deposit_amount || 0),
+          refunded_transaction_id: refundNotificationPayload.refunded_transaction_id,
+          refunded_to_wallet_immediately: "true",
+        },
+      });
+    }
+
+    if (pendingIncidentSettlementOrderId) {
+      const incidentService = require("./incidentService");
+      await incidentService.settleOrderDepositAfterIncidents({
+        orderId: pendingIncidentSettlementOrderId,
+        trigger: "CLEANING_DONE_WITH_INCIDENTS",
+      });
+    }
+  } finally {
+    await session.endSession();
+  }
+};
+
+const createError = (message, statusCode, errorCode = null) => {
   const err = new Error(message);
   err.statusCode = statusCode;
+  if (errorCode) err.errorCode = errorCode;
   return err;
+};
+
+const generateUniqueOnlineKeyToken = async () => {
+  const MAX_RETRY = 10;
+
+  for (let attempt = 0; attempt < MAX_RETRY; attempt += 1) {
+    const token = String(randomInt(0, 1000000)).padStart(6, "0");
+    const exists = await OnlineKey.exists({ key_token: token, is_revoked: false });
+    if (!exists) return token;
+  }
+
+  throw createError("Unable to generate unique online key token", 500);
 };
 
 const buildUserIdentityQuery = (identity) => {
@@ -165,7 +469,6 @@ const getDueTimeWithMinutes = (booking, fallbackTime, bufferMinutes) => {
 
 const TRIGGER_REQUEST_SOURCE_RULES = Object.freeze({
   BOOKING_ORDER_CREATED: "AUTO_AFTER_CHECKOUT",
-  BOOKING_ORDER_CHECKOUT: "AUTO_AFTER_CHECKOUT",
   BOOKING_CREATED: "AUTO_AFTER_CHECKOUT",
   SYSTEM_RETRY_BACKFILL: "SYSTEM_RETRY",
 });
@@ -253,6 +556,143 @@ const applyDueRangeFilter = (filter, query = {}) => {
   if (Object.keys(dueAtFilter).length > 0) {
     filter.due_at = dueAtFilter;
   }
+};
+
+const formatDateTimeVi = (value) => {
+  if (!value) return "Khong xac dinh";
+
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Khong xac dinh";
+
+  return date.toLocaleString("vi-VN", {
+    hour12: false,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+};
+
+const resolveNotificationUserId = async (identity) => {
+  const query = buildUserIdentityQuery(identity);
+  if (!query) return null;
+
+  const user = await User.findOne(query).select("_id").lean();
+  if (!user || !user._id) return null;
+
+  return String(user._id);
+};
+
+const resolvePodContext = async (podId) => {
+  const pod = await Pod.findOne({ id: String(podId) }).select("id code cluster_id").lean();
+  if (!pod) return { podCode: String(podId || "Unknown"), locationName: "Unknown" };
+
+  const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id").lean();
+  if (!cluster || !cluster.location_id) {
+    return { podCode: pod.code || pod.id || "Unknown", locationName: "Unknown" };
+  }
+
+  const location = await Location.findOne({ id: cluster.location_id }).select("id name").lean();
+
+  return {
+    podCode: pod.code || pod.id || "Unknown",
+    locationName: location?.name || "Unknown",
+  };
+};
+
+const notifyCleanerTaskAssigned = async (task, options = {}) => {
+  if (!task || !task.cleaner_id || !task.pod_id) return;
+
+  const cleanerUserId = await resolveNotificationUserId(task.cleaner_id);
+  if (!cleanerUserId) return;
+
+  const { podCode, locationName } = await resolvePodContext(task.pod_id);
+  const dueAtText = formatDateTimeVi(task.due_at);
+  const dedupeSuffix = options.dedupeSuffix ? `:${String(options.dedupeSuffix)}` : "";
+
+  await notificationService.sendToUser(cleanerUserId, {
+    title: `Nhiem vu moi: Ve sinh Pod ${podCode}`,
+    message: `Nhiem vu moi: Ve sinh Pod ${podCode} tai ${locationName}. Han chot: ${dueAtText}.`,
+    type: "CLEANING",
+    event_code: "CLEANING_TASK_ASSIGNED",
+    dedupe_key: `CLEANING_TASK_ASSIGNED:${String(task.id)}:${cleanerUserId}${dedupeSuffix}`,
+    data: {
+      cleaning_task_id: String(task.id),
+      booking_id: task.booking_id ? String(task.booking_id) : null,
+      pod_id: String(task.pod_id),
+      pod_code: podCode,
+      location_name: locationName,
+      due_at: task.due_at || null,
+    },
+  });
+
+  emitCleanerNotificationEvent({
+    user_id: cleanerUserId,
+    notification: {
+      event: "CLEANING_TASK_ASSIGNED",
+      payload: {
+        cleaning_task_id: String(task.id),
+        booking_id: task.booking_id ? String(task.booking_id) : null,
+        pod_id: String(task.pod_id),
+        pod_code: podCode,
+        location_name: locationName,
+        due_at: task.due_at || null,
+        title: `Nhiem vu moi: Ve sinh Pod ${podCode}`,
+        message: `Nhiem vu moi: Ve sinh Pod ${podCode} tai ${locationName}. Han chot: ${dueAtText}.`,
+      },
+    },
+  });
+};
+
+const emitCleaningTaskStatusChangedRealtime = async ({
+  task,
+  previousStatus,
+  previousCleanerId = null,
+}) => {
+  if (!task) return;
+
+  const nextStatus = String(task.status || "");
+  const prevStatus = String(previousStatus || "");
+  if (!nextStatus || nextStatus === prevStatus) {
+    return;
+  }
+
+  const cleanerCandidates = [
+    previousCleanerId,
+    task.cleaner_id,
+  ]
+    .filter(Boolean)
+    .map((value) => String(value));
+
+  const uniqueCleanerIds = [...new Set(cleanerCandidates)];
+  if (uniqueCleanerIds.length === 0) {
+    return;
+  }
+
+  const cleanerUserIds = await Promise.all(uniqueCleanerIds.map((identity) => resolveNotificationUserId(identity)));
+
+  cleanerUserIds
+    .filter(Boolean)
+    .forEach((userId) => {
+      emitCleanerNotificationEvent({
+        user_id: userId,
+        notification: {
+          event: "CLEANING_TASK_STATUS_CHANGED",
+          payload: {
+            cleaning_task_id: String(task.id),
+            booking_id: task.booking_id ? String(task.booking_id) : null,
+            pod_id: task.pod_id ? String(task.pod_id) : null,
+            cleaner_id: task.cleaner_id ? String(task.cleaner_id) : null,
+            previous_status: prevStatus || null,
+            status: nextStatus,
+            note: task.note || null,
+            rejection_reason: task.rejection_reason || null,
+            updated_at: new Date().toISOString(),
+          },
+        },
+      });
+    });
 };
 
 const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = [], options = {}) => {
@@ -445,30 +885,114 @@ const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
   return "ASSIGNED";
 };
 
+const getCleaningTaskActionLabel = (status) => {
+  const normalizedStatus = String(status || "").toUpperCase();
+
+  if (normalizedStatus === "ASSIGNED" || normalizedStatus === "NOTIFIED") {
+    return "Nhận nhiệm vụ dọn dẹp";
+  }
+
+  if (normalizedStatus === "ACCEPTED") {
+    return "Bắt đầu dọn";
+  }
+
+  if (normalizedStatus === "IN_PROGRESS") {
+    return "Tiếp tục dọn dẹp";
+  }
+
+  if (normalizedStatus === "DONE") {
+    return "Đã hoàn tất dọn dẹp";
+  }
+
+  return null;
+};
+
 const CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
 
 const cancelOpenTasksForNoShowBooking = async (bookingId) => {
   if (!bookingId) return 0;
 
-  const result = await CleaningTask.updateMany(
-    {
-      booking_id: String(bookingId),
-      status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
-    },
-    {
-      $set: {
-        status: "CANCELLED",
-      },
-    }
-  );
+  const openTasks = await CleaningTask.find({
+    booking_id: String(bookingId),
+    status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
+  })
+    .select("id booking_id pod_id cleaner_id")
+    .lean();
 
-  return Number(result?.modifiedCount || 0);
+  if (openTasks.length === 0) {
+    return 0;
+  }
+
+  let cancelledCount = 0;
+
+  for (const task of openTasks) {
+    const updated = await CleaningTask.updateOne(
+      {
+        id: String(task.id),
+        status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
+      },
+      {
+        $set: {
+          status: "CANCELLED",
+        },
+      }
+    );
+
+    if (Number(updated?.modifiedCount || 0) !== 1) {
+      continue;
+    }
+
+    cancelledCount += 1;
+
+    const cleanerUserId = await resolveNotificationUserId(task.cleaner_id);
+    if (!cleanerUserId) {
+      continue;
+    }
+
+    const { podCode } = await resolvePodContext(task.pod_id);
+
+    await notificationService.sendToUser(cleanerUserId, {
+      title: `Nhiem vu da huy: Pod ${podCode}`,
+      message: `Nhiem vu ve sinh Pod ${podCode} da duoc huy vi booking NO_SHOW.`,
+      type: "CLEANING",
+      event_code: "CLEANING_TASK_CANCELLED_NO_SHOW",
+      dedupe_key: `CLEANING_TASK_CANCELLED_NO_SHOW:${String(task.id)}:${cleanerUserId}`,
+      data: {
+        cleaning_task_id: String(task.id),
+        booking_id: String(task.booking_id || bookingId),
+        pod_id: String(task.pod_id || ""),
+        pod_code: podCode,
+        cancelled_reason: "BOOKING_NO_SHOW",
+      },
+    });
+
+    emitCleanerNotificationEvent({
+      user_id: cleanerUserId,
+      notification: {
+        event: "CLEANING_TASK_CANCELLED_NO_SHOW",
+        payload: {
+          cleaning_task_id: String(task.id),
+          booking_id: String(task.booking_id || bookingId),
+          pod_id: String(task.pod_id || ""),
+          pod_code: podCode,
+          cancelled_reason: "BOOKING_NO_SHOW",
+          title: `Nhiem vu da huy: Pod ${podCode}`,
+          message: `Nhiem vu ve sinh Pod ${podCode} da duoc huy vi booking NO_SHOW.`,
+        },
+      },
+    });
+  }
+
+  return cancelledCount;
 };
+
+exports.cancelOpenTasksForNoShowBooking = cancelOpenTasksForNoShowBooking;
 
 exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const includeDebug = options.include_debug === true;
   const dryRun = options.dry_run === true;
   const trigger = options.trigger || "UNKNOWN";
+  const normalizedTrigger = String(trigger || "").toUpperCase();
 
   const debugInfo = {
     trigger: options.trigger || "UNKNOWN",
@@ -501,6 +1025,37 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const bookingCheckinState = bookingLike && bookingLike.checkin_state
     ? String(bookingLike.checkin_state).toUpperCase()
     : null;
+  const bookingStatus = String(bookingLike?.status || "").toUpperCase();
+
+  if (normalizedTrigger === "BOOKING_ORDER_CHECKOUT") {
+    debugInfo.skip_reason = "CHECKOUT_AUTO_ASSIGN_DISABLED";
+    return withDebug(
+      {
+        created: false,
+        reason: "CHECKOUT_AUTO_ASSIGN_DISABLED",
+        booking_id: bookingId,
+      },
+      debugInfo,
+      includeDebug
+    );
+  }
+
+  if (
+    (normalizedTrigger === "SET_CLEANER_ACCESS_TRUE" ||
+      normalizedTrigger === "BOOKING_UPDATED_CLEANER_ACCESS_TRUE") &&
+    bookingStatus !== "IN_USE"
+  ) {
+    debugInfo.skip_reason = "USER_REQUEST_ONLY_IN_USE";
+    return withDebug(
+      {
+        created: false,
+        reason: "USER_REQUEST_ONLY_IN_USE",
+        booking_id: bookingId,
+      },
+      debugInfo,
+      includeDebug
+    );
+  }
 
   if (bookingCheckinState === "NO_SHOW") {
     debugInfo.skip_reason = "NO_SHOW_BLOCKED";
@@ -528,6 +1083,48 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
           reason: "NO_SHOW_BLOCKED",
           booking_id: bookingId,
           cancelled_task_count,
+        },
+        debugInfo,
+        includeDebug
+      );
+    }
+  }
+
+  // Resolve request_source early so the dedup guard can be scoped by task type.
+  // "Turnover" tasks (AUTO_AFTER_CHECKOUT, SYSTEM_RETRY) share a dedup group:
+  //   only one should be active at a time per booking.
+  // "Interim" tasks (USER_REQUEST) are scoped independently:
+  //   they should not be blocked by a turnover task or block one.
+  const requestSource = getRequestSourceByTrigger(trigger, bookingLike);
+
+  // Dedup guard: skip creation if an active task of the same group already exists
+  // for this booking. This prevents double-assign when multiple triggers fire
+  // (e.g. repeated BOOKING_ORDER_CREATED calls, or repeated
+  // SET_CLEANER_ACCESS_TRUE calls).
+  if (!dryRun) {
+    const TURNOVER_SOURCES = ["AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
+    const dedupSources = TURNOVER_SOURCES.includes(requestSource)
+      ? TURNOVER_SOURCES
+      : [requestSource];
+
+    const existingActiveTask = await CleaningTask.findOne({
+      booking_id: bookingId,
+      request_source: { $in: dedupSources },
+      status: { $in: ACTIVE_TASK_STATUSES },
+    })
+      .select("id status request_source")
+      .lean();
+
+    if (existingActiveTask) {
+      debugInfo.skip_reason = "ACTIVE_TASK_EXISTS";
+      return withDebug(
+        {
+          created: false,
+          reason: "ACTIVE_TASK_EXISTS",
+          booking_id: bookingId,
+          existing_task_id: existingActiveTask.id,
+          existing_task_status: existingActiveTask.status,
+          existing_task_source: existingActiveTask.request_source,
         },
         debugInfo,
         includeDebug
@@ -589,7 +1186,6 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "NO_CLEANER_LOCATION_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
-  const requestSource = getRequestSourceByTrigger(trigger, bookingLike);
   const bufferConfig = await resolveCleaningBufferMinutes({
     podId,
     clusterId: cluster.id,
@@ -600,7 +1196,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   debugInfo.buffer_policy_id = bufferConfig.policyId;
 
   const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
-  
+
   // estimated_start_time = booking.end_time + 5 minutes
   const estimatedStartTime = bookingLike && bookingLike.end_time
     ? new Date(new Date(bookingLike.end_time).getTime() + 5 * 60 * 1000)
@@ -883,6 +1479,10 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
 
   const createdTask = await CleaningTask.create(payload);
 
+  await notifyCleanerTaskAssigned(createdTask, {
+    dedupeSuffix: trigger || "AUTO_ASSIGN",
+  });
+
   return withDebug({
     created: true,
     reason: "CREATED",
@@ -994,8 +1594,15 @@ exports.createCleaningTask = async (data) => {
   };
 
   applyStatusAuditFields(payload);
+  const createdTask = await CleaningTask.create(payload);
 
-  return CleaningTask.create(payload);
+  if (["ASSIGNED", "NOTIFIED"].includes(String(createdTask.status || ""))) {
+    await notifyCleanerTaskAssigned(createdTask, {
+      dedupeSuffix: "MANUAL_CREATE",
+    });
+  }
+
+  return createdTask;
 };
 
 const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
@@ -1013,7 +1620,9 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id").lean()
       : Promise.resolve([]),
     bookingIds.length > 0
-      ? Booking.find({ id: { $in: bookingIds } }).select("id user_id").lean()
+      ? Booking.find({ id: { $in: bookingIds } })
+        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -1075,6 +1684,14 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       location_name: location ? location.name || null : null,
       booking_guest_id: booking ? booking.user_id || null : null,
       booking_guest_name: bookingUser ? bookingUser.name || null : null,
+      booking_start_time: booking ? booking.start_time || null : null,
+      booking_end_time: booking ? booking.end_time || null : null,
+      booking_actual_end_time: booking ? booking.actual_end_time || null : null,
+      booking_checked_in_at: booking ? booking.checked_in_at || null : null,
+      booking_checkin_state: booking ? booking.checkin_state || null : null,
+      actual_start_time: task.start_time || null,
+      actual_end_time: task.end_time || null,
+      action_label: getCleaningTaskActionLabel(task.status),
     };
   });
 };
@@ -1144,6 +1761,123 @@ exports.getMyCleaningTasks = async (user, query = {}) => {
 
   const tasks = await CleaningTask.find(filter).sort({ created_at: -1 });
   return enrichCleaningTasksWithRelatedData(tasks);
+};
+
+exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
+  const normalizedTaskId = String(taskId || "").trim();
+  if (!normalizedTaskId) {
+    throw createError("task id is required", 400, "TASK_ID_REQUIRED");
+  }
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole !== "cleaner") {
+    throw createError("Only cleaner can retrieve cleaner key", 403, "CLEANER_ONLY");
+  }
+
+  const actorCleanerIds = [...new Set(resolveActorCleanerIds(actor))];
+  if (actorCleanerIds.length === 0) {
+    throw createError("Unable to resolve cleaner id", 400, "AUTH_USER_NOT_RESOLVED");
+  }
+
+  const task = await CleaningTask.findOne({ id: normalizedTaskId })
+    .select("id booking_id cleaner_id status pod_id")
+    .lean();
+  if (!task) {
+    throw createError("Cleaning task not found", 404, "CLEANING_TASK_NOT_FOUND");
+  }
+
+  if (!task.booking_id) {
+    throw createError("Cleaning task does not link to any booking", 400, "TASK_BOOKING_LINK_MISSING");
+  }
+
+  if (!["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "DONE"].includes(String(task.status || ""))) {
+    throw createError("Cleaning task is not eligible for key retrieval", 400, "TASK_NOT_ELIGIBLE_FOR_KEY");
+  }
+
+  if (!actorCleanerIds.includes(String(task.cleaner_id))) {
+    throw createError("You are not allowed to retrieve key for this task", 403, "TASK_NOT_ASSIGNED_TO_CLEANER");
+  }
+
+  const booking = await Booking.findOne({ id: String(task.booking_id) })
+    .select("id pod_id start_time end_time status checkin_state cleaner_access_allowed")
+    .lean();
+  if (!booking) {
+    throw createError("Booking not found", 404, "BOOKING_NOT_FOUND");
+  }
+
+  if (String(booking.checkin_state || "").toUpperCase() === "NO_SHOW") {
+    throw createError("Cleaner access is blocked for NO_SHOW booking", 403, "BOOKING_NO_SHOW");
+  }
+
+  if (booking.status === "IN_USE" && !booking.cleaner_access_allowed) {
+    throw createError("Cleaner access is not confirmed by user", 403, "CLEANER_ACCESS_NOT_ALLOWED");
+  }
+
+  const now = new Date();
+  const isInUseUrgentCleaning = booking.status === "IN_USE";
+  const isCompletedCleaning = booking.status === "COMPLETED";
+
+  if (!isInUseUrgentCleaning && !isCompletedCleaning) {
+    throw createError(
+      "Cleaner chi duoc vao khi booking dang IN_USE (co cho phep) hoac COMPLETED",
+      400,
+      "BOOKING_STATUS_NOT_ELIGIBLE"
+    );
+  }
+
+  const actorCleanerId = String(task.cleaner_id);
+  await OnlineKey.updateMany(
+    {
+      booking_id: String(booking.id),
+      key_type: "CLEANER",
+      is_revoked: false,
+      user_id: { $ne: actorCleanerId },
+    },
+    { $set: { is_revoked: true } }
+  );
+
+  let cleanerKey = await OnlineKey.findOne({
+    booking_id: String(booking.id),
+    key_type: "CLEANER",
+    user_id: actorCleanerId,
+    is_revoked: false,
+  })
+    .sort({ createdAt: -1 })
+    .select("id booking_id pod_id user_id key_type key_token valid_from valid_to is_revoked createdAt updatedAt");
+
+  if (!cleanerKey) {
+    cleanerKey = await OnlineKey.create({
+      booking_id: String(booking.id),
+      pod_id: String(booking.pod_id || task.pod_id),
+      user_id: actorCleanerId,
+      key_type: "CLEANER",
+      key_token: await generateUniqueOnlineKeyToken(),
+      valid_from: booking.start_time ? new Date(booking.start_time) : now,
+      valid_to: booking.end_time
+        ? new Date(
+          Math.max(
+            new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
+            now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
+          )
+        )
+        : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000),
+      is_revoked: false,
+    });
+  }
+
+  const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;
+
+  return {
+    task_id: String(task.id),
+    booking_id: String(booking.id),
+    cleaner_id: actorCleanerId,
+    booking_status: booking.status,
+    booking_checkin_state: booking.checkin_state,
+    online_key: {
+      ...keyData,
+      role: "cleaner",
+    },
+  };
 };
 
 exports.getCleaningTaskById = async (id) => {
@@ -1240,6 +1974,8 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   }
 
   const previousStatus = task.status;
+  const previousCleanerId = String(task.cleaner_id || "");
+  const bookingIdBeforeUpdate = String(task.booking_id || "").trim() || null;
 
   task.pod_id = nextPodId;
   task.booking_id = nextBookingId || null;
@@ -1270,6 +2006,54 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   applyStatusAuditFields(task, previousStatus);
 
   await task.save();
+
+  const bookingIdForRefund = String(task.booking_id || "").trim() || bookingIdBeforeUpdate;
+
+  const statusChangedToDispatchable =
+    previousStatus !== task.status && ["ASSIGNED", "NOTIFIED"].includes(String(task.status || ""));
+  const cleanerChangedAfterSave = previousCleanerId !== String(task.cleaner_id || "");
+
+  if (statusChangedToDispatchable || cleanerChangedAfterSave) {
+    await notifyCleanerTaskAssigned(task, {
+      dedupeSuffix: cleanerChangedAfterSave ? "REASSIGNED" : "STATUS_UPDATED",
+    });
+  }
+
+  if (previousStatus !== task.status) {
+    await emitCleaningTaskStatusChangedRealtime({
+      task,
+      previousStatus,
+      previousCleanerId,
+    });
+  }
+
+
+  const shouldTriggerRefundRecheck =
+    previousStatus !== nextStatus && REFUND_TRIGGER_TERMINAL_STATUSES.includes(String(nextStatus || ""));
+
+  if (shouldTriggerRefundRecheck) {
+    if (!bookingIdForRefund) {
+      console.warn("Auto refund trigger skipped after terminal transition", {
+        reason: "MISSING_BOOKING_ID_ON_TERMINAL_TRANSITION",
+        task_id: task.id,
+        previous_status: String(previousStatus || ""),
+        next_status: String(nextStatus || ""),
+      });
+    } else {
+      try {
+        await tryAutoRefundDepositAfterCleaningDone({ bookingId: bookingIdForRefund });
+      } catch (error) {
+        console.error("Auto refund deposit after cleaning DONE failed", {
+          task_id: task.id,
+          booking_id: bookingIdForRefund,
+          previous_status: String(previousStatus || ""),
+          next_status: String(nextStatus || ""),
+          error: error?.message || error,
+        });
+      }
+    }
+  }
+
   return task;
 };
 
@@ -1375,6 +2159,102 @@ exports.backfillMissingCleaningTasks = async (options = {}) => {
   }
 
   return summary;
+};
+
+exports.sendSlaReminderNotifications = async (options = {}) => {
+  const leadMinutesRaw = Number(options.lead_minutes || 15);
+  const leadMinutes = Number.isFinite(leadMinutesRaw) ? Math.max(10, Math.min(15, leadMinutesRaw)) : 15;
+
+  const now = new Date();
+  const dueThreshold = new Date(now.getTime() + leadMinutes * 60 * 1000);
+
+  const candidateTasks = await CleaningTask.find({
+    status: { $in: ["ASSIGNED", "ACCEPTED"] },
+    due_at: { $gte: now, $lte: dueThreshold },
+  })
+    .select("id cleaner_id pod_id booking_id due_at status")
+    .lean();
+
+  if (candidateTasks.length === 0) {
+    return { scanned: 0, reminded: 0, lead_minutes: leadMinutes };
+  }
+
+  let reminded = 0;
+
+  for (const task of candidateTasks) {
+    const cleanerUserId = await resolveNotificationUserId(task.cleaner_id);
+    if (!cleanerUserId) {
+      continue;
+    }
+
+    const { podCode } = await resolvePodContext(task.pod_id);
+    const dueAtText = formatDateTimeVi(task.due_at);
+
+    await notificationService.sendToUser(cleanerUserId, {
+      title: `Canh bao SLA: Pod ${podCode} sap qua han`,
+      message: `Canh bao: Pod ${podCode} sap qua han ve sinh. Han chot: ${dueAtText}. Vui long bat dau ngay!`,
+      type: "CLEANING",
+      event_code: "CLEANING_TASK_SLA_REMINDER",
+      dedupe_key: `CLEANING_TASK_SLA_REMINDER:${String(task.id)}:${cleanerUserId}`,
+      data: {
+        cleaning_task_id: String(task.id),
+        booking_id: task.booking_id ? String(task.booking_id) : null,
+        pod_id: String(task.pod_id),
+        pod_code: podCode,
+        due_at: task.due_at || null,
+        lead_minutes: String(leadMinutes),
+      },
+    });
+
+    emitCleanerNotificationEvent({
+      user_id: cleanerUserId,
+      notification: {
+        event: "CLEANING_TASK_SLA_REMINDER",
+        payload: {
+          cleaning_task_id: String(task.id),
+          booking_id: task.booking_id ? String(task.booking_id) : null,
+          pod_id: String(task.pod_id),
+          pod_code: podCode,
+          due_at: task.due_at || null,
+          lead_minutes: String(leadMinutes),
+          title: `Canh bao SLA: Pod ${podCode} sap qua han`,
+          message: `Canh bao: Pod ${podCode} sap qua han ve sinh. Han chot: ${dueAtText}. Vui long bat dau ngay!`,
+        },
+      },
+    });
+
+    reminded += 1;
+  }
+
+  return {
+    scanned: candidateTasks.length,
+    reminded,
+    lead_minutes: leadMinutes,
+  };
+};
+
+exports.startSlaReminderJob = (intervalMinutes = 5, leadMinutes = 15) => {
+  const safeIntervalMinutes = Math.max(1, Number(intervalMinutes) || 5);
+
+  console.log(
+    `Starting cleaning SLA reminder job (interval: ${safeIntervalMinutes} minute(s), lead: ${leadMinutes} minute(s))`
+  );
+
+  const runReminder = async () => {
+    try {
+      const result = await exports.sendSlaReminderNotifications({ lead_minutes: leadMinutes });
+      if (result.reminded > 0) {
+        console.log(
+          `Cleaning SLA reminder job result: scanned=${result.scanned}, reminded=${result.reminded}, lead=${result.lead_minutes}`
+        );
+      }
+    } catch (error) {
+      console.error("Cleaning SLA reminder job error:", error);
+    }
+  };
+
+  runReminder().catch(() => null);
+  setInterval(runReminder, safeIntervalMinutes * 60 * 1000);
 };
 
 exports.startBackfillJob = (intervalMinutes = 60, defaultOptions = {}) => {

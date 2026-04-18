@@ -25,6 +25,47 @@ const getMyAttendanceLogs = async (req, res) => {
   }
 };
 
+const getMyAssignmentAttendanceStatus = async (req, res) => {
+  try {
+    const result = await staffAttendanceLogService.getMyAssignmentAttendanceStatus({
+      user: req.user,
+      shift_assignment_id: req.query.shift_assignment_id,
+      date: req.query.date,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "My assignment attendance status retrieved successfully",
+      data: result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve assignment attendance status",
+    });
+  }
+};
+
+const getMyTodayAttendanceStatus = async (req, res) => {
+  try {
+    const result = await staffAttendanceLogService.getMyTodayAttendanceStatus({
+      user: req.user,
+      date: req.query.date,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "My daily attendance status retrieved successfully",
+      data: result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve daily attendance status",
+    });
+  }
+};
+
 const getAttendanceLogs = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.getAttendanceLogs(req.query);
@@ -77,6 +118,7 @@ const checkinWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkinWork({
       shift_assignment_id: req.body.shift_assignment_id,
+      date: req.body.date,
       user: req.user,
     });
 
@@ -97,6 +139,7 @@ const checkoutWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkoutWork({
       shift_assignment_id: req.body.shift_assignment_id,
+      date: req.body.date,
       user: req.user,
     });
 
@@ -115,6 +158,8 @@ const checkoutWork = async (req, res) => {
 
 module.exports = {
   getMyAttendanceLogs,
+  getMyAssignmentAttendanceStatus,
+  getMyTodayAttendanceStatus,
   getAttendanceLogs,
   getAttendanceLogById,
   checkinWork,

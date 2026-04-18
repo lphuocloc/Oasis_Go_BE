@@ -18,18 +18,60 @@ bookingOrderService.startCleanupJob(5); // Run every 5 minutes
 
 // Start booking auto-activation checkin job
 const bookingService = require("./services/bookingService");
-bookingService.startAutoActivateCheckinJob(1, 15); // Run every minute, grace period 15 minutes
+const bookingAutoActivateJobIntervalMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE_JOB_INTERVAL_MINUTES || 1);
+const bookingAutoActivateGraceMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE_GRACE_MINUTES || 15);
+bookingService.startAutoActivateCheckinJob(bookingAutoActivateJobIntervalMinutes, bookingAutoActivateGraceMinutes);
 
 const cleaningTaskService = require("./services/cleaningTaskService");
-if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
+const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
+const debtService = require("./services/debtService");
+if (
+  String(
+    process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false",
+  ).toLowerCase() === "true"
+) {
   cleaningTaskService.startBackfillJob(
     Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
     {
       cleaner_access_only:
-        String(process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true").toLowerCase() === "true",
+        String(
+          process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true",
+        ).toLowerCase() === "true",
       limit: Number(process.env.CLEANING_TASK_BACKFILL_LIMIT || 200),
-      dry_run: String(process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false").toLowerCase() === "true",
-    }
+      dry_run:
+        String(
+          process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false",
+        ).toLowerCase() === "true",
+    },
+  );
+}
+
+if (
+  String(
+    process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true",
+  ).toLowerCase() === "true"
+) {
+  cleaningTaskService.startSlaReminderJob(
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_JOB_INTERVAL_MINUTES || 5),
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15),
+  );
+}
+
+if (
+  String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() ===
+  "true"
+) {
+  staffShiftAssignmentService.startShiftReminderJob(
+    Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
+    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30),
+  );
+}
+
+if (
+  String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true"
+) {
+  debtService.startAgingDebtJob(
+    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24),
   );
 }
 
@@ -67,12 +109,16 @@ const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
 const staffAttendanceLogRouter = require("./routes/staffAttendanceLog");
 const usersRouter = require("./routes/users");
 const incidentRouter = require("./routes/incident");
+const damageServiceCatalogRouter = require("./routes/damageServiceCatalog");
 const lostFoundRouter = require("./routes/lostFound");
 const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
 const cleaningBufferPolicyRouter = require("./routes/cleaningBufferPolicy");
 const walletRouter = require("./routes/wallet");
 const depositPolicyRouter = require("./routes/depositPolicy");
+const voucherRouter = require("./routes/voucher");
+const bookingVoucherRouter = require("./routes/bookingVoucher");
+const pricingRuleRouter = require("./routes/pricingRule");
 const app = express();
 
 const parseAllowedOrigins = (origins = "") =>
@@ -144,12 +190,16 @@ app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
 app.use("/api/staff-attendance-logs", staffAttendanceLogRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/incidents", incidentRouter);
+app.use("/api/damage-service-catalogs", damageServiceCatalogRouter);
 app.use("/api/lost-found-items", lostFoundRouter);
 app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/cleaning-buffer-policies", cleaningBufferPolicyRouter);
 app.use("/api/wallets", walletRouter);
 app.use("/api/deposit-policies", depositPolicyRouter);
+app.use("/api/vouchers", voucherRouter);
+app.use("/api/booking-vouchers", bookingVoucherRouter);
+app.use("/api/pricing-rules", pricingRuleRouter);
 app.use("/", indexRouter);
 app.use("/api/identity", identityCardRouter);
 app.use("/api/dashboard", dashboardRouter);

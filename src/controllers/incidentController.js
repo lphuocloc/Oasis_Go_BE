@@ -26,18 +26,51 @@ const parsePhotoUrls = (raw) => {
   return [];
 };
 
-exports.createIncidentFromCleaningTask = async (req, res) => {
-  const uploadedPhotos = Array.isArray(req.files)
-    ? req.files
-        .filter((file) => file && file.path)
-        .map((file) => ({
-          url: file.path,
-          public_id: file.filename || null,
-        }))
-    : [];
+const buildUploadedPhotos = (files) => {
+  if (!Array.isArray(files)) return [];
+
+  return files
+    .filter((file) => file && file.path)
+    .map((file) => ({
+      url: file.path,
+      public_id: file.filename || null,
+    }));
+};
+
+const cleanupUploadedPhotos = async (uploadedPhotos = []) => {
+  if (!Array.isArray(uploadedPhotos) || uploadedPhotos.length === 0) return;
+
+  await Promise.all(
+    uploadedPhotos
+      .filter((item) => item.public_id)
+      .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
+  );
+};
+
+const mapSettlementReasonToWarningMessage = (reason) => {
+  const reasonCode = String(reason || "").trim().toUpperCase();
+
+  const messageByReason = {
+    MISSING_ORDER_ID: "Incident da duoc cap nhat, nhung khong tim thay order de doi soat coc.",
+    ORDER_NOT_FOUND: "Incident da duoc cap nhat, nhung order khong ton tai de doi soat coc.",
+    ORDER_NOT_ELIGIBLE: "Incident da duoc cap nhat, nhung order chua du dieu kien de doi soat coc.",
+    ORDER_ALREADY_SETTLED: "Incident da duoc cap nhat, nhung tien coc cua order nay da duoc doi soat truoc do.",
+    ORDER_BOOKINGS_NOT_FOUND: "Incident da duoc cap nhat, nhung order khong co booking de doi soat coc.",
+    ORDER_BOOKINGS_NOT_TERMINAL: "Incident da duoc cap nhat, nhung booking trong order chua ket thuc nen chua doi soat coc.",
+    CLEANING_NOT_COMPLETED: "Incident da duoc cap nhat, nhung cleaning task chua hoan tat nen chua doi soat coc.",
+    PENDING_INCIDENT_EXISTS: "Incident da duoc cap nhat, nhung van con incident PENDING nen chua doi soat coc.",
+    BOOKING_ORDER_NOT_FOUND: "Incident da duoc cap nhat, nhung khong tim thay booking order lien quan.",
+    SETTLEMENT_NOT_APPLIED: "Incident da duoc cap nhat, nhung chua doi soat coc cho don hang.",
+  };
+
+  return messageByReason[reasonCode] || "Incident da duoc cap nhat, nhung chua doi soat coc cho don hang.";
+};
+
+const createDamageIncident = async (req, res, { successMessage = "Incident created successfully" } = {}) => {
+  const uploadedPhotos = buildUploadedPhotos(req.files);
 
   try {
-    const incident = await incidentService.createIncidentFromCleaningTask(
+    const incident = await incidentService.createDamageReport(
       {
         ...req.body,
         photo_urls: parsePhotoUrls(req.body.photo_urls),
@@ -48,17 +81,11 @@ exports.createIncidentFromCleaningTask = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      message: "Incident created successfully",
+      message: successMessage,
       data: incident,
     });
   } catch (error) {
-    if (uploadedPhotos.length > 0) {
-      await Promise.all(
-        uploadedPhotos
-          .filter((item) => item.public_id)
-          .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
-      );
-    }
+    await cleanupUploadedPhotos(uploadedPhotos);
 
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
@@ -68,9 +95,54 @@ exports.createIncidentFromCleaningTask = async (req, res) => {
   }
 };
 
+exports.createIncident = async (req, res) => createDamageIncident(req, res, {
+  successMessage: "Incident created successfully",
+});
+
+exports.getDamageReports = async (req, res) => {
+  try {
+    const result = await incidentService.getDamageReports(req.query, req.user);
+    res.status(200).json({
+      success: true,
+      count: Array.isArray(result.items) ? result.items.length : 0,
+      data: result.items || [],
+      pagination: result.pagination || undefined,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching damage reports",
+    });
+  }
+};
+
+exports.getMyPendingIncidentReviews = async (req, res) => {
+  try {
+    const query = {
+      ...req.query,
+      status: "PENDING",
+    };
+
+    const result = await incidentService.getDamageReports(query, req.user);
+    res.status(200).json({
+      success: true,
+      count: Array.isArray(result.items) ? result.items.length : 0,
+      data: result.items || [],
+      pagination: result.pagination || undefined,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching pending incident reviews",
+    });
+  }
+};
+
 exports.getIncidents = async (req, res) => {
   try {
-    const incidents = await incidentService.getIncidents(req.query);
+    const incidents = await incidentService.getIncidents(req.query, req.user);
     res.status(200).json({
       success: true,
       count: incidents.length,
@@ -87,16 +159,7 @@ exports.getIncidents = async (req, res) => {
 
 exports.getIncidentById = async (req, res) => {
   try {
-    const incident = await incidentService.getIncidentById(req.params.id);
-
-    if (req.user && req.user.role === "manager" && req.managerScope) {
-      if (!req.managerScope.podIds.includes(String(incident.pod_id))) {
-        return res.status(403).json({
-          success: false,
-          message: "You are not allowed to access an incident out of your management scope",
-        });
-      }
-    }
+    const incident = await incidentService.getIncidentById(req.params.id, req.user, req.managerScope);
 
     res.status(200).json({
       success: true,
@@ -113,12 +176,38 @@ exports.getIncidentById = async (req, res) => {
 
 exports.updateIncidentStatus = async (req, res) => {
   try {
-    const actor = req.user ? { ...req.user, managerScope: req.managerScope } : null;
-    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body.status, actor);
+    const baseActor = req.user
+      ? (typeof req.user.toObject === "function" ? req.user.toObject() : req.user)
+      : null;
+    const actor = baseActor ? { ...baseActor, managerScope: req.managerScope || null } : null;
+
+    if (!actor) {
+      return res.status(401).json({
+        success: false,
+        message: "Not authorized. Please login to access this resource.",
+      });
+    }
+
+    const incident = await incidentService.updateIncidentStatus(req.params.id, req.body, actor);
+
+    let warning;
+    if (
+      incident?.damage_billing &&
+      incident.damage_billing.settlement_applied === false &&
+      incident.damage_billing.settlement_reason
+    ) {
+      warning = {
+        code: "DEPOSIT_SETTLEMENT_NOT_APPLIED",
+        reason: String(incident.damage_billing.settlement_reason),
+        message: mapSettlementReasonToWarningMessage(incident.damage_billing.settlement_reason),
+      };
+    }
+
     res.status(200).json({
       success: true,
       message: "Incident status updated successfully",
       data: incident,
+      warning,
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;

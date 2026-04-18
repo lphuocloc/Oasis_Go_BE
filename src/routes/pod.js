@@ -45,6 +45,10 @@ const {
  *           type: string
  *           enum: [AVAILABLE, OCCUPIED, NEEDS_CLEANING, CLEANING, MAINTENANCE]
  *           default: AVAILABLE
+ *         type:
+ *           type: string
+ *           enum: [STANDARD, SERVICE]
+ *           default: STANDARD
  *         maintenance_status:
  *           type: string
  *           description: Maintenance status description
@@ -134,6 +138,10 @@ const {
  *                     type: boolean
  *                   max_session_duration:
  *                     type: integer
+ *                   type:
+ *                     type: string
+ *                     enum: [STANDARD, SERVICE]
+ *                     description: Optional pod type
  *               - type: object
  *                 title: Single Mode
  *                 required:
@@ -162,6 +170,10 @@ const {
  *                     type: boolean
  *                   max_session_duration:
  *                     type: integer
+ *                   type:
+ *                     type: string
+ *                     enum: [STANDARD, SERVICE]
+ *                     description: Optional pod type
  *     responses:
  *       201:
  *         description: Pods created successfully
@@ -319,6 +331,9 @@ router.get(
  *               status:
  *                 type: string
  *                 enum: [AVAILABLE, OCCUPIED, NEEDS_CLEANING, CLEANING, MAINTENANCE]
+ *               type:
+ *                 type: string
+ *                 enum: [STANDARD, SERVICE]
  *               maintenance_status:
  *                 type: string
  *               soundproof_level:

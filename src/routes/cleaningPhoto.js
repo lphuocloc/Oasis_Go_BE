@@ -1,7 +1,7 @@
 const express = require("express");
 const router = express.Router();
+const multer = require("multer");
 const { protect, authorize } = require("../middlewares/authMiddleware");
-const { uploadCleaningTaskPhoto } = require("../config/cloudinary");
 const {
   createCleaningPhoto,
   getAllCleaningPhotos,
@@ -9,6 +9,31 @@ const {
   updateCleaningPhoto,
   deleteCleaningPhoto,
 } = require("../controllers/cleaningPhotoController");
+
+const uploadCleaningPhotoInMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: {
+    fileSize: 8 * 1024 * 1024,
+  },
+});
+
+const handleCleaningPhotoUpload = (req, res, next) => {
+  uploadCleaningPhotoInMemory.fields([
+    { name: "photo", maxCount: 1 },
+    { name: "image", maxCount: 1 },
+  ])(req, res, (error) => {
+    if (!error) return next();
+
+    const isMulterError = error && error.name === "MulterError";
+    const statusCode = isMulterError ? 400 : 500;
+
+    return res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error uploading cleaning photo",
+      error_code: isMulterError ? "UPLOAD_VALIDATION_ERROR" : "UPLOAD_FAILED",
+    });
+  });
+};
 
 /**
  * @swagger
@@ -92,7 +117,7 @@ router.post(
   "/",
   protect,
   authorize("admin", "manager", "cleaner"),
-  uploadCleaningTaskPhoto.single("photo"),
+  handleCleaningPhotoUpload,
   createCleaningPhoto
 );
 
@@ -133,7 +158,7 @@ router.put(
   "/:id",
   protect,
   authorize("admin", "manager", "cleaner"),
-  uploadCleaningTaskPhoto.single("photo"),
+  handleCleaningPhotoUpload,
   updateCleaningPhoto
 );
 

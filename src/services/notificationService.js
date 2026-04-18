@@ -3,13 +3,20 @@ const expo = new Expo();
 const User = require("../models/User");
 const Notification = require("../models/Notification");
 
+const EXPO_NOTIFICATION_CHANNEL_ID = String(
+  process.env.EXPO_NOTIFICATION_CHANNEL_ID || "default",
+).trim();
+
 class NotificationService {
   _normalizeNotificationPayload(payload = {}) {
     const title = String(payload.title || "").trim();
     const message = String(payload.message || payload.body || "").trim();
     const type = String(payload.type || "SYSTEM").toUpperCase();
-    const event_code = String(payload.event_code || "SYSTEM_GENERAL").toUpperCase();
-    const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+    const event_code = String(
+      payload.event_code || "SYSTEM_GENERAL",
+    ).toUpperCase();
+    const data =
+      payload.data && typeof payload.data === "object" ? payload.data : {};
 
     return {
       title,
@@ -123,7 +130,7 @@ class NotificationService {
           notification_id: notification.id,
           event_code: notification.event_code,
           type: notification.type,
-        }
+        },
       );
 
       if (!result) {
@@ -150,6 +157,19 @@ class NotificationService {
     try {
       const notification = await this.createNotification(userId, payload);
       const deliveryResult = await this.deliverNotification(notification);
+
+      try {
+        const socketServer = require("../socket/socketServer");
+        if (socketServer && typeof socketServer.emitUserNotificationEvent === 'function') {
+          socketServer.emitUserNotificationEvent({
+            user_id: String(userId),
+            notification: typeof notification.toObject === 'function' ? notification.toObject() : notification
+          });
+        }
+      } catch (err) {
+        console.error("Socket emitUserNotificationEvent Error:", err);
+      }
+
       return {
         success: deliveryResult.success,
         notification,
@@ -184,7 +204,11 @@ class NotificationService {
     }
 
     const [data, total] = await Promise.all([
-      Notification.find(query).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Notification.find(query)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Notification.countDocuments(query),
     ]);
 
@@ -231,7 +255,7 @@ class NotificationService {
     try {
       const updated = await Notification.updateMany(
         { user_id: String(userId), is_read: false },
-        { $set: { is_read: true, read_at: new Date() } }
+        { $set: { is_read: true, read_at: new Date() } },
       );
 
       return {

@@ -33,6 +33,24 @@ const userSchema = new mongoose.Schema(
       },
       default: null,
     },
+    bank_name: {
+      type: String,
+      trim: true,
+      default: null,
+      maxlength: [120, "Bank name cannot exceed 120 characters"],
+    },
+    bank_account_number: {
+      type: String,
+      trim: true,
+      default: null,
+      validate: {
+        validator: function (v) {
+          return v == null || v === "" || /^\d{6,30}$/.test(v);
+        },
+        message: (props) =>
+          `${props.value} is not a valid bank account number`,
+      },
+    },
 
     identityCard: {
       type: mongoose.Schema.Types.ObjectId,
@@ -76,6 +94,21 @@ const userSchema = new mongoose.Schema(
     isActive: {
       type: Boolean,
       default: true,
+    },
+    debt_status: {
+      type: String,
+      enum: ["NONE", "IN_DEBT", "BLACKLISTED"],
+      default: "NONE",
+      index: true,
+    },
+    debt_total_cached: {
+      type: Number,
+      default: 0,
+      min: 0,
+    },
+    debt_since: {
+      type: Date,
+      default: null,
     },
     // OTP fields for email verification
     isVerified: {

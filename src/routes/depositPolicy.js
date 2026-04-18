@@ -71,7 +71,7 @@ const depositPolicyController = require("../controllers/depositPolicyController"
  *       200:
  *         description: Deposit policy retrieved successfully
  */
-router.get("/current", protect, authorize("admin"), depositPolicyController.getCurrentPolicy);
+router.get("/current", protect, depositPolicyController.getCurrentPolicy);
 
 /**
  * @swagger
@@ -94,6 +94,11 @@ router.get("/current", protect, authorize("admin"), depositPolicyController.getC
  *       400:
  *         description: Invalid input
  */
-router.put("/current", protect, authorize("admin"), depositPolicyController.updateCurrentPolicy);
+router.put(
+  "/current",
+  protect,
+  authorize("admin"),
+  depositPolicyController.updateCurrentPolicy,
+);
 
 module.exports = router;

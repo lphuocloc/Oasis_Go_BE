@@ -7,7 +7,7 @@ const bookingService = require("../services/bookingService");
  */
 const createBooking = async (req, res) => {
     try {
-        const booking = await bookingService.createBooking(req.body);
+        const booking = await bookingService.createBooking(req.body, req.user);
         res.status(201).json({
             success: true,
             message: "Booking created successfully",
@@ -211,6 +211,7 @@ const getMyCleanerKeyByBookingId = async (req, res) => {
         res.status(statusCode).json({
             success: false,
             message: error.message || "Failed to retrieve cleaner key",
+            error_code: error.errorCode || "CLEANER_KEY_RETRIEVAL_FAILED",
         });
     }
 };
@@ -259,7 +260,8 @@ const checkAvailability = async (req, res) => {
         const isAvailable = await bookingService.checkAvailability(
             podId,
             start_time,
-            end_time
+            end_time,
+            req.user
         );
 
         res.status(200).json({

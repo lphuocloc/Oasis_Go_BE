@@ -83,8 +83,14 @@ locationSchema.virtual("children", {
 locationSchema.methods.getHierarchyPath = async function () {
     const path = [this];
     let current = this;
+    const visited = new Set([this.id]);
 
     while (current.parent_id) {
+        if (visited.has(String(current.parent_id))) {
+            break; // Circular reference detected
+        }
+        visited.add(String(current.parent_id));
+
         current = await this.model("Location").findOne({ id: current.parent_id });
         if (current) {
             path.unshift(current);
@@ -96,13 +102,18 @@ locationSchema.methods.getHierarchyPath = async function () {
     return path;
 };
 
-// Static method to get location tree
-locationSchema.statics.getTree = async function (rootId = null) {
+locationSchema.statics.getTree = async function (rootId = null, visited = new Set()) {
+    if (rootId && visited.has(String(rootId))) return [];
+    if (rootId) visited.add(String(rootId));
+
     const locations = await this.find({ parent_id: rootId });
     const tree = [];
 
     for (const location of locations) {
-        const children = await this.getTree(location.id);
+        // Prevent infinite recurse if child id points to itself
+        if (visited.has(String(location.id))) continue;
+        
+        const children = await this.getTree(location.id, new Set(visited));
         tree.push({
             ...location.toObject(),
             children: children.length > 0 ? children : undefined,
@@ -112,14 +123,17 @@ locationSchema.statics.getTree = async function (rootId = null) {
     return tree;
 };
 
-// Static method to get all descendants
-locationSchema.statics.getDescendants = async function (locationId) {
+locationSchema.statics.getDescendants = async function (locationId, visited = new Set()) {
     const descendants = [];
+    if (visited.has(String(locationId))) return descendants;
+    visited.add(String(locationId));
+
     const children = await this.find({ parent_id: locationId });
 
     for (const child of children) {
+        if (visited.has(String(child.id))) continue;
         descendants.push(child);
-        const childDescendants = await this.getDescendants(child.id);
+        const childDescendants = await this.getDescendants(child.id, new Set(visited));
         descendants.push(...childDescendants);
     }
 

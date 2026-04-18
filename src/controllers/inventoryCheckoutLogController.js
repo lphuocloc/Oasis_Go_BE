@@ -2,11 +2,61 @@ const inventoryCheckoutLogService = require("../services/inventoryCheckoutLogSer
 
 exports.createInventoryCheckoutLog = async (req, res) => {
   try {
-    const log = await inventoryCheckoutLogService.createInventoryCheckoutLog(req.body);
+    const log = await inventoryCheckoutLogService.createInventoryCheckoutLog(req.body, req.user);
     res.status(201).json({ success: true, message: "Inventory checkout log created successfully", data: log });
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ success: false, message: error.message || "Error creating inventory checkout log" });
+  }
+};
+
+exports.createInventoryCheckoutLogsBulk = async (req, res) => {
+  try {
+    const result = await inventoryCheckoutLogService.createInventoryCheckoutLogsBulk(req.body, req.user);
+    res.status(201).json({
+      success: true,
+      message: "Inventory checkout logs created successfully",
+      count: result.count,
+      data: result.logs,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error creating inventory checkout logs",
+    });
+  }
+};
+
+exports.getShiftInventoryEstimation = async (req, res) => {
+  try {
+    const estimation = await inventoryCheckoutLogService.estimateByCleanerDay(
+      req.params.cleaner_id,
+      req.user,
+      req.query
+    );
+
+    res.status(200).json({
+      success: true,
+      data: estimation,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error estimating daily inventory" });
+  }
+};
+
+exports.getCleanerDailyCheckoutLogs = async (req, res) => {
+  try {
+    const result = await inventoryCheckoutLogService.getCleanerDailyCheckoutLogs(
+      req.params.cleaner_id,
+      req.user,
+      req.query
+    );
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error fetching daily checkout logs" });
   }
 };
 
@@ -31,7 +81,7 @@ exports.getInventoryCheckoutLogById = async (req, res) => {
 
 exports.updateInventoryCheckoutLog = async (req, res) => {
   try {
-    const log = await inventoryCheckoutLogService.updateInventoryCheckoutLog(req.params.id, req.body);
+    const log = await inventoryCheckoutLogService.updateInventoryCheckoutLog(req.params.id, req.body, req.user);
     res.status(200).json({ success: true, message: "Inventory checkout log updated successfully", data: log });
   } catch (error) {
     const statusCode = error.statusCode || 500;

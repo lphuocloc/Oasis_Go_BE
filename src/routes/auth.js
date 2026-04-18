@@ -524,6 +524,15 @@ router.get("/me", protect, authController.getMe);
  *                 type: string
  *                 description: New avatar URL or base64 string
  *                 example: https://example.com/new-avatar.jpg
+ *               phone:
+ *                 type: string
+ *                 example: "0912345678"
+ *               bank_name:
+ *                 type: string
+ *                 example: Vietcombank
+ *               bank_account_number:
+ *                 type: string
+ *                 example: "1234567890"
  *     responses:
  *       200:
  *         description: Profile updated successfully
@@ -719,29 +728,12 @@ router.post("/verify-reset-otp", authController.verifyResetOtp);
 
 router.post("/reset-password", authController.resetPassword);
 const notificationService = require("../services/notificationService");
+router.patch("/update-push-token", protect, authController.handleUpdateToken);
 router.patch("/update-fcm-token", protect, authController.handleUpdateToken);
 
 // Đăng xuất (Để xóa token trong DB)
 router.post("/reset-fcmToken", protect, authController.handleLogout);
 
-// Route: POST /api/auth/test-push
-router.post("/test-push", protect, async (req, res) => {
-  const { title, body } = req.body;
-
-  const result = await notificationService.sendToUser(req.user.id, {
-    title: title || "Thông báo từ Backend",
-    message: body || "Hệ thống đã kết nối thành công!",
-    type: "SYSTEM",
-    event_code: "SYSTEM_TEST",
-    data: { type: "SYSTEM_TEST", url: "/home" },
-  });
-
-  if (result.success) {
-    res.json({ message: "Đã gửi yêu cầu thông báo!", result });
-  } else {
-    res.status(500).json({ message: "Gửi thất bại", error: result.error });
-  }
-});
 
 /**
  * @swagger

@@ -13,7 +13,6 @@ const supportRequestSchema = new mongoose.Schema(
       type: String,
       required: [true, "Booking ID is required"],
       ref: "Booking",
-      index: true,
     },
     pod_id: {
       type: String,
@@ -36,7 +35,7 @@ const supportRequestSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values: ["MAINTENANCE", "CHANGE_POD"],
+        values: ["MAINTENANCE", "CHANGE_POD", "CLEANING"],
         message: "{VALUE} is not a valid support request type",
       },
       required: true,
@@ -59,7 +58,7 @@ const supportRequestSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"],
+        values: ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED"],
         message: "{VALUE} is not a valid support request status",
       },
       default: "PENDING",

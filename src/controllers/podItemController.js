@@ -10,6 +10,23 @@ exports.createPodItem = async (req, res) => {
   }
 };
 
+exports.createPodItemsForCluster = async (req, res) => {
+  try {
+    const result = await podItemService.createPodItemsForCluster(req.body);
+    res.status(201).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error assigning pod items for cluster",
+    });
+  }
+};
+
 exports.getAllPodItems = async (req, res) => {
   try {
     const podItems = await podItemService.getAllPodItems(req.query);

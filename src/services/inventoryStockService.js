@@ -39,11 +39,12 @@ exports.createInventoryStock = async (data) => {
   });
 
   // Auto-log stock creation if staff_id provided
-  if (staff_id) {
+  if (staff_id && Number(quantity_available) > 0) {
     try {
       await inventoryCheckoutLogService.createAutoLog({
         inventory_stock_id: stock.id,
         staff_id,
+        actor_id: staff_id,
         quantity: Number(quantity_available),
         action_type: "INITIAL",
         reason: "Stock created",
@@ -121,7 +122,8 @@ exports.updateInventoryStock = async (id, data) => {
       await inventoryCheckoutLogService.createAutoLog({
         inventory_stock_id: stock.id,
         staff_id,
-        quantity: stock.quantity_available,
+        actor_id: staff_id,
+        quantity: Math.abs(Number(stock.quantity_available) - Number(oldQuantity)),
         action_type: "ADJUSTMENT",
         reason: "Stock quantity adjusted",
       });

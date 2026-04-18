@@ -60,7 +60,6 @@ const reviewSchema = new mongoose.Schema(
 // Indexes for efficient queries
 reviewSchema.index({ user_id: 1, created_at: -1 });
 reviewSchema.index({ cluster_id: 1, is_rejected: 1, created_at: -1 });
-reviewSchema.index({ booking_id: 1 });
 
 // Virtual for booking details
 reviewSchema.virtual("booking", {

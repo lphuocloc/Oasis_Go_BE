@@ -2,13 +2,26 @@ const vnpayService = require("../utils/vnpayService");
 const Transaction = require("../models/Transaction");
 const BookingOrder = require("../models/BookingOrder");
 const Booking = require("../models/Bookings");
+const BookingVoucher = require("../models/BookingVoucher");
+const Voucher = require("../models/Voucher");
 const OnlineKey = require("../models/OnlineKey");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const { randomInt } = require("crypto");
 const notificationService = require("./notificationService");
 const walletService = require("./walletService");
+const debtService = require("./debtService");
 const mongoose = require("mongoose");
+
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
 
 class PaymentService {
   _parseDateOrThrow(value, fieldName) {
@@ -58,6 +71,39 @@ class PaymentService {
     return transactions.reduce((sum, tx) => sum + Number(tx.amount || 0), 0);
   }
 
+  async _incrementVoucherUsageIfNeeded(orderId, session = null) {
+    let bookingVoucherQuery = BookingVoucher.findOne({ order_id: orderId }).select(
+      "voucher_id",
+    );
+    if (session) {
+      bookingVoucherQuery = bookingVoucherQuery.session(session);
+    }
+
+    const bookingVoucher = await bookingVoucherQuery;
+    if (!bookingVoucher?.voucher_id) {
+      return;
+    }
+
+    const voucherUpdateFilter = {
+      id: bookingVoucher.voucher_id,
+      $or: [
+        { usage_limit: null },
+        { usage_limit: { $exists: false } },
+        { $expr: { $lt: ["$usage_count", "$usage_limit"] } },
+      ],
+    };
+
+    let voucherUpdateQuery = Voucher.updateOne(
+      voucherUpdateFilter,
+      { $inc: { usage_count: 1 } },
+    );
+    if (session) {
+      voucherUpdateQuery = voucherUpdateQuery.session(session);
+    }
+
+    await voucherUpdateQuery;
+  }
+
   async _settleOrderIfFullyPaid(orderId, session = null) {
     let bookingOrderQuery = BookingOrder.findOne({ id: orderId });
     if (session) {
@@ -90,16 +136,24 @@ class PaymentService {
       session,
     );
 
-    bookingOrder.status = "PAID";
-    if (walletCharged > 0 && vnpayCharged > 0) {
-      bookingOrder.payment_method = "HYBRID";
-    } else if (walletCharged > 0) {
-      bookingOrder.payment_method = "WALLET";
-    } else {
-      bookingOrder.payment_method = "VNPAY";
-    }
+    const nextPaymentMethod =
+      walletCharged > 0 && vnpayCharged > 0
+        ? "HYBRID"
+        : walletCharged > 0
+          ? "WALLET"
+          : "VNPAY";
 
-    await bookingOrder.save({ session });
+    let becamePaid = false;
+    if (bookingOrder.status !== "PAID") {
+      bookingOrder.status = "PAID";
+      bookingOrder.payment_method = nextPaymentMethod;
+      await bookingOrder.save({ session });
+      becamePaid = true;
+
+      await this._incrementVoucherUsageIfNeeded(orderId, session);
+    } else {
+      bookingOrder.payment_method = nextPaymentMethod;
+    }
 
     return {
       bookingOrder,
@@ -108,6 +162,7 @@ class PaymentService {
       walletCharged,
       vnpayCharged,
       isPaid: true,
+      becamePaid,
     };
   }
 
@@ -154,7 +209,7 @@ class PaymentService {
     const existingKeyByBookingAndType = new Set(
       existingKeys.map((key) => `${key.booking_id}:${key.key_type}`),
     );
-    const CHECKIN_GRACE_PERIOD_MS = 15 * 60 * 1000;
+    const checkinEarlyWindowMs = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
     const CLEANER_EXTRA_MINUTES_MS = 30 * 60 * 1000;
 
     const docsToCreate = [];
@@ -176,7 +231,7 @@ class PaymentService {
               ? new Date(booking.start_time)
               : new Date(
                 new Date(booking.start_time).getTime() -
-                CHECKIN_GRACE_PERIOD_MS,
+                checkinEarlyWindowMs,
               ),
           valid_to:
             keyType === "CLEANER"
@@ -296,14 +351,6 @@ class PaymentService {
       ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
       locale: "vn",
       bankCode: "NCB",
-    });
-
-    console.log("Create transaction request:", {
-      transactionId: transaction.id,
-      orderId,
-      amount,
-      status: transaction.status,
-      timestamp: new Date().toISOString(),
     });
 
     return {
@@ -632,7 +679,6 @@ class PaymentService {
    * Xử lý VNPay return/callback
    */
   async handleVnpayReturn(vnpayParams) {
-    console.log("VNPay return params:", vnpayParams);
 
     const verifyResult = vnpayService.verifyReturnUrl({ ...vnpayParams });
     const isValid = verifyResult && verifyResult.isValid;
@@ -734,15 +780,6 @@ class PaymentService {
       }
     }
 
-    console.log(`Transaction ${orderId} updated to ${newStatus}:`, {
-      transactionId: transaction.id,
-      transactionNo,
-      amount,
-      bankCode,
-      payDate,
-      timestamp: new Date().toISOString(),
-    });
-
     return {
       code: responseCode,
       message,
@@ -808,53 +845,104 @@ class PaymentService {
       throw error;
     }
 
-    const wallet = await Wallet.findOne({ id: walletIdFromRef });
-    if (!wallet) {
-      const error = new Error("Wallet not found for topup transaction");
-      error.statusCode = 404;
-      throw error;
-    }
+    let walletId = walletIdFromRef;
+    let walletUserId = null;
+    let balanceBefore = 0;
+    let balanceAfter = 0;
+    let isNewTopupApplied = false;
 
-    if (wallet.status !== "ACTIVE") {
-      const error = new Error("Wallet is locked");
-      error.statusCode = 423;
-      throw error;
-    }
+    const session = await mongoose.startSession();
+    try {
+      await session.withTransaction(async () => {
+        const wallet = await Wallet.findOne({ id: walletIdFromRef }).session(session);
+        if (!wallet) {
+          const error = new Error("Wallet not found for topup transaction");
+          error.statusCode = 404;
+          throw error;
+        }
 
-    const existingWalletTopupAudit = await WalletTransaction.findOne({
-      reference_id: txnRef,
-      type: "TOPUP",
-    });
+        if (wallet.status !== "ACTIVE") {
+          const error = new Error("Wallet is locked");
+          error.statusCode = 423;
+          throw error;
+        }
 
-    let balanceBefore = wallet.balance;
-    let balanceAfter = wallet.balance;
+        walletId = wallet.id;
+        walletUserId = String(wallet.user_id || "");
 
-    if (!existingWalletTopupAudit) {
-      balanceBefore = wallet.balance;
-      balanceAfter = Number((Number(balanceBefore) + Number(paidAmount)).toFixed(2));
-      wallet.balance = balanceAfter;
-      await wallet.save();
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        }).session(session);
 
-      await WalletTransaction.create({
-        wallet_id: wallet.id,
-        amount: Number(paidAmount),
-        type: "TOPUP",
-        transaction_id: null,
-        reference_id: txnRef,
-        description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
+        if (existingWalletTopupAudit) {
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+          return;
+        }
+
+        balanceBefore = Number(wallet.balance || 0);
+        balanceAfter = Number((balanceBefore + Number(paidAmount)).toFixed(2));
+        wallet.balance = balanceAfter;
+        await wallet.save({ session });
+
+        await WalletTransaction.create(
+          [
+            {
+              wallet_id: wallet.id,
+              amount: Number(paidAmount),
+              type: "TOPUP",
+              transaction_id: null,
+              reference_id: txnRef,
+              description: `VNPay wallet topup${transactionNo ? ` (${transactionNo})` : ""}`,
+              balance_before: balanceBefore,
+              balance_after: balanceAfter,
+            },
+          ],
+          { session },
+        );
+
+        isNewTopupApplied = true;
       });
-    } else {
-      balanceBefore = existingWalletTopupAudit.balance_before;
-      balanceAfter = existingWalletTopupAudit.balance_after;
+    } catch (error) {
+      if (error?.code === 11000) {
+        const existingWalletTopupAudit = await WalletTransaction.findOne({
+          reference_id: txnRef,
+          type: "TOPUP",
+        });
+
+        if (existingWalletTopupAudit) {
+          walletId = existingWalletTopupAudit.wallet_id || walletIdFromRef;
+          balanceBefore = Number(existingWalletTopupAudit.balance_before || 0);
+          balanceAfter = Number(existingWalletTopupAudit.balance_after || 0);
+          const wallet = await Wallet.findOne({ id: walletId }).select("user_id");
+          walletUserId = wallet ? String(wallet.user_id || "") : null;
+        } else {
+          throw error;
+        }
+      } else {
+        throw error;
+      }
+    } finally {
+      session.endSession();
+    }
+
+    if (isNewTopupApplied && walletUserId) {
+      const debtSettlement = await debtService.settleUserDebtFromWallet({
+        userId: walletUserId,
+        trigger: `TOPUP:${txnRef}`,
+      });
+
+      if (Number.isFinite(Number(debtSettlement?.wallet_balance_after))) {
+        balanceAfter = Number(debtSettlement.wallet_balance_after);
+      }
     }
 
     return {
       code: responseCode,
       message: "Topup successful",
       transactionId: null,
-      walletId: wallet.id,
+      walletId,
       amount: Number(paidAmount),
       status: "SUCCESS",
       balance_before: balanceBefore,
