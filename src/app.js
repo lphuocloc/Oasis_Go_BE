@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 const express = require("express");
 const path = require("path");
@@ -98,7 +98,7 @@ const itemRouter = require("./routes/item");
 const warehouseRouter = require("./routes/warehouse");
 const locationWarehouseRouter = require("./routes/locationWarehouse");
 const inventoryStockRouter = require("./routes/inventoryStock");
-const inventoryCheckoutLogRouter = require("./routes/inventoryCheckoutLog");
+const inventoryActivityLogRouter = require("./routes/inventoryActivityLog");
 const cleaningTaskRouter = require("./routes/cleaningTask");
 const cleaningPhotoRouter = require("./routes/cleaningPhoto");
 const maintenanceTaskRouter = require("./routes/maintenanceTask");
@@ -179,7 +179,7 @@ app.use("/api/items", itemRouter);
 app.use("/api/warehouses", warehouseRouter);
 app.use("/api/location-warehouses", locationWarehouseRouter);
 app.use("/api/inventory-stocks", inventoryStockRouter);
-app.use("/api/inventory-checkout-logs", inventoryCheckoutLogRouter);
+app.use("/api/inventory-activity-logs", inventoryActivityLogRouter);
 app.use("/api/cleaning-tasks", cleaningTaskRouter);
 app.use("/api/cleaning-photos", cleaningPhotoRouter);
 app.use("/api/maintenance-tasks", maintenanceTaskRouter);

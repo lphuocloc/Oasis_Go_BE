@@ -63,6 +63,16 @@ exports.deleteItem = async (id) => {
     );
   }
 
+  // Check if this item still has inventory stock records
+  const InventoryStock = require("../models/InventoryStock");
+  const stockCount = await InventoryStock.countDocuments({ item_id: id });
+  if (stockCount > 0) {
+    throw createError(
+      `Cannot delete: item still has stock records in ${stockCount} warehouse(s). Remove or zero-out inventory stocks first.`,
+      409
+    );
+  }
+
   await Item.deleteOne({ id });
   return { message: "Item deleted successfully" };
 };

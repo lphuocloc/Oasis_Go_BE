@@ -210,6 +210,14 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *                       booking_guest_name:
  *                         type: string
  *                         nullable: true
+ *                       booking_status:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Status of the linked booking (e.g. BOOKED, IN_USE, COMPLETED, CANCELLED)
+ *                       pod_status:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Current status of the pod (e.g. AVAILABLE, IN_USE, NEEDS_CLEANING, CLEANING)
  *                       estimated_start_time:
  *                         type: string
  *                         format: date-time

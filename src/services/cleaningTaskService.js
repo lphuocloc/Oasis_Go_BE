@@ -1617,11 +1617,11 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
 
   const [pods, bookings] = await Promise.all([
     podIds.length > 0
-      ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id").lean()
+      ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id status").lean()
       : Promise.resolve([]),
     bookingIds.length > 0
       ? Booking.find({ id: { $in: bookingIds } })
-        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state")
+        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state status")
         .lean()
       : Promise.resolve([]),
   ]);
@@ -1689,6 +1689,8 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       booking_actual_end_time: booking ? booking.actual_end_time || null : null,
       booking_checked_in_at: booking ? booking.checked_in_at || null : null,
       booking_checkin_state: booking ? booking.checkin_state || null : null,
+      booking_status: booking ? booking.status || null : null,
+      pod_status: pod ? pod.status || null : null,
       actual_start_time: task.start_time || null,
       actual_end_time: task.end_time || null,
       action_label: getCleaningTaskActionLabel(task.status),

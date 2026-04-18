@@ -1,4 +1,4 @@
-module.exports = {
+﻿module.exports = {
   User: require("./User"),
   Location: require("./Location"),
   PodCluster: require("./PodCluster"),
@@ -28,7 +28,7 @@ module.exports = {
   Warehouse: require("./Warehouse"),
   LocationWarehouse: require("./LocationWarehouse"),
   InventoryStock: require("./InventoryStock"),
-  InventoryCheckoutLog: require("./InventoryCheckoutLog"),
+  InventoryActivityLog: require("./InventoryActivityLog"),
   PodItem: require("./PodItem"),
   StaffShift: require("./StaffShift"),
   LocationShift: require("./LocationShift"),

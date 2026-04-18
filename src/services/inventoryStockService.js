@@ -1,8 +1,8 @@
-const InventoryStock = require("../models/InventoryStock");
+﻿const InventoryStock = require("../models/InventoryStock");
 const Warehouse = require("../models/Warehouse");
 const Item = require("../models/Item");
-const InventoryCheckoutLog = require("../models/InventoryCheckoutLog");
-const inventoryCheckoutLogService = require("./inventoryCheckoutLogService");
+const InventoryActivityLog = require("../models/InventoryActivityLog");
+const inventoryActivityLogService = require("./inventoryActivityLogService");
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -41,7 +41,7 @@ exports.createInventoryStock = async (data) => {
   // Auto-log stock creation if staff_id provided
   if (staff_id && Number(quantity_available) > 0) {
     try {
-      await inventoryCheckoutLogService.createAutoLog({
+      await inventoryActivityLogService.createAutoLog({
         inventory_stock_id: stock.id,
         staff_id,
         actor_id: staff_id,
@@ -119,7 +119,7 @@ exports.updateInventoryStock = async (id, data) => {
   // Auto-log quantity adjustment if changed and staff_id provided
   if (quantityChanged && staff_id) {
     try {
-      await inventoryCheckoutLogService.createAutoLog({
+      await inventoryActivityLogService.createAutoLog({
         inventory_stock_id: stock.id,
         staff_id,
         actor_id: staff_id,
@@ -140,7 +140,7 @@ exports.deleteInventoryStock = async (id) => {
   const stock = await InventoryStock.findOne({ id });
   if (!stock) throw createError("Inventory stock not found", 404);
 
-  const logCount = await InventoryCheckoutLog.countDocuments({ inventory_stock_id: id });
+  const logCount = await InventoryActivityLog.countDocuments({ inventory_stock_id: id });
   if (logCount > 0) {
     throw createError("Cannot delete inventory stock because checkout logs exist", 409);
   }

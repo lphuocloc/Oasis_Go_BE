@@ -1,5 +1,5 @@
-const mongoose = require("mongoose");
-const InventoryCheckoutLog = require("../models/InventoryCheckoutLog");
+﻿const mongoose = require("mongoose");
+const InventoryActivityLog = require("../models/InventoryActivityLog");
 const InventoryStock = require("../models/InventoryStock");
 const CleaningTask = require("../models/CleaningTask");
 const MaintenanceTask = require("../models/MaintenanceTask");
@@ -106,18 +106,11 @@ const validateLogBusinessRules = ({ actionType, reason, cleaningTaskId, maintena
     throw createError("action_type is required", 400);
   }
 
-  const isAdminAction = actionType === "INITIAL" || actionType === "ADJUSTMENT";
   const hasCleaningTask = Boolean(cleaningTaskId);
   const hasMaintenanceTask = Boolean(maintenanceTaskId);
 
-  if (!isAdminAction) {
-    if (!hasCleaningTask && !hasMaintenanceTask) {
-      throw createError("Either cleaning_task_id or maintenance_task_id is required", 400);
-    }
-
-    if (hasCleaningTask && hasMaintenanceTask) {
-      throw createError("Only one of cleaning_task_id or maintenance_task_id can be provided", 400);
-    }
+  if (hasCleaningTask && hasMaintenanceTask) {
+    throw createError("Only one of cleaning_task_id or maintenance_task_id can be provided", 400);
   }
 
   if (actionType === "WASTE") {
@@ -165,10 +158,6 @@ const validateCleanerOwnership = async ({ actor, staffId, shiftAssignmentId, cle
 
   if (maintenanceTaskId) {
     throw createError("Cleaner is not allowed to use maintenance_task_id", 403);
-  }
-
-  if (!shiftAssignmentId && !cleaningTaskId) {
-    throw createError("Cleaner requests must include shift_assignment_id or cleaning_task_id", 400);
   }
 
   const [assignment, cleaningTask] = await Promise.all([
@@ -272,7 +261,7 @@ const applyStockDelta = async (stockId, delta, session) => {
   return updatedStock;
 };
 
-exports.createInventoryCheckoutLog = async (data, actor = null) => {
+exports.createInventoryActivityLog = async (data, actor = null) => {
   const {
     inventory_stock_id,
     staff_id,
@@ -334,7 +323,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
 
     await applyStockDelta(inventory_stock_id, delta, session);
 
-    const [createdLog] = await InventoryCheckoutLog.create(
+    const [createdLog] = await InventoryActivityLog.create(
       [
         {
           inventory_stock_id,
@@ -352,21 +341,41 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
 
     await session.commitTransaction();
 
-    if (String(staff.role || "").toLowerCase() === "cleaner" && normalizedActionType === "CHECKOUT") {
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "WASTE"];
+    if (String(staff.role || "").toLowerCase() === "cleaner" && notifyActionTypes.includes(normalizedActionType)) {
       const [item, warehouse] = await Promise.all([
         Item.findOne({ id: stock.item_id }).select("id name").lean(),
         Warehouse.findOne({ id: stock.warehouse_id }).select("id name").lean(),
       ]);
 
+      const notificationConfig = {
+        CHECKOUT: {
+          title: "Xac nhan xuat kho",
+          message: `Ban da xuat ${normalizedQuantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+          event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+        },
+        RETURN: {
+          title: "Xac nhan hoan kho",
+          message: `Ban da tra lai ${normalizedQuantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
+          event_code: "INVENTORY_RETURN_CONFIRMED",
+        },
+        WASTE: {
+          title: "Xac nhan bao hong",
+          message: `Ban da bao ${normalizedQuantity} ${item?.name || "vat tu"} bi hong/that thoat.`,
+          event_code: "INVENTORY_WASTE_CONFIRMED",
+        },
+      }[normalizedActionType];
+
       await notificationService.sendToUser(staff._id, {
-        title: "Xac nhan xuat kho",
-        message: `Ban da xuat ${normalizedQuantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+        title: notificationConfig.title,
+        message: notificationConfig.message,
         type: "INVENTORY",
-        event_code: "INVENTORY_CHECKOUT_CONFIRMED",
-        dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${createdLog.id}:${String(staff._id)}`,
+        event_code: notificationConfig.event_code,
+        dedupe_key: `${notificationConfig.event_code}:${createdLog.id}:${String(staff._id)}`,
         data: {
-          checkout_log_id: createdLog.id,
+          activity_log_id: createdLog.id,
           inventory_stock_id,
+          action_type: normalizedActionType,
           quantity: String(normalizedQuantity),
           item_id: stock.item_id || null,
           item_name: item?.name || null,
@@ -385,7 +394,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
   }
 };
 
-exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
+exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
   const payload = data || {};
   const logs = Array.isArray(payload.logs) ? payload.logs : [];
 
@@ -460,7 +469,7 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
       const delta = getStockDelta(normalizedActionType, normalizedQuantity);
       await applyStockDelta(inventoryStockId, delta, session);
 
-      const [createdLog] = await InventoryCheckoutLog.create(
+      const [createdLog] = await InventoryActivityLog.create(
         [
           {
             inventory_stock_id: inventoryStockId,
@@ -487,24 +496,44 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
 
     await session.commitTransaction();
 
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "WASTE"];
     if (String(staff.role || "").toLowerCase() === "cleaner") {
       for (const draft of notificationDrafts) {
-        if (draft.actionType !== "CHECKOUT") continue;
+        if (!notifyActionTypes.includes(draft.actionType)) continue;
 
         const [item, warehouse] = await Promise.all([
           Item.findOne({ id: draft.stock.item_id }).select("id name").lean(),
           Warehouse.findOne({ id: draft.stock.warehouse_id }).select("id name").lean(),
         ]);
 
+        const notificationConfig = {
+          CHECKOUT: {
+            title: "Xac nhan xuat kho",
+            message: `Ban da xuat ${draft.quantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+            event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+          },
+          RETURN: {
+            title: "Xac nhan hoan kho",
+            message: `Ban da tra lai ${draft.quantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
+            event_code: "INVENTORY_RETURN_CONFIRMED",
+          },
+          WASTE: {
+            title: "Xac nhan bao hong",
+            message: `Ban da bao ${draft.quantity} ${item?.name || "vat tu"} bi hong/that thoat.`,
+            event_code: "INVENTORY_WASTE_CONFIRMED",
+          },
+        }[draft.actionType];
+
         await notificationService.sendToUser(staff._id, {
-          title: "Xac nhan xuat kho",
-          message: `Ban da xuat ${draft.quantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+          title: notificationConfig.title,
+          message: notificationConfig.message,
           type: "INVENTORY",
-          event_code: "INVENTORY_CHECKOUT_CONFIRMED",
-          dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${draft.logId}:${String(staff._id)}`,
+          event_code: notificationConfig.event_code,
+          dedupe_key: `${notificationConfig.event_code}:${draft.logId}:${String(staff._id)}`,
           data: {
-            checkout_log_id: draft.logId,
+            activity_log_id: draft.logId,
             inventory_stock_id: draft.stock.id,
+            action_type: draft.actionType,
             quantity: String(draft.quantity),
             item_id: draft.stock.item_id || null,
             item_name: item?.name || null,
@@ -527,7 +556,7 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
   }
 };
 
-exports.getAllInventoryCheckoutLogs = async (query = {}) => {
+exports.getAllInventoryActivityLogs = async (query = {}) => {
   const filter = {};
   if (query.inventory_stock_id) filter.inventory_stock_id = query.inventory_stock_id;
   if (query.staff_id) filter.staff_id = query.staff_id;
@@ -539,18 +568,18 @@ exports.getAllInventoryCheckoutLogs = async (query = {}) => {
     if (query.to) filter.created_at.$lte = new Date(query.to);
   }
 
-  return InventoryCheckoutLog.find(filter).sort({ created_at: -1 });
+  return InventoryActivityLog.find(filter).sort({ created_at: -1 });
 };
 
-exports.getInventoryCheckoutLogById = async (id) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.getInventoryActivityLogById = async (id) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
   return log;
 };
 
-exports.updateInventoryCheckoutLog = async (id, data, actor = null) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.updateInventoryActivityLog = async (id, data, actor = null) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
 
   const nextInventoryStockId = data.inventory_stock_id !== undefined ? data.inventory_stock_id : log.inventory_stock_id;
   const nextStaffId = data.staff_id !== undefined ? data.staff_id : log.staff_id;
@@ -634,9 +663,9 @@ exports.updateInventoryCheckoutLog = async (id, data, actor = null) => {
   }
 };
 
-exports.deleteInventoryCheckoutLog = async (id) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.deleteInventoryActivityLog = async (id) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
 
   const delta = getStockDelta(log.action_type, log.quantity);
   const session = await mongoose.startSession();
@@ -645,10 +674,10 @@ exports.deleteInventoryCheckoutLog = async (id) => {
     session.startTransaction();
 
     await applyStockDelta(log.inventory_stock_id, -delta, session);
-    await InventoryCheckoutLog.deleteOne({ id }).session(session);
+    await InventoryActivityLog.deleteOne({ id }).session(session);
 
     await session.commitTransaction();
-    return { message: "Inventory checkout log deleted successfully" };
+    return { message: "inventory activity log deleted successfully" };
   } catch (error) {
     await session.abortTransaction();
     throw error;
@@ -679,7 +708,7 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   if (!staff) throw createError("Staff user not found", 404);
   if (!staff.isActive) throw createError("Staff user is inactive", 403);
 
-  return InventoryCheckoutLog.create({
+  return InventoryActivityLog.create({
     inventory_stock_id,
     staff_id: resolvedParticipants.staff_id,
     actor_id: resolvedParticipants.actor_id,
@@ -691,7 +720,7 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   });
 };
 
-exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = {}) => {
+exports.getCleanerDailyActivityLogs = async (cleanerId, actor = null, options = {}) => {
   const normalizedCleanerId = normalizeCleanerId(cleanerId);
   if (!normalizedCleanerId) {
     throw createError("cleaner_id is required", 400);
@@ -710,11 +739,15 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
 
   const { dayStart, dayEnd } = buildDayRange(options.date);
 
-  const logs = await InventoryCheckoutLog.find({
+  const logFilter = {
     staff_id: normalizedCleanerId,
-    action_type: "CHECKOUT",
     created_at: { $gte: dayStart, $lte: dayEnd },
-  })
+  };
+  if (options.action_type) {
+    logFilter.action_type = normalizeActionType(options.action_type);
+  }
+
+  const logs = await InventoryActivityLog.find(logFilter)
     .sort({ created_at: -1 })
     .lean();
 
@@ -724,7 +757,7 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
       date: dayStart.toISOString().slice(0, 10),
       day_start: dayStart,
       day_end: dayEnd,
-      total_checkout_count: 0,
+      total_log_count: 0,
       total_quantity: 0,
       logs: [],
     };
@@ -771,12 +804,17 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
       summaryByItem.set(itemId, {
         item_id: itemId,
         item_name: log.item_name,
-        total_quantity: 0,
+        checkout_quantity: 0,
+        return_quantity: 0,
+        waste_quantity: 0,
         log_count: 0,
       });
     }
     const entry = summaryByItem.get(itemId);
-    entry.total_quantity += Number(log.quantity || 0);
+    const qty = Number(log.quantity || 0);
+    if (log.action_type === "CHECKOUT") entry.checkout_quantity += qty;
+    else if (log.action_type === "RETURN") entry.return_quantity += qty;
+    else if (log.action_type === "WASTE") entry.waste_quantity += qty;
     entry.log_count += 1;
   }
 
@@ -785,7 +823,7 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
     date: dayStart.toISOString().slice(0, 10),
     day_start: dayStart,
     day_end: dayEnd,
-    total_checkout_count: enrichedLogs.length,
+    total_log_count: enrichedLogs.length,
     total_quantity: totalQuantity,
     summary_by_item: [...summaryByItem.values()],
     logs: enrichedLogs,
