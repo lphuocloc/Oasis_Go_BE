@@ -451,6 +451,40 @@ class WalletService {
         }
     }
 
+    emitWithdrawRequestSocketEventToUser({ userId, withdrawalRequest }) {
+        try {
+            const normalizedUserId = String(userId || "").trim();
+            if (!normalizedUserId || !withdrawalRequest?.id) {
+                return;
+            }
+
+            const socketServer = require("../socket/socketServer");
+            if (!socketServer || typeof socketServer.emitUserNotificationEvent !== "function") {
+                return;
+            }
+
+            socketServer.emitUserNotificationEvent({
+                user_id: normalizedUserId,
+                notification: {
+                    title: "Yêu cầu rút tiền đã được tạo!",
+                    message: `Yêu cầu rút tiền ${withdrawalRequest.id} đang chờ xử lý.`,
+                    type: "PAYMENT",
+                    event_code: "WITHDRAWAL_REQUEST_CREATED",
+                    data: {
+                        withdrawal_request_id: String(withdrawalRequest.id),
+                        amount: String(withdrawalRequest.amount || 0),
+                        status: String(withdrawalRequest.status || "PENDING"),
+                        requested_at: withdrawalRequest.requested_at
+                            ? new Date(withdrawalRequest.requested_at).toISOString()
+                            : new Date().toISOString(),
+                    },
+                },
+            });
+        } catch (error) {
+            console.error("emitWithdrawRequestSocketEventToUser Error:", error);
+        }
+    }
+
     async createWithdrawalRequest(userId, { amount, pin, note }) {
         if (!pin) {
             const error = new Error("pin is required");
@@ -548,6 +582,11 @@ class WalletService {
             withdrawalRequest: createdRequest,
         });
 
+        this.emitWithdrawRequestSocketEventToUser({
+            userId,
+            withdrawalRequest: createdRequest,
+        });
+
         return {
             request: this.toWithdrawalRequestResponse(createdRequest),
             wallet: this.toWalletResponse(wallet),
@@ -596,7 +635,20 @@ class WalletService {
         const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20, 1), 100);
         const skip = (page - 1) * limit;
 
-        const filter = { status: "PENDING" };
+        const filter = {};
+
+        const normalizedStatus = String(query.status || "ALL").trim().toUpperCase();
+        const allowedStatuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED", "ALL"];
+        if (!allowedStatuses.includes(normalizedStatus)) {
+            const error = new Error("Invalid status. Allowed values: PENDING, APPROVED, REJECTED, CANCELLED, ALL");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (normalizedStatus !== "ALL") {
+            filter.status = normalizedStatus;
+        }
+
         if (query.user_id) {
             filter.user_id = String(query.user_id).trim();
         }
@@ -610,8 +662,31 @@ class WalletService {
             WithdrawalRequest.countDocuments(filter),
         ]);
 
+        const requesterIds = [...new Set(
+            rows
+                .map((row) => String(row.user_id || "").trim())
+                .filter(Boolean),
+        )];
+
+        let requesterNameMap = new Map();
+        if (requesterIds.length) {
+            const requesters = await User.find({ _id: { $in: requesterIds } })
+                .select("_id name")
+                .lean();
+
+            requesterNameMap = new Map(
+                requesters.map((requester) => [
+                    String(requester._id),
+                    String(requester.name || "").trim() || null,
+                ]),
+            );
+        }
+
         return {
-            data: rows.map((row) => this.toWithdrawalRequestResponse(row)),
+            data: rows.map((row) => ({
+                ...this.toWithdrawalRequestResponse(row),
+                requester_name: requesterNameMap.get(String(row.user_id)) || null,
+            })),
             pagination: {
                 page,
                 limit,

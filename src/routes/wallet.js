@@ -408,13 +408,35 @@ router.post("/withdrawals/:requestId/cancel", walletController.cancelMyWithdrawa
  * @swagger
  * /api/wallets/withdrawals/pending:
  *   get:
- *     summary: Get pending withdrawal requests (admin only)
+ *     summary: Get withdrawal requests for admin (default ALL)
  *     tags: [Wallet]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [PENDING, APPROVED, REJECTED, CANCELLED, ALL]
+ *         description: Filter by withdrawal status, default is ALL
+ *       - in: query
+ *         name: user_id
+ *         schema:
+ *           type: string
+ *         description: Filter by requester user id
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           default: 20
  *     responses:
  *       200:
- *         description: Pending withdrawal requests fetched successfully
+ *         description: Withdrawal requests fetched successfully
  *       403:
  *         description: Forbidden
  */
