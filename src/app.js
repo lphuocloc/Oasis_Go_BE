@@ -1,4 +1,4 @@
-require("dotenv").config();
+﻿require("dotenv").config();
 
 // Ensure server-side Date operations run in UTC unless explicitly overridden.
 process.env.TZ = process.env.TZ || "Etc/UTC";
@@ -28,35 +28,53 @@ bookingService.startAutoActivateCheckinJob(bookingAutoActivateJobIntervalMinutes
 const cleaningTaskService = require("./services/cleaningTaskService");
 const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
 const debtService = require("./services/debtService");
-if (String(process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false").toLowerCase() === "true") {
+if (
+  String(
+    process.env.CLEANING_TASK_BACKFILL_JOB_ENABLED || "false",
+  ).toLowerCase() === "true"
+) {
   cleaningTaskService.startBackfillJob(
     Number(process.env.CLEANING_TASK_BACKFILL_JOB_INTERVAL_MINUTES || 60),
     {
       cleaner_access_only:
-        String(process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true").toLowerCase() === "true",
+        String(
+          process.env.CLEANING_TASK_BACKFILL_CLEANER_ACCESS_ONLY || "true",
+        ).toLowerCase() === "true",
       limit: Number(process.env.CLEANING_TASK_BACKFILL_LIMIT || 200),
-      dry_run: String(process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false").toLowerCase() === "true",
-    }
+      dry_run:
+        String(
+          process.env.CLEANING_TASK_BACKFILL_DRY_RUN || "false",
+        ).toLowerCase() === "true",
+    },
   );
 }
 
-if (String(process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(
+    process.env.CLEANING_TASK_SLA_REMINDER_JOB_ENABLED || "true",
+  ).toLowerCase() === "true"
+) {
   cleaningTaskService.startSlaReminderJob(
     Number(process.env.CLEANING_TASK_SLA_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15)
+    Number(process.env.CLEANING_TASK_SLA_REMINDER_LEAD_MINUTES || 15),
   );
 }
 
-if (String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() ===
+  "true"
+) {
   staffShiftAssignmentService.startShiftReminderJob(
     Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30)
+    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30),
   );
 }
 
-if (String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true") {
+if (
+  String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true"
+) {
   debtService.startAgingDebtJob(
-    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24)
+    Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24),
   );
 }
 
@@ -83,7 +101,7 @@ const itemRouter = require("./routes/item");
 const warehouseRouter = require("./routes/warehouse");
 const locationWarehouseRouter = require("./routes/locationWarehouse");
 const inventoryStockRouter = require("./routes/inventoryStock");
-const inventoryCheckoutLogRouter = require("./routes/inventoryCheckoutLog");
+const inventoryActivityLogRouter = require("./routes/inventoryActivityLog");
 const cleaningTaskRouter = require("./routes/cleaningTask");
 const cleaningPhotoRouter = require("./routes/cleaningPhoto");
 const maintenanceTaskRouter = require("./routes/maintenanceTask");
@@ -106,8 +124,37 @@ const bookingVoucherRouter = require("./routes/bookingVoucher");
 const pricingRuleRouter = require("./routes/pricingRule");
 const app = express();
 
+const parseAllowedOrigins = (origins = "") =>
+  origins
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS || "");
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Native mobile/curl requests may not include Origin.
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
 // Middlewares
-app.use(cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(logger("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -135,7 +182,7 @@ app.use("/api/items", itemRouter);
 app.use("/api/warehouses", warehouseRouter);
 app.use("/api/location-warehouses", locationWarehouseRouter);
 app.use("/api/inventory-stocks", inventoryStockRouter);
-app.use("/api/inventory-checkout-logs", inventoryCheckoutLogRouter);
+app.use("/api/inventory-activity-logs", inventoryActivityLogRouter);
 app.use("/api/cleaning-tasks", cleaningTaskRouter);
 app.use("/api/cleaning-photos", cleaningPhotoRouter);
 app.use("/api/maintenance-tasks", maintenanceTaskRouter);

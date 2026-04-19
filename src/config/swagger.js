@@ -1,6 +1,32 @@
 const swaggerJsdoc = require('swagger-jsdoc');
 const path = require('path');
 
+const getSwaggerServers = () => {
+    const servers = [
+        {
+            url: 'http://localhost:3000',
+            description: 'Development server (Local)'
+        }
+    ];
+
+    const renderUrl = process.env.RENDER_EXTERNAL_URL?.trim();
+    const apiUrl = process.env.API_URL?.trim();
+    const ngrokUrl = process.env.NGROK_URL?.trim();
+    const seen = new Set(servers.map((server) => server.url));
+
+    const addServer = (url, description) => {
+        if (!url || seen.has(url)) return;
+        servers.push({ url, description });
+        seen.add(url);
+    };
+
+    addServer(renderUrl, 'Render deployment');
+    addServer(apiUrl, 'Production server');
+    addServer(ngrokUrl, 'Development server (ngrok - Public)');
+
+    return servers;
+};
+
 const options = {
     definition: {
         openapi: '3.0.0',
@@ -13,20 +39,7 @@ const options = {
                 email: 'support@oasisgo.com'
             }
         },
-        servers: [
-            {
-                url: 'http://localhost:3000',
-                description: 'Development server (Local)'
-            },
-            {
-                url: 'https://incongruous-unexpectedly-nia.ngrok-free.dev',
-                description: 'Development server (ngrok - Public)'
-            },
-            {
-                url: 'https://api.oasisgo.com',
-                description: 'Production server'
-            }
-        ],
+        servers: getSwaggerServers(),
         tags: [
             {
                 name: 'Authentication',

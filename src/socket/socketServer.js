@@ -19,13 +19,15 @@ const getCleanerRoom = (userId) => `cleaner:${userId}`;
 const getUserRoom = (userId) => `user:${userId}`;
 
 const normalizeCorsOrigins = () => {
-    const envOrigins = process.env.SOCKET_CORS_ORIGIN;
+    const envOrigins = process.env.SOCKET_CORS_ORIGIN || process.env.ALLOWED_ORIGINS;
     if (!envOrigins) return true;
 
-    return envOrigins
+    const normalizedOrigins = envOrigins
         .split(",")
         .map((origin) => origin.trim())
         .filter(Boolean);
+
+    return normalizedOrigins.length > 0 ? normalizedOrigins : true;
 };
 
 const extractTokenFromHandshake = (socket) => {

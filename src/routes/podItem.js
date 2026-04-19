@@ -2,6 +2,7 @@ const express = require("express");
 const router = express.Router();
 const podItemController = require("../controllers/podItemController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { loadManagerScope, requireManagerClusterAccess } = require("../middlewares/managerScopeMiddleware");
 
 /**
  * @swagger
@@ -57,6 +58,34 @@ const { protect, authorize } = require("../middlewares/authMiddleware");
  *           type: number
  *           minimum: 0
  *           example: 15
+ *     ClusterPodItemInput:
+ *       type: object
+ *       required:
+ *         - cluster_id
+ *         - items
+ *       properties:
+ *         cluster_id:
+ *           type: string
+ *           example: cluster_001
+ *         items:
+ *           type: array
+ *           minItems: 1
+ *           items:
+ *             type: object
+ *             required:
+ *               - item_id
+ *             properties:
+ *               item_id:
+ *                 type: string
+ *                 example: item_001
+ *               expected_quantity:
+ *                 type: number
+ *                 minimum: 0
+ *                 example: 10
+ *               current_quantity:
+ *                 type: number
+ *                 minimum: 0
+ *                 example: 10
  */
 
 /**
@@ -97,6 +126,41 @@ router
   .route("/")
   .get(podItemController.getAllPodItems)
   .post(protect, authorize("admin", "manager"), podItemController.createPodItem);
+
+/**
+ * @swagger
+ * /api/pod-items/cluster/bulk:
+ *   post:
+ *     summary: Assign selected items to all pods in a pod cluster
+ *     tags: [Pod Items]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             $ref: '#/components/schemas/ClusterPodItemInput'
+ *     responses:
+ *       201:
+ *         description: Pod items assigned for cluster pods successfully
+ *       400:
+ *         description: Invalid payload
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Cluster, pod, or item not found
+ */
+router.post(
+  "/cluster/bulk",
+  protect,
+  authorize("admin", "manager"),
+  loadManagerScope,
+  requireManagerClusterAccess({ source: "body", key: "cluster_id" }),
+  podItemController.createPodItemsForCluster
+);
 
 /**
  * @swagger

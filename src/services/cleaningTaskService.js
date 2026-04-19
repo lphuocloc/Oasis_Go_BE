@@ -31,7 +31,6 @@ const readEnvMinutes = (key, fallback, min = 0) => {
 
 const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
-  "NOTIFIED",
   "ACCEPTED",
   "IN_PROGRESS",
   "DONE",
@@ -40,8 +39,8 @@ const CLEANING_TASK_STATUSES = [
 ];
 
 const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
-const ACTIVE_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
-const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
+const ACTIVE_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"];
+const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const REFUND_TRIGGER_TERMINAL_STATUSES = ["DONE", "CANCELLED", "MISSED"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
@@ -302,8 +301,8 @@ const tryAutoRefundDepositAfterCleaningDone = async ({ bookingId }) => {
 
     if (refundNotificationPayload && refundNotificationPayload.user_id) {
       await notificationService.sendToUser(refundNotificationPayload.user_id, {
-        title: "Hoan tien coc thanh cong",
-        message: `He thong da hoan ${Number(refundNotificationPayload.deposit_amount || 0).toLocaleString("vi-VN")} VND tien coc vao vi cua ban.`,
+        title: "Hoàn tiền cọc thành công",
+        message: `Hệ thống đã hoàn ${Number(refundNotificationPayload.deposit_amount || 0).toLocaleString("vi-VN")} VND tiền cọc vào ví của bạn.`,
         type: "PAYMENT",
         event_code: "PAYMENT_DEPOSIT_REFUND_SUCCESS",
         dedupe_key: `PAYMENT_DEPOSIT_REFUND_SUCCESS:${refundNotificationPayload.order_id}:${refundNotificationPayload.refunded_transaction_id || "NO_TX"}`,
@@ -530,10 +529,6 @@ const applyStatusAuditFields = (taskPayload, previousStatus = null) => {
     taskPayload.assigned_at = now;
   }
 
-  if (nextStatus === "NOTIFIED" && !taskPayload.notified_at) {
-    taskPayload.notified_at = now;
-  }
-
   if (nextStatus === "ACCEPTED" && !taskPayload.accepted_at) {
     taskPayload.accepted_at = now;
   }
@@ -571,10 +566,10 @@ const applyDueRangeFilter = (filter, query = {}) => {
 };
 
 const formatDateTimeVi = (value) => {
-  if (!value) return "Khong xac dinh";
+  if (!value) return "Không xác định";
 
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Khong xac dinh";
+  if (Number.isNaN(date.getTime())) return "Không xác định";
 
   const formatOptions = {
     hour12: false,
@@ -634,8 +629,8 @@ const notifyCleanerTaskAssigned = async (task, options = {}) => {
   const dedupeSuffix = options.dedupeSuffix ? `:${String(options.dedupeSuffix)}` : "";
 
   await notificationService.sendToUser(cleanerUserId, {
-    title: `Nhiem vu moi: Ve sinh Pod ${podCode}`,
-    message: `Nhiem vu moi: Ve sinh Pod ${podCode} tai ${locationName}. Han chot: ${dueAtText}.`,
+    title: `Nhiệm vụ mới: Vệ sinh Pod ${podCode}`,
+    message: `Nhiệm vụ mới: Vệ sinh Pod ${podCode} tại ${locationName}. Hạn chót: ${dueAtText}.`,
     type: "CLEANING",
     event_code: "CLEANING_TASK_ASSIGNED",
     dedupe_key: `CLEANING_TASK_ASSIGNED:${String(task.id)}:${cleanerUserId}${dedupeSuffix}`,
@@ -660,8 +655,8 @@ const notifyCleanerTaskAssigned = async (task, options = {}) => {
         pod_code: podCode,
         location_name: locationName,
         due_at: task.due_at || null,
-        title: `Nhiem vu moi: Ve sinh Pod ${podCode}`,
-        message: `Nhiem vu moi: Ve sinh Pod ${podCode} tai ${locationName}. Han chot: ${dueAtText}.`,
+        title: `Nhiệm vụ mới: Vệ sinh Pod ${podCode}`,
+        message: `Nhiệm vụ mới: Vệ sinh Pod ${podCode} tại ${locationName}. Hạn chót: ${dueAtText}.`,
       },
     },
   });
@@ -893,24 +888,13 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
 };
 
 const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
-  const normalizedTrigger = String(trigger || "").toUpperCase();
-  const bookingStatus = String(bookingLike?.status || "").toUpperCase();
-
-  if (
-    normalizedTrigger === "SET_CLEANER_ACCESS_TRUE" ||
-    normalizedTrigger === "BOOKING_UPDATED_CLEANER_ACCESS_TRUE" ||
-    bookingStatus === "IN_USE"
-  ) {
-    return "NOTIFIED";
-  }
-
   return "ASSIGNED";
 };
 
 const getCleaningTaskActionLabel = (status) => {
   const normalizedStatus = String(status || "").toUpperCase();
 
-  if (normalizedStatus === "ASSIGNED" || normalizedStatus === "NOTIFIED") {
+  if (normalizedStatus === "ASSIGNED") {
     return "Nhận nhiệm vụ dọn dẹp";
   }
 
@@ -929,7 +913,7 @@ const getCleaningTaskActionLabel = (status) => {
   return null;
 };
 
-const CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+const CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"];
 
 const cancelOpenTasksForNoShowBooking = async (bookingId) => {
   if (!bookingId) return 0;
@@ -974,8 +958,8 @@ const cancelOpenTasksForNoShowBooking = async (bookingId) => {
     const { podCode } = await resolvePodContext(task.pod_id);
 
     await notificationService.sendToUser(cleanerUserId, {
-      title: `Nhiem vu da huy: Pod ${podCode}`,
-      message: `Nhiem vu ve sinh Pod ${podCode} da duoc huy vi booking NO_SHOW.`,
+      title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+      message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì khách hàng đã không xuất hiện.`,
       type: "CLEANING",
       event_code: "CLEANING_TASK_CANCELLED_NO_SHOW",
       dedupe_key: `CLEANING_TASK_CANCELLED_NO_SHOW:${String(task.id)}:${cleanerUserId}`,
@@ -998,8 +982,8 @@ const cancelOpenTasksForNoShowBooking = async (bookingId) => {
           pod_id: String(task.pod_id || ""),
           pod_code: podCode,
           cancelled_reason: "BOOKING_NO_SHOW",
-          title: `Nhiem vu da huy: Pod ${podCode}`,
-          message: `Nhiem vu ve sinh Pod ${podCode} da duoc huy vi booking NO_SHOW.`,
+          title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+          message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì khách hàng đã không xuất hiện.`,
         },
       },
     });
@@ -1618,7 +1602,7 @@ exports.createCleaningTask = async (data) => {
   applyStatusAuditFields(payload);
   const createdTask = await CleaningTask.create(payload);
 
-  if (["ASSIGNED", "NOTIFIED"].includes(String(createdTask.status || ""))) {
+  if (String(createdTask.status || "") === "ASSIGNED") {
     await notifyCleanerTaskAssigned(createdTask, {
       dedupeSuffix: "MANUAL_CREATE",
     });
@@ -1639,11 +1623,11 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
 
   const [pods, bookings] = await Promise.all([
     podIds.length > 0
-      ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id").lean()
+      ? Pod.find({ id: { $in: podIds } }).select("id name cluster_id status").lean()
       : Promise.resolve([]),
     bookingIds.length > 0
       ? Booking.find({ id: { $in: bookingIds } })
-        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state")
+        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state status")
         .lean()
       : Promise.resolve([]),
   ]);
@@ -1711,6 +1695,8 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       booking_actual_end_time: booking ? booking.actual_end_time || null : null,
       booking_checked_in_at: booking ? booking.checked_in_at || null : null,
       booking_checkin_state: booking ? booking.checkin_state || null : null,
+      booking_status: booking ? booking.status || null : null,
+      pod_status: pod ? pod.status || null : null,
       actual_start_time: task.start_time || null,
       actual_end_time: task.end_time || null,
       action_label: getCleaningTaskActionLabel(task.status),
@@ -1812,7 +1798,7 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
     throw createError("Cleaning task does not link to any booking", 400, "TASK_BOOKING_LINK_MISSING");
   }
 
-  if (!["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "DONE"].includes(String(task.status || ""))) {
+  if (!["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "DONE"].includes(String(task.status || ""))) {
     throw createError("Cleaning task is not eligible for key retrieval", 400, "TASK_NOT_ELIGIBLE_FOR_KEY");
   }
 
@@ -2056,10 +2042,28 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
 
   await task.save();
 
+  // Sync pod status based on cleaning task status transitions (excluding USER_REQUEST tasks)
+  if (previousStatus !== task.status && task.request_source !== "USER_REQUEST") {
+    try {
+      const podToUpdate = await Pod.findOne({ id: task.pod_id });
+      if (podToUpdate) {
+        if (task.status === "IN_PROGRESS") {
+          podToUpdate.status = "CLEANING";
+          await podToUpdate.save();
+        } else if (task.status === "DONE") {
+          podToUpdate.status = "AVAILABLE";
+          await podToUpdate.save();
+        }
+      }
+    } catch (podUpdateErr) {
+      console.error(`[updateCleaningTask] Failed to sync pod status for pod ${task.pod_id}:`, podUpdateErr.message);
+    }
+  }
+
   const bookingIdForRefund = String(task.booking_id || "").trim() || bookingIdBeforeUpdate;
 
   const statusChangedToDispatchable =
-    previousStatus !== task.status && ["ASSIGNED", "NOTIFIED"].includes(String(task.status || ""));
+    previousStatus !== task.status && String(task.status || "") === "ASSIGNED";
   const cleanerChangedAfterSave = previousCleanerId !== String(task.cleaner_id || "");
 
   if (statusChangedToDispatchable || cleanerChangedAfterSave) {
@@ -2240,8 +2244,8 @@ exports.sendSlaReminderNotifications = async (options = {}) => {
     const dueAtText = formatDateTimeVi(task.due_at);
 
     await notificationService.sendToUser(cleanerUserId, {
-      title: `Canh bao SLA: Pod ${podCode} sap qua han`,
-      message: `Canh bao: Pod ${podCode} sap qua han ve sinh. Han chot: ${dueAtText}. Vui long bat dau ngay!`,
+      title: `Cảnh báo SLA: Pod ${podCode} sắp quá hạn`,
+      message: `Cảnh báo: Pod ${podCode} sắp quá hạn vệ sinh. Hạn chót: ${dueAtText}. Vui lòng bắt đầu ngay!`,
       type: "CLEANING",
       event_code: "CLEANING_TASK_SLA_REMINDER",
       dedupe_key: `CLEANING_TASK_SLA_REMINDER:${String(task.id)}:${cleanerUserId}`,
@@ -2266,8 +2270,8 @@ exports.sendSlaReminderNotifications = async (options = {}) => {
           pod_code: podCode,
           due_at: task.due_at || null,
           lead_minutes: String(leadMinutes),
-          title: `Canh bao SLA: Pod ${podCode} sap qua han`,
-          message: `Canh bao: Pod ${podCode} sap qua han ve sinh. Han chot: ${dueAtText}. Vui long bat dau ngay!`,
+          title: `Cảnh báo SLA: Pod ${podCode} sắp quá hạn`,
+          message: `Cảnh báo: Pod ${podCode} sắp quá hạn vệ sinh. Hạn chót: ${dueAtText}. Vui lòng bắt đầu ngay!`,
         },
       },
     });

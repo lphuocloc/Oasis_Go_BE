@@ -72,9 +72,9 @@ class PodClusterService {
 
     const scopedLocationIds = scope_location_ids
       ? String(scope_location_ids)
-        .split(",")
-        .map((id) => id.trim())
-        .filter(Boolean)
+          .split(",")
+          .map((id) => id.trim())
+          .filter(Boolean)
       : [];
 
     if (scopedLocationIds.length > 0) {
@@ -174,9 +174,9 @@ class PodClusterService {
     const locationRules =
       uniqueLocationIds.length > 0
         ? await PricingRule.find({
-          location_id: { $in: uniqueLocationIds },
-          is_active: true,
-        }).sort({ createdAt: -1 })
+            location_id: { $in: uniqueLocationIds },
+            is_active: true,
+          }).sort({ createdAt: -1 })
         : [];
 
     const locationRuleMap = locationRules.reduce((map, rule) => {
@@ -191,8 +191,9 @@ class PodClusterService {
       const clusterObj = cluster.toObject();
       clusterObj.images = imageMap[cluster.id] || [];
       clusterObj.rating = ratingMap[cluster.id] || DEFAULT_RATING_STATS;
-      const matchedRules = (locationRuleMap[String(cluster.location_id)] || [])
-        .filter((rule) => rule.matchesUtcDate(queriedAt));
+      const matchedRules = (
+        locationRuleMap[String(cluster.location_id)] || []
+      ).filter((rule) => rule.matchesUtcDate(queriedAt));
       clusterObj.pricing_summary = {
         queried_at_utc: queriedAtIso,
         has_location_rule: matchedRules.length > 0,
@@ -493,9 +494,9 @@ class PodClusterService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
@@ -509,9 +510,9 @@ class PodClusterService {
     const a =
       Math.sin(dLat / 2) * Math.sin(dLat / 2) +
       Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
+        Math.cos((lat2 * Math.PI) / 180) *
+        Math.sin(dLon / 2) *
+        Math.sin(dLon / 2);
     const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
     return R * c;
   }
@@ -597,9 +598,9 @@ class PodClusterService {
           let d =
             v.discount_type === "PERCENT"
               ? Math.min(
-                (originalPrice * v.discount_value) / 100,
-                v.max_discount || Infinity,
-              )
+                  (originalPrice * v.discount_value) / 100,
+                  v.max_discount || Infinity,
+                )
               : v.discount_value;
           if (d > bestDiscount) {
             bestDiscount = d;
