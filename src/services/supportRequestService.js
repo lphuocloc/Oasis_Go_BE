@@ -1,6 +1,7 @@
 const Booking = require("../models/Bookings");
 const BookingSlot = require("../models/BookingSlot");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
+const CleaningTask = require("../models/CleaningTask");
 const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
 const Pod = require("../models/Pod");
@@ -14,6 +15,7 @@ const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
+const cleaningTaskService = require("./cleaningTaskService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 const { getSocketServer } = require("../socket/socketServer");
 
@@ -934,6 +936,37 @@ class SupportRequestService {
       currentPod.maintenance_status = String(payload.old_pod_reason || supportRequest.description || "") || null;
     }
     await currentPod.save();
+
+    if (oldPodNextStatus === "NEEDS_CLEANING") {
+      try {
+        const now = new Date();
+        const existingOldPodTask = await CleaningTask.findOne({
+          booking_id: booking.id,
+          pod_id: currentPod.id,
+          status: { $in: ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"] },
+        }).sort({ created_at: -1 });
+
+        if (existingOldPodTask) {
+          existingOldPodTask.estimated_start_time = new Date(now.getTime() + 5 * 60 * 1000);
+          existingOldPodTask.due_at = new Date(now.getTime() + 30 * 60 * 1000);
+          existingOldPodTask.request_source = "ROOM_CHANGE_VACATED";
+          await existingOldPodTask.save();
+        }
+
+        await cleaningTaskService.autoAssignTaskForBooking(
+          {
+            id: booking.id,
+            pod_id: nextPod.id,
+            status: "IN_USE",
+            checkin_state: booking.checkin_state || null,
+            end_time: booking.end_time,
+          },
+          { trigger: "ROOM_CHANGE_AFTER_CHECKOUT" }
+        );
+      } catch (cleaningErr) {
+        console.error(`[executeRoomChange] Failed to auto-assign cleaning task for old pod ${currentPod.id}:`, cleaningErr.message);
+      }
+    }
 
     supportRequest.pod_id = nextPod.id;
     supportRequest.location_id = nextCluster.location_id;
