@@ -48,6 +48,8 @@ const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
 const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
 
 const resolveOrderForTaskBooking = async (bookingId, session = null) => {
   if (!bookingId) return null;
@@ -574,14 +576,24 @@ const formatDateTimeVi = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Khong xac dinh";
 
-  return date.toLocaleString("vi-VN", {
+  const formatOptions = {
     hour12: false,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    timeZone: APP_TIMEZONE,
+  };
+
+  try {
+    return date.toLocaleString(APP_LOCALE, formatOptions);
+  } catch (error) {
+    return date.toLocaleString("vi-VN", {
+      ...formatOptions,
+      timeZone: "UTC",
+    });
+  }
 };
 
 const resolveNotificationUserId = async (identity) => {

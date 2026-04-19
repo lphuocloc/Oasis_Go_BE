@@ -1,5 +1,8 @@
 require("dotenv").config();
 
+// Ensure server-side Date operations run in UTC unless explicitly overridden.
+process.env.TZ = process.env.TZ || "Etc/UTC";
+
 const express = require("express");
 const path = require("path");
 const cookieParser = require("cookie-parser");

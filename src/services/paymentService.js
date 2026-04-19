@@ -692,7 +692,12 @@ class PaymentService {
       throw error;
     }
     const vnp_TxnRef = String(vnpayParams.vnp_TxnRef || "");
-    const originalOrderId = vnp_TxnRef.split("_")[0];
+    const partialRefMarker = "_PARTIAL_";
+    const partialRefIndex = vnp_TxnRef.indexOf(partialRefMarker);
+    const originalOrderId =
+      partialRefIndex > -1
+        ? vnp_TxnRef.slice(0, partialRefIndex)
+        : vnp_TxnRef;
 
     // Extract data
     const orderId = originalOrderId;
