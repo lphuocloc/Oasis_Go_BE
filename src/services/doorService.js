@@ -5,7 +5,58 @@ const OnlineKey = require("../models/OnlineKey");
 const Booking = require("../models/Bookings");
 const { emitDoorUnlockRequest } = require("../socket/socketServer");
 
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
+const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+
 class DoorService {
+  _resolveCleanerKeyWindow(booking, now = new Date()) {
+    const validFrom = booking?.start_time
+      ? new Date(new Date(booking.start_time).getTime() - CHECKIN_EARLY_WINDOW_MS)
+      : now;
+    const validTo = booking?.end_time
+      ? new Date(
+        Math.max(
+          new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
+          now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
+        )
+      )
+      : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000);
+
+    return { validFrom, validTo };
+  }
+
+  async _reconcileCleanerKeyWindow(onlineKey, booking, now = new Date()) {
+    if (!onlineKey || String(onlineKey.key_type || "").toUpperCase() !== "CLEANER") {
+      return onlineKey;
+    }
+
+    const { validFrom, validTo } = this._resolveCleanerKeyWindow(booking, now);
+    const currentValidFrom = new Date(onlineKey.valid_from || validFrom);
+    const currentValidTo = new Date(onlineKey.valid_to || validTo);
+    const nextValidFrom = new Date(Math.min(currentValidFrom.getTime(), validFrom.getTime()));
+    const nextValidTo = new Date(Math.max(currentValidTo.getTime(), validTo.getTime()));
+
+    if (
+      nextValidFrom.getTime() !== currentValidFrom.getTime() ||
+      nextValidTo.getTime() !== currentValidTo.getTime()
+    ) {
+      onlineKey.valid_from = nextValidFrom;
+      onlineKey.valid_to = nextValidTo;
+      await onlineKey.save();
+    }
+
+    return onlineKey;
+  }
+
   async createDoor(data) {
     const { pod_id, lock_status = "LOCKED", door_sensor = "CLOSED" } = data;
 
@@ -83,8 +134,6 @@ class DoorService {
       pod_id,
       key_token,
       is_revoked: false,
-      valid_from: { $lte: now },
-      valid_to: { $gte: now },
     }).sort({ valid_from: -1 });
 
     if (!onlineKey) {
@@ -94,11 +143,19 @@ class DoorService {
     }
 
     const booking = await Booking.findOne({ id: onlineKey.booking_id }).select(
-      "id pod_id checked_in_at status"
+      "id pod_id checked_in_at status start_time end_time"
     );
     if (!booking) {
       const error = new Error("Booking không tìm thấy cho online key này!");
       error.statusCode = 404;
+      throw error;
+    }
+
+    await this._reconcileCleanerKeyWindow(onlineKey, booking, now);
+
+    if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
+      const error = new Error("Online key đã hết hạn hoặc chưa hoạt động!");
+      error.statusCode = 403;
       throw error;
     }
 
