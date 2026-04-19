@@ -20,8 +20,12 @@ const toDateOrNull = (value) => {
 
 const getDefaultTodayRange = () => {
   const now = new Date();
-  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-  const to = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+  const from = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0)
+  );
+  const to = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 23, 59, 59, 999)
+  );
   return { from, to };
 };
 
@@ -221,10 +225,10 @@ exports.getDashboard = async (req, res) => {
       const d = toDateOrNull(dateValue);
       if (!d) return null;
 
-      const yyyy = d.getFullYear();
-      const mm = String(d.getMonth() + 1).padStart(2, "0");
-      const dd = String(d.getDate()).padStart(2, "0");
-      const hh = String(d.getHours()).padStart(2, "0");
+      const yyyy = d.getUTCFullYear();
+      const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+      const dd = String(d.getUTCDate()).padStart(2, "0");
+      const hh = String(d.getUTCHours()).padStart(2, "0");
 
       if (resolvedGroupBy === "month") return `${yyyy}-${mm}`;
       if (resolvedGroupBy === "day") return `${yyyy}-${mm}-${dd}`;
