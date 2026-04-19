@@ -4,6 +4,7 @@ const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const WithdrawalRequest = require("../models/WithdrawalRequest");
 const User = require("../models/User");
+const notificationService = require("./notificationService");
 const { generateOTP, sendOTPEmail } = require("../utils/emailService");
 
 const PIN_REGEX = /^\d{6}$/;
@@ -340,6 +341,150 @@ class WalletService {
         };
     }
 
+    async notifyAdminsOnWithdrawalRequest({ requester, withdrawalRequest }) {
+        try {
+            if (!withdrawalRequest?.id) {
+                console.warn("[WithdrawNotifyAdmin] Skip notify because withdrawalRequest.id is missing");
+                return;
+            }
+
+            const adminUsers = await User.find({ role: "admin", isActive: true })
+                .select("_id")
+                .lean();
+
+            if (!adminUsers.length) {
+                console.info(`[WithdrawNotifyAdmin] No active admin found for request ${withdrawalRequest.id}`);
+                return;
+            }
+
+            console.info(
+                `[WithdrawNotifyAdmin] Preparing notifications for ${adminUsers.length} admin(s), request=${withdrawalRequest.id}, user=${withdrawalRequest.user_id}`,
+            );
+
+            const requesterName = String(requester?.name || "").trim() || "Unknown";
+            const requesterEmail = String(requester?.email || "").trim() || "N/A";
+            const requesterPhone = String(requester?.phone || "").trim() || "N/A";
+            const amount = Number(withdrawalRequest.amount || 0);
+            const amountLabel = amount.toLocaleString("vi-VN");
+
+            const notifyTasks = adminUsers.map((admin) => {
+                const adminId = String(admin._id || "").trim();
+                if (!adminId) {
+                    console.warn(`[WithdrawNotifyAdmin] Skip one admin record without _id for request ${withdrawalRequest.id}`);
+                    return Promise.resolve({
+                        adminId: null,
+                        success: false,
+                        error: "Admin _id is missing",
+                    });
+                }
+
+                return notificationService
+                    .sendToUser(adminId, {
+                        title: "Yêu cầu rút tiền!",
+                        message: `${requesterName} vừa tạo yêu cầu rút tiền ${amountLabel} VND. vui lòng kiểm tra và xử lý!`,
+                        type: "PAYMENT",
+                        event_code: "WITHDRAWAL_REQUEST_CREATED",
+                        dedupe_key: `WITHDRAWAL_REQUEST_CREATED:${withdrawalRequest.id}:ADMIN:${adminId}`,
+                        data: {
+                            withdrawal_request_id: String(withdrawalRequest.id),
+                            requester_user_id: String(withdrawalRequest.user_id || ""),
+                            requester_name: requesterName,
+                            requester_email: requesterEmail,
+                            requester_phone: requesterPhone,
+                            amount: String(withdrawalRequest.amount || 0),
+                            status: String(withdrawalRequest.status || "PENDING"),
+                            requested_at: withdrawalRequest.requested_at
+                                ? new Date(withdrawalRequest.requested_at).toISOString()
+                                : new Date().toISOString(),
+                        },
+                    })
+                    .then((response) => ({
+                        adminId,
+                        success: Boolean(response?.success),
+                        error: response?.error || null,
+                    }))
+                    .catch((sendError) => ({
+                        adminId,
+                        success: false,
+                        error: sendError?.message || String(sendError),
+                    }));
+            });
+
+            const notifyResults = await Promise.allSettled(notifyTasks);
+            const successCount = notifyResults.filter((item) => {
+                if (item.status !== "fulfilled") return false;
+                if (!item.value) return false;
+                return Boolean(item.value.success);
+            }).length;
+            const failedCount = notifyResults.length - successCount;
+
+            const failedDetails = notifyResults
+                .map((item) => {
+                    if (item.status === "rejected") {
+                        return {
+                            adminId: null,
+                            error: item.reason?.message || String(item.reason),
+                        };
+                    }
+
+                    if (!item.value?.success) {
+                        return {
+                            adminId: item.value?.adminId || null,
+                            error: item.value?.error || "Unknown error",
+                        };
+                    }
+
+                    return null;
+                })
+                .filter(Boolean);
+
+            console.info(
+                `[WithdrawNotifyAdmin] Completed request=${withdrawalRequest.id}. success=${successCount}, failed=${failedCount}`,
+            );
+            if (failedDetails.length) {
+                console.warn(
+                    `[WithdrawNotifyAdmin] Failed details request=${withdrawalRequest.id}: ${JSON.stringify(failedDetails)}`,
+                );
+            }
+        } catch (error) {
+            console.error("notifyAdminsOnWithdrawalRequest Error:", error);
+        }
+    }
+
+    emitWithdrawRequestSocketEventToUser({ userId, withdrawalRequest }) {
+        try {
+            const normalizedUserId = String(userId || "").trim();
+            if (!normalizedUserId || !withdrawalRequest?.id) {
+                return;
+            }
+
+            const socketServer = require("../socket/socketServer");
+            if (!socketServer || typeof socketServer.emitUserNotificationEvent !== "function") {
+                return;
+            }
+
+            socketServer.emitUserNotificationEvent({
+                user_id: normalizedUserId,
+                notification: {
+                    title: "Yêu cầu rút tiền đã được tạo!",
+                    message: `Yêu cầu rút tiền ${withdrawalRequest.id} đang chờ xử lý.`,
+                    type: "PAYMENT",
+                    event_code: "WITHDRAWAL_REQUEST_CREATED",
+                    data: {
+                        withdrawal_request_id: String(withdrawalRequest.id),
+                        amount: String(withdrawalRequest.amount || 0),
+                        status: String(withdrawalRequest.status || "PENDING"),
+                        requested_at: withdrawalRequest.requested_at
+                            ? new Date(withdrawalRequest.requested_at).toISOString()
+                            : new Date().toISOString(),
+                    },
+                },
+            });
+        } catch (error) {
+            console.error("emitWithdrawRequestSocketEventToUser Error:", error);
+        }
+    }
+
     async createWithdrawalRequest(userId, { amount, pin, note }) {
         if (!pin) {
             const error = new Error("pin is required");
@@ -353,23 +498,24 @@ class WalletService {
         const session = await mongoose.startSession();
         let createdRequest = null;
         let wallet = null;
+        let requester = null;
 
         try {
             await session.withTransaction(async () => {
-                const user = await User.findById(userId)
-                    .select("bank_name bank_account_number debt_status debt_total_cached")
+                requester = await User.findById(userId)
+                    .select("name email phone bank_name bank_account_number debt_status debt_total_cached")
                     .session(session);
 
-                if (!user) {
+                if (!requester) {
                     const error = new Error("User not found");
                     error.statusCode = 404;
                     throw error;
                 }
 
-                const bankName = String(user.bank_name || "").trim();
-                const bankAccountNumber = String(user.bank_account_number || "").trim();
-                const debtStatus = String(user.debt_status || "NONE").toUpperCase();
-                const debtAmount = Number(user.debt_total_cached || 0);
+                const bankName = String(requester.bank_name || "").trim();
+                const bankAccountNumber = String(requester.bank_account_number || "").trim();
+                const debtStatus = String(requester.debt_status || "NONE").toUpperCase();
+                const debtAmount = Number(requester.debt_total_cached || 0);
 
                 if (debtStatus === "IN_DEBT" || debtStatus === "BLACKLISTED" || debtAmount > 0) {
                     const error = new Error("Withdrawal is locked while account has outstanding debt");
@@ -427,6 +573,20 @@ class WalletService {
             session.endSession();
         }
 
+        console.info(
+            `[WithdrawRequest] Created request=${createdRequest?.id || "N/A"} for user=${userId}, amount=${createdRequest?.amount || 0}. Triggering admin notifications...`,
+        );
+
+        await this.notifyAdminsOnWithdrawalRequest({
+            requester,
+            withdrawalRequest: createdRequest,
+        });
+
+        this.emitWithdrawRequestSocketEventToUser({
+            userId,
+            withdrawalRequest: createdRequest,
+        });
+
         return {
             request: this.toWithdrawalRequestResponse(createdRequest),
             wallet: this.toWalletResponse(wallet),
@@ -475,7 +635,20 @@ class WalletService {
         const limit = Math.min(Math.max(parseInt(query.limit, 10) || 20, 1), 100);
         const skip = (page - 1) * limit;
 
-        const filter = { status: "PENDING" };
+        const filter = {};
+
+        const normalizedStatus = String(query.status || "ALL").trim().toUpperCase();
+        const allowedStatuses = ["PENDING", "APPROVED", "REJECTED", "CANCELLED", "ALL"];
+        if (!allowedStatuses.includes(normalizedStatus)) {
+            const error = new Error("Invalid status. Allowed values: PENDING, APPROVED, REJECTED, CANCELLED, ALL");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (normalizedStatus !== "ALL") {
+            filter.status = normalizedStatus;
+        }
+
         if (query.user_id) {
             filter.user_id = String(query.user_id).trim();
         }
@@ -489,8 +662,31 @@ class WalletService {
             WithdrawalRequest.countDocuments(filter),
         ]);
 
+        const requesterIds = [...new Set(
+            rows
+                .map((row) => String(row.user_id || "").trim())
+                .filter(Boolean),
+        )];
+
+        let requesterNameMap = new Map();
+        if (requesterIds.length) {
+            const requesters = await User.find({ _id: { $in: requesterIds } })
+                .select("_id name")
+                .lean();
+
+            requesterNameMap = new Map(
+                requesters.map((requester) => [
+                    String(requester._id),
+                    String(requester.name || "").trim() || null,
+                ]),
+            );
+        }
+
         return {
-            data: rows.map((row) => this.toWithdrawalRequestResponse(row)),
+            data: rows.map((row) => ({
+                ...this.toWithdrawalRequestResponse(row),
+                requester_name: requesterNameMap.get(String(row.user_id)) || null,
+            })),
             pagination: {
                 page,
                 limit,

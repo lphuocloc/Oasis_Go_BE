@@ -2,6 +2,7 @@ const { Expo } = require("expo-server-sdk");
 const expo = new Expo();
 const User = require("../models/User");
 const Notification = require("../models/Notification");
+const { sendPushNotification } = require("../config/firebase");
 
 const EXPO_NOTIFICATION_CHANNEL_ID = String(
   process.env.EXPO_NOTIFICATION_CHANNEL_ID || "default",
@@ -37,19 +38,43 @@ class NotificationService {
   }
 
   async sendPush(targetToken, title, body, data = {}) {
-    if (!Expo.isExpoPushToken(targetToken)) {
-      console.error("Token không hợp lệ:", targetToken);
+    const normalizedToken = String(targetToken || "").trim();
+    if (!normalizedToken) {
+      console.error("Push token is empty");
       return null;
+    }
+
+    const sanitizedData = this._sanitizePushData(data);
+
+    if (!Expo.isExpoPushToken(normalizedToken)) {
+      const fcmResult = await sendPushNotification(normalizedToken, {
+        title,
+        body,
+        data: sanitizedData,
+      });
+
+      if (!fcmResult?.success) {
+        console.error("FCM Service Error:", fcmResult?.error || "Unknown error");
+        return null;
+      }
+
+      return [
+        {
+          status: "ok",
+          id: fcmResult.response,
+          provider: "fcm",
+        },
+      ];
     }
 
     const messages = [
       {
-        to: targetToken,
+        to: normalizedToken,
         sound: "default",
         title,
         body,
-        data: this._sanitizePushData(data),
-        channelId: "queanh_test_noti",
+        data: sanitizedData,
+        channelId: EXPO_NOTIFICATION_CHANNEL_ID,
         priority: "high",
       },
     ];

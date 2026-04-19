@@ -723,6 +723,15 @@ class PaymentService {
     }
 
     if (!transaction) {
+      // Idempotent fallback: callback may arrive again after transaction was already marked SUCCESS/FAILED.
+      transaction = await Transaction.findOne({
+        order_id: originalOrderId,
+        type: "CHARGE",
+        method: "VNPAY",
+      }).sort({ created_at: -1 });
+    }
+
+    if (!transaction) {
       const error = new Error("Transaction not found");
       error.statusCode = 404;
       throw error;
@@ -758,8 +767,10 @@ class PaymentService {
     }
 
     transaction.status = newStatus;
-    transaction.provider_reference =
-      transactionNo || transaction.provider_reference;
+    // Keep provider_reference aligned with vnp_TxnRef for stable lookup across repeated callbacks.
+    if (!transaction.provider_reference) {
+      transaction.provider_reference = vnp_TxnRef || transaction.provider_reference;
+    }
     await transaction.save();
 
     if (newStatus === "SUCCESS") {

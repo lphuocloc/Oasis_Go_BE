@@ -6,6 +6,8 @@ yarn-error.log*
 
 # Environment variables
 .env
+.env.*
+.env.example
 .env.local
 .env.*.local
 
@@ -48,7 +50,7 @@ Thumbs.db
 # Firebase 
 .firebase-service-account.json
 firebase-service-account.json
-
+oasisgo-auth-dev-firebase-adminsdk-fbsvc-3e78aff92e.json
 
 # Markdown docs (local only)
 *.md
