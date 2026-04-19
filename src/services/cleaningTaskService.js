@@ -21,6 +21,14 @@ const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
 const { randomInt } = require("crypto");
 
+const readEnvMinutes = (key, fallback, min = 0) => {
+  const raw = Number(process.env[key]);
+  if (Number.isFinite(raw) && raw >= min) {
+    return raw;
+  }
+  return fallback;
+};
+
 const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
   "ACCEPTED",
@@ -37,6 +45,10 @@ const REFUND_TRIGGER_TERMINAL_STATUSES = ["DONE", "CANCELLED", "MISSED"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
 const AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES = 30;
 const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
+const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
+const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
+const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
 
 const resolveOrderForTaskBooking = async (bookingId, session = null) => {
   if (!bookingId) return null;
@@ -559,14 +571,24 @@ const formatDateTimeVi = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "Không xác định";
 
-  return date.toLocaleString("vi-VN", {
+  const formatOptions = {
     hour12: false,
     day: "2-digit",
     month: "2-digit",
     year: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  });
+    timeZone: APP_TIMEZONE,
+  };
+
+  try {
+    return date.toLocaleString(APP_LOCALE, formatOptions);
+  } catch (error) {
+    return date.toLocaleString("vi-VN", {
+      ...formatOptions,
+      timeZone: "UTC",
+    });
+  }
 };
 
 const resolveNotificationUserId = async (identity) => {
@@ -1887,6 +1909,18 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
   }
 
   const actorCleanerId = String(task.cleaner_id);
+  const cleanerKeyValidFrom = booking.start_time
+    ? new Date(new Date(booking.start_time).getTime() - CHECKIN_EARLY_WINDOW_MS)
+    : now;
+  const cleanerKeyValidTo = booking.end_time
+    ? new Date(
+      Math.max(
+        new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
+        now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
+      )
+    )
+    : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000);
+
   await OnlineKey.updateMany(
     {
       booking_id: String(booking.id),
@@ -1913,17 +1947,32 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
       user_id: actorCleanerId,
       key_type: "CLEANER",
       key_token: await generateUniqueOnlineKeyToken(),
-      valid_from: booking.start_time ? new Date(booking.start_time) : now,
-      valid_to: booking.end_time
-        ? new Date(
-          Math.max(
-            new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
-            now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
-          )
-        )
-        : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000),
+      valid_from: cleanerKeyValidFrom,
+      valid_to: cleanerKeyValidTo,
       is_revoked: false,
     });
+  } else {
+    const nextValidFrom = new Date(
+      Math.min(
+        new Date(cleanerKey.valid_from || cleanerKeyValidFrom).getTime(),
+        cleanerKeyValidFrom.getTime()
+      )
+    );
+    const nextValidTo = new Date(
+      Math.max(
+        new Date(cleanerKey.valid_to || cleanerKeyValidTo).getTime(),
+        cleanerKeyValidTo.getTime()
+      )
+    );
+
+    if (
+      nextValidFrom.getTime() !== new Date(cleanerKey.valid_from).getTime() ||
+      nextValidTo.getTime() !== new Date(cleanerKey.valid_to).getTime()
+    ) {
+      cleanerKey.valid_from = nextValidFrom;
+      cleanerKey.valid_to = nextValidTo;
+      await cleanerKey.save();
+    }
   }
 
   const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;

@@ -456,6 +456,44 @@ class BookingService {
     return "manager";
   }
 
+  _resolveCleanerKeyWindow({ booking, now = new Date() }) {
+    const validFrom = booking?.start_time
+      ? new Date(new Date(booking.start_time).getTime() - CHECKIN_EARLY_WINDOW_MS)
+      : now;
+    const validTo = booking?.end_time
+      ? new Date(
+        Math.max(
+          new Date(booking.end_time).getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000,
+          now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000
+        )
+      )
+      : new Date(now.getTime() + CLEANER_POST_CHECKOUT_WINDOW_MINUTES * 60 * 1000);
+
+    return { validFrom, validTo };
+  }
+
+  async _reconcileCleanerKeyWindow(cleanerKey, booking, now = new Date()) {
+    if (!cleanerKey) return cleanerKey;
+
+    const { validFrom, validTo } = this._resolveCleanerKeyWindow({ booking, now });
+    const currentValidFrom = new Date(cleanerKey.valid_from || validFrom);
+    const currentValidTo = new Date(cleanerKey.valid_to || validTo);
+
+    const nextValidFrom = new Date(Math.min(currentValidFrom.getTime(), validFrom.getTime()));
+    const nextValidTo = new Date(Math.max(currentValidTo.getTime(), validTo.getTime()));
+
+    if (
+      nextValidFrom.getTime() !== currentValidFrom.getTime() ||
+      nextValidTo.getTime() !== currentValidTo.getTime()
+    ) {
+      cleanerKey.valid_from = nextValidFrom;
+      cleanerKey.valid_to = nextValidTo;
+      await cleanerKey.save();
+    }
+
+    return cleanerKey;
+  }
+
   async _attachOnlineKeys(bookings = [], viewerRole = null) {
     if (!Array.isArray(bookings) || bookings.length === 0) {
       return bookings;
@@ -697,7 +735,7 @@ class BookingService {
     }
 
     const booking = await Booking.findOne({ id: bookingId }).select(
-      "id status checkin_state cleaner_access_allowed"
+      "id status checkin_state cleaner_access_allowed start_time end_time"
     );
     if (!booking) {
       const error = new Error("Booking not found");
@@ -731,6 +769,8 @@ class BookingService {
       error.statusCode = 404;
       throw error;
     }
+
+    await this._reconcileCleanerKeyWindow(cleanerKey, booking, new Date());
 
     const keyData = typeof cleanerKey.toObject === "function" ? cleanerKey.toObject() : cleanerKey;
 
@@ -1034,12 +1074,6 @@ class BookingService {
       throw error;
     }
 
-    if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
-      const error = new Error("Cleaner key đã hết hạn hoặc chưa có hiệu lực");
-      error.statusCode = 403;
-      throw error;
-    }
-
     if (String(onlineKey.user_id) !== actorId) {
       const error = new Error("Khóa này không thuộc về người dùng hiện tại.");
       error.statusCode = 403;
@@ -1061,6 +1095,14 @@ class BookingService {
 
     if (!booking.cleaner_access_allowed) {
       const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+      error.statusCode = 403;
+      throw error;
+    }
+
+    await this._reconcileCleanerKeyWindow(onlineKey, booking, now);
+
+    if (onlineKey.valid_from > now || onlineKey.valid_to < now) {
+      const error = new Error("Cleaner key đã hết hạn hoặc chưa có hiệu lực");
       error.statusCode = 403;
       throw error;
     }
