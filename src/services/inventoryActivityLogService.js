@@ -73,10 +73,10 @@ const buildDayRange = (dateValue) => {
   }
 
   const dayStart = new Date(target);
-  dayStart.setHours(0, 0, 0, 0);
+  dayStart.setUTCHours(0, 0, 0, 0);
 
   const dayEnd = new Date(target);
-  dayEnd.setHours(23, 59, 59, 999);
+  dayEnd.setUTCHours(23, 59, 59, 999);
 
   return { dayStart, dayEnd };
 };

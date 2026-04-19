@@ -1243,13 +1243,13 @@ class BookingOrderService {
           },
           applied_voucher: appliedVoucher
             ? {
-                voucher_id: appliedVoucher.id,
-                code: appliedVoucher.code,
-                discount_type: appliedVoucher.discount_type,
-                discount_value: appliedVoucher.discount_value,
-                max_discount: appliedVoucher.max_discount,
-                discount_amount: appliedVoucher.discount_amount,
-              }
+              voucher_id: appliedVoucher.id,
+              code: appliedVoucher.code,
+              discount_type: appliedVoucher.discount_type,
+              discount_value: appliedVoucher.discount_value,
+              max_discount: appliedVoucher.max_discount,
+              discount_amount: appliedVoucher.discount_amount,
+            }
             : null,
         };
       }); // End of withTransaction
@@ -1961,12 +1961,12 @@ class BookingOrderService {
 
         const requestedBookingIds = Array.isArray(options.booking_ids)
           ? [
-              ...new Set(
-                options.booking_ids
-                  .map((id) => String(id).trim())
-                  .filter(Boolean),
-              ),
-            ]
+            ...new Set(
+              options.booking_ids
+                .map((id) => String(id).trim())
+                .filter(Boolean),
+            ),
+          ]
           : [];
 
         let targetBookings = [];
@@ -2294,10 +2294,10 @@ class BookingOrderService {
     const orders =
       orderIds.length > 0
         ? await BookingOrder.find({ id: { $in: orderIds } })
-            .select(
-              "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
-            )
-            .lean()
+          .select(
+            "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
+          )
+          .lean()
         : [];
     const orderMap = orders.reduce((map, order) => {
       map[String(order.id)] = order;
@@ -2804,9 +2804,9 @@ class BookingOrderService {
     try {
       // hôm nay
       const startOfDay = new Date();
-      startOfDay.setHours(0, 0, 0, 0);
+      startOfDay.setUTCHours(0, 0, 0, 0);
       const endOfDay = new Date();
-      endOfDay.setHours(23, 59, 59, 999);
+      endOfDay.setUTCHours(23, 59, 59, 999);
 
       const bookings = await Booking.find({
         user_id: userId,
