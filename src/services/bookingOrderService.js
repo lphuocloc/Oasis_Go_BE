@@ -16,8 +16,10 @@ const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
 const { autoAssignTaskForBooking } = require("./cleaningTaskService");
+const CleaningTask = require("../models/CleaningTask");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
+const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 const depositPolicyService = require("./depositPolicyService");
 const Notification = require("../models/Notification");
 
@@ -38,6 +40,74 @@ const REFUND_CANCEL_WINDOW_HOURS = 48;
 const REFUND_RATE_BEFORE_48H = 1;
 const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
 const CHECKIN_LATE_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_LATE_WINDOW_MINUTES", 15, 0);
+
+/**
+ * Notify the assigned cleaner when a customer checks out of a pod.
+ * Finds the active cleaning task for the booking and sends a push + realtime notification.
+ */
+const notifyCleanerOnCheckout = async (booking, checkoutAt) => {
+  const task = await CleaningTask.findOne({
+    booking_id: String(booking.id),
+    status: { $in: ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"] },
+  }).lean();
+
+  if (!task || !task.cleaner_id) return;
+
+  const [cleanerUser, bookingUser, pod] = await Promise.all([
+    User.findOne({ id: task.cleaner_id }).select("_id name").lean(),
+    User.findOne({ id: booking.user_id }).select("name").lean(),
+    Pod.findOne({ id: booking.pod_id }).select("code name").lean(),
+  ]);
+
+  if (!cleanerUser || !cleanerUser._id) return;
+
+  const cleanerUserId = String(cleanerUser._id);
+  const userName = bookingUser?.name || "Khách hàng";
+  const podName = pod?.name || pod?.code || String(booking.pod_id);
+  const checkoutTimeText = checkoutAt.toLocaleString("vi-VN", {
+    hour12: false,
+    day: "2-digit",
+    month: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  const title = `Khách đã checkout khỏi ${podName}`;
+  const message = `${userName} đã checkout khỏi ${podName} lúc ${checkoutTimeText}. Phòng cần được dọn dẹp.`;
+
+  await notificationService.sendToUser(cleanerUserId, {
+    title,
+    message,
+    type: "CLEANING",
+    event_code: "CUSTOMER_CHECKOUT",
+    dedupe_key: `CUSTOMER_CHECKOUT:${booking.id}:${cleanerUserId}`,
+    data: {
+      type: "CUSTOMER_CHECKOUT",
+      booking_id: String(booking.id),
+      pod_id: String(booking.pod_id),
+      pod_name: podName,
+      cleaning_task_id: String(task._id),
+      checkout_at: checkoutAt.toISOString(),
+    },
+  });
+
+  emitCleanerNotificationEvent({
+    user_id: cleanerUserId,
+    notification: {
+      event: "CUSTOMER_CHECKOUT",
+      payload: {
+        booking_id: String(booking.id),
+        pod_id: String(booking.pod_id),
+        pod_name: podName,
+        cleaning_task_id: String(task._id),
+        checkout_at: checkoutAt.toISOString(),
+        title,
+        message,
+      },
+    },
+  });
+};
 
 class BookingOrderService {
   _roundMoney(value) {
@@ -698,14 +768,14 @@ class BookingOrderService {
 
     const normalizedOrderId = String(orderId || "").trim();
     const cancellationKind =
-      cancellationType === "FULL_CANCEL" ? "toan bo" : "mot phan";
+      cancellationType === "FULL_CANCEL" ? "toàn bộ" : "một phần";
     const bookingCount = Array.isArray(cancelledBookingIds)
       ? cancelledBookingIds.length
       : 0;
 
     await notificationService.sendToUser(normalizedUserId, {
-      title: "Huy dat cho thanh cong",
-      message: `Ban da huy ${cancellationKind} don ${normalizedOrderId} (${bookingCount} pod).`,
+      title: "Hủy đặt chỗ thành công",
+      message: `Bạn đã hủy ${cancellationKind} đơn ${normalizedOrderId} (${bookingCount} pod).`,
       type: "BOOKING",
       event_code: "BOOKING_CANCELLED",
       dedupe_key: `BOOKING_CANCELLED:${normalizedOrderId}:${cancellationType}:${cancelledBookingIds.join(",")}`,
@@ -721,8 +791,8 @@ class BookingOrderService {
     if (Number(refund?.amount || 0) <= 0) return;
 
     await notificationService.sendToUser(normalizedUserId, {
-      title: "Hoan tien thanh cong",
-      message: `He thong da hoan ${Number(refund.amount || 0).toLocaleString("vi-VN")} VND vao vi cua ban.`,
+      title: "Hoàn tiền thành công",
+      message: `Hệ thống đã hoàn ${Number(refund.amount || 0).toLocaleString("vi-VN")} VND vào ví của bạn.`,
       type: "PAYMENT",
       event_code: "PAYMENT_REFUND_SUCCESS",
       dedupe_key: `PAYMENT_REFUND_SUCCESS:${normalizedOrderId}:${refund?.refunded_transaction_id || "NO_TX"}`,
@@ -2606,6 +2676,11 @@ class BookingOrderService {
           },
         },
       );
+
+      // Notify cleaner assigned to this booking about customer checkout
+      notifyCleanerOnCheckout(booking, requestedAt).catch((err) => {
+        console.error(`[checkoutOrder] Failed to notify cleaner for booking ${booking.id}:`, err.message);
+      });
 
       checked_out.push({
         id: booking.id,
