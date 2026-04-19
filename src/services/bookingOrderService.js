@@ -15,7 +15,7 @@ const Transaction = require("../models/Transaction");
 const Wallet = require("../models/Wallet");
 const WalletTransaction = require("../models/WalletTransaction");
 const mongoose = require("mongoose");
-const { autoAssignTaskForBooking } = require("./cleaningTaskService");
+const { autoAssignTaskForBooking, cancelCleaningTasksForCancelledBookings } = require("./cleaningTaskService");
 const CleaningTask = require("../models/CleaningTask");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
@@ -1613,6 +1613,12 @@ class BookingOrderService {
               { $set: { status: "CANCELLED" } },
             );
 
+            // Cancel active cleaning tasks for all cancelled bookings
+            const expiredBookingIds = bookings.map((b) => b.id);
+            cancelCleaningTasksForCancelledBookings(expiredBookingIds).catch((err) => {
+              console.error(`[scheduleOrderExpiration] Failed to cancel cleaning tasks for order ${orderId}:`, err.message);
+            });
+
             // Update order status to CANCEL (expired unpaid order)
             order.status = "CANCEL";
             await order.save();
@@ -2200,6 +2206,13 @@ class BookingOrderService {
         console.error("Cancel notification error:", notifyError);
       }
 
+      // Cancel active cleaning tasks for all cancelled bookings
+      if (Array.isArray(cancellationResult?.cancelled_booking_ids) && cancellationResult.cancelled_booking_ids.length > 0) {
+        cancelCleaningTasksForCancelledBookings(cancellationResult.cancelled_booking_ids).catch((err) => {
+          console.error("[cancelBookingOrder] Failed to cancel cleaning tasks:", err.message);
+        });
+      }
+
       return cancellationResult;
     } catch (error) {
       throw error;
@@ -2751,6 +2764,12 @@ class BookingOrderService {
             { order_id: order.id },
             { $set: { status: "CANCELLED" } },
           );
+
+          // Cancel active cleaning tasks for all cancelled bookings
+          const expiredBookingIds = bookings.map((b) => b.id);
+          cancelCleaningTasksForCancelledBookings(expiredBookingIds).catch((err) => {
+            console.error(`[cleanupExpiredOrders] Failed to cancel cleaning tasks for order ${order.id}:`, err.message);
+          });
 
           // Update order status to CANCEL (expired unpaid order)
           order.status = "CANCEL";
