@@ -340,31 +340,64 @@ class TimeSlotService {
             }).lean();
 
             const now = new Date();
-            const targetDate = new Date(date);
+            const targetDate = new Date(`${date}T00:00:00.000Z`);
+
+            if (Number.isNaN(targetDate.getTime())) {
+                const error = new Error("Invalid date format");
+                error.statusCode = 400;
+                throw error;
+            }
 
             // Check if requested date is strictly in the past (before today)
-            const today = new Date(now);
-            today.setHours(0, 0, 0, 0);
+            const todayUtcMidnight = new Date(Date.UTC(
+                now.getUTCFullYear(),
+                now.getUTCMonth(),
+                now.getUTCDate(),
+                0,
+                0,
+                0,
+                0
+            ));
 
-            const targetDateMidnight = new Date(targetDate);
-            targetDateMidnight.setHours(0, 0, 0, 0);
+            const targetDateMidnight = new Date(Date.UTC(
+                targetDate.getUTCFullYear(),
+                targetDate.getUTCMonth(),
+                targetDate.getUTCDate(),
+                0,
+                0,
+                0,
+                0
+            ));
 
-            if (targetDateMidnight < today) {
+            if (targetDateMidnight < todayUtcMidnight) {
                 const error = new Error("Cannot view slots for past dates");
                 error.statusCode = 400;
                 throw error;
             }
 
-            targetDate.setHours(0, 0, 0, 0);
+            const startOfDay = new Date(Date.UTC(
+                targetDate.getUTCFullYear(),
+                targetDate.getUTCMonth(),
+                targetDate.getUTCDate(),
+                operatingHours.start,
+                0,
+                0,
+                0
+            ));
 
-            const startOfDay = new Date(targetDate);
-            startOfDay.setHours(operatingHours.start, 0, 0, 0);
-
-            const endOfDay = new Date(targetDate);
+            const endOfDay = new Date(Date.UTC(
+                targetDate.getUTCFullYear(),
+                targetDate.getUTCMonth(),
+                targetDate.getUTCDate(),
+                0,
+                0,
+                0,
+                0
+            ));
             if (operatingHours.end === 24) {
-                endOfDay.setHours(23, 59, 59, 999);
+                endOfDay.setUTCHours(23, 59, 59, 999);
             } else {
-                endOfDay.setHours(operatingHours.end, 0, 0, 0);
+                endOfDay.setUTCHours(operatingHours.end, 0, 0, 0);
             }
 
             // Generate all possible slots based on cluster slot duration
@@ -429,7 +462,7 @@ class TimeSlotService {
             });
 
             // Build final result with all slots
-            const isToday = targetDateMidnight.getTime() === today.getTime();
+            const isToday = targetDateMidnight.getTime() === todayUtcMidnight.getTime();
 
             const resultSlots = allSlots.map(slot => {
                 const slotKey = `${slot.start_time.getTime()}-${slot.end_time.getTime()}`;

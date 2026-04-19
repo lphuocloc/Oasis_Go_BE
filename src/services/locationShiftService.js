@@ -105,7 +105,8 @@ class LocationShiftService {
     }
 
     if (filters.target_date) {
-      const date = new Date(filters.target_date);
+      const targetDateText = String(filters.target_date).trim();
+      const date = new Date(`${targetDateText}T00:00:00.000Z`);
       if (Number.isNaN(date.getTime())) {
         const error = new Error("target_date must be a valid date (YYYY-MM-DD)");
         error.statusCode = 400;
@@ -113,10 +114,10 @@ class LocationShiftService {
       }
 
       const startOfDay = new Date(date);
-      startOfDay.setHours(0, 0, 0, 0);
+      startOfDay.setUTCHours(0, 0, 0, 0);
 
       const endOfDay = new Date(date);
-      endOfDay.setHours(23, 59, 59, 999);
+      endOfDay.setUTCHours(23, 59, 59, 999);
 
       assignmentQuery.start_date = { $lte: endOfDay };
       assignmentQuery.end_date = { $gte: startOfDay };
