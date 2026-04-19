@@ -320,6 +320,39 @@ class PodItemService {
 
     return result;
   }
+
+  async getPodItemsByPodId(pod_id) {
+    const pod = await Pod.findOne({ id: pod_id }).select("id name code").lean();
+    if (!pod) {
+      throw createError("Pod not found", 404);
+    }
+
+    const podItems = await PodItem.find({ pod_id }).sort({ updated_at: -1 }).lean();
+
+    const enrichedItems = await Promise.all(
+      podItems.map(async (podItem) => {
+        const item = await Item.findOne({ id: podItem.item_id })
+          .select("id name unit_price")
+          .lean();
+        const statusInfo = calculateStatus(podItem.expected_quantity, podItem.current_quantity);
+
+        return {
+          ...podItem,
+          item_name: item ? item.name : null,
+          item: item || null,
+          ...statusInfo,
+        };
+      })
+    );
+
+    return {
+      pod_id: pod.id,
+      pod_name: pod.name,
+      pod_code: pod.code,
+      count: enrichedItems.length,
+      items: enrichedItems,
+    };
+  }
 }
 
 module.exports = new PodItemService();
