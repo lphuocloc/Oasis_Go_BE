@@ -204,10 +204,16 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *                       location_name:
  *                         type: string
  *                         nullable: true
+ *                       booking_order_id:
+ *                         type: string
+ *                         nullable: true
  *                       booking_guest_id:
  *                         type: string
  *                         nullable: true
  *                       booking_guest_name:
+ *                         type: string
+ *                         nullable: true
+ *                       booking_user_name:
  *                         type: string
  *                         nullable: true
  *                       booking_status:
@@ -424,8 +430,29 @@ router.get("/:id/my-key", protect, authorize("cleaner"), getMyCleanerKeyByTaskId
  *                       type: string
  *                     booking_id:
  *                       type: string
+ *                     booking_order_id:
+ *                       type: string
+ *                       nullable: true
  *                     cleaner_id:
  *                       type: string
+ *                     pod_name:
+ *                       type: string
+ *                       nullable: true
+ *                     pod_cluster_name:
+ *                       type: string
+ *                       nullable: true
+ *                     booking_guest_name:
+ *                       type: string
+ *                       nullable: true
+ *                     booking_user_name:
+ *                       type: string
+ *                       nullable: true
+ *                     booking_status:
+ *                       type: string
+ *                       nullable: true
+ *                     pod_status:
+ *                       type: string
+ *                       nullable: true
  *                     estimated_start_time:
  *                       type: string
  *                       format: date-time
