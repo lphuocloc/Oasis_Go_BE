@@ -22,7 +22,7 @@ const staffShiftSchema = new mongoose.Schema(
 			type: String,
 			required: [true, "Shift name is required"],
 			enum: {
-				values: ["MORNING", "AFTERNOON", "NIGHT"],
+				values: ["CA SÁNG", "CA CHIỀU", "CA TỐI", "CA ĐÊM"],
 				message: "{VALUE} is not a valid shift name",
 			},
 		},

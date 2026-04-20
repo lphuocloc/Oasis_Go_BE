@@ -27,11 +27,21 @@ class StaffShiftService {
 	}
 
 	async createStaffShift(data) {
+		const shiftName = data.shift_name ? String(data.shift_name).toUpperCase() : data.shift_name;
+		
+		let startTime = data.start_time;
+		let endTime = data.end_time;
+
+		if (shiftName === "CA SÁNG") { startTime = "06:00"; endTime = "12:00"; }
+		else if (shiftName === "CA CHIỀU") { startTime = "12:00"; endTime = "18:00"; }
+		else if (shiftName === "CA TỐI") { startTime = "18:00"; endTime = "00:00"; }
+		else if (shiftName === "CA ĐÊM") { startTime = "00:00"; endTime = "06:00"; }
+
 		const payload = {
 			role: data.role ? String(data.role).toUpperCase() : data.role,
-			shift_name: data.shift_name ? String(data.shift_name).toUpperCase() : data.shift_name,
-			start_time: data.start_time,
-			end_time: data.end_time,
+			shift_name: shiftName,
+			start_time: startTime,
+			end_time: endTime,
 			is_active: data.is_active !== undefined ? data.is_active : true,
 		};
 
@@ -55,7 +65,13 @@ class StaffShiftService {
 		}
 
 		if (data.shift_name !== undefined) {
-			shift.shift_name = String(data.shift_name).toUpperCase();
+			const shiftName = String(data.shift_name).toUpperCase();
+			shift.shift_name = shiftName;
+			
+			if (shiftName === "CA SÁNG") { shift.start_time = "06:00"; shift.end_time = "12:00"; }
+			else if (shiftName === "CA CHIỀU") { shift.start_time = "12:00"; shift.end_time = "18:00"; }
+			else if (shiftName === "CA TỐI") { shift.start_time = "18:00"; shift.end_time = "00:00"; }
+			else if (shiftName === "CA ĐÊM") { shift.start_time = "00:00"; shift.end_time = "06:00"; }
 		}
 
 		if (data.start_time !== undefined) {
