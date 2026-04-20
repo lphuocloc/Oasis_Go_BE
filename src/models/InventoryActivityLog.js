@@ -52,7 +52,7 @@ const inventoryActivityLogSchema = new mongoose.Schema(
       type: String,
       required: [true, "Action type is required"],
       enum: {
-        values: ["CHECKOUT", "RETURN", "WASTE", "INITIAL", "ADJUSTMENT"],
+        values: ["CHECKOUT", "RETURN", "CONSUMED", "WASTE", "INITIAL", "ADJUSTMENT"],
         message: "{VALUE} is not a valid action type",
       },
       index: true,
