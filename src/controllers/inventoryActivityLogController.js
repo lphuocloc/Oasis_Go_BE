@@ -60,6 +60,16 @@ exports.getCleanerDailyActivityLogs = async (req, res) => {
   }
 };
 
+exports.getDailyTakenItemsSummary = async (req, res) => {
+  try {
+    const result = await inventoryActivityLogService.getDailyTakenItemsSummary(req.user, req.query);
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error fetching daily taken-item summary" });
+  }
+};
+
 exports.getAllInventoryActivityLogs = async (req, res) => {
   try {
     const logs = await inventoryActivityLogService.getAllInventoryActivityLogs(req.query);

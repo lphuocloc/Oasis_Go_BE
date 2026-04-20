@@ -65,3 +65,13 @@ exports.deletePodItem = async (req, res) => {
     res.status(statusCode).json({ success: false, message: error.message || "Error deleting pod item" });
   }
 };
+
+exports.getPodItemsByPodId = async (req, res) => {
+  try {
+    const result = await podItemService.getPodItemsByPodId(req.params.pod_id);
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({ success: false, message: error.message || "Error fetching pod items" });
+  }
+};

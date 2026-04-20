@@ -6,6 +6,7 @@ const {
   createInventoryActivityLogsBulk,
   getShiftInventoryEstimation,
   getCleanerDailyActivityLogs,
+  getDailyTakenItemsSummary,
   getAllInventoryActivityLogs,
   getInventoryActivityLogById,
   updateInventoryActivityLog,
@@ -200,7 +201,6 @@ router.get("/", getAllInventoryActivityLogs);
  *       404:
  *         description: inventory activity log not found
  */
-router.get("/:id", getInventoryActivityLogById);
 
 /**
  * @swagger
@@ -258,12 +258,13 @@ router.post("/bulk", protect, authorize("admin", "manager", "cleaner"), createIn
  *           type: string
  *       - in: query
  *         name: date
- *         description: Date to estimate (ISO date, default is server local today)
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
  *         schema:
  *           type: string
  *           format: date
  *       - in: query
  *         name: include_done
+ *         description: Include DONE tasks in estimation (default true)
  *         schema:
  *           type: boolean
  *           default: true
@@ -298,7 +299,7 @@ router.get(
  *           type: string
  *       - in: query
  *         name: date
- *         description: Date to query (ISO date e.g. 2026-04-15, default today)
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
  *         schema:
  *           type: string
  *           format: date
@@ -316,6 +317,41 @@ router.get(
   authorize("admin", "manager", "cleaner"),
   getCleanerDailyActivityLogs
 );
+
+/**
+ * @swagger
+ * /api/inventory-activity-logs/daily-taken-summary:
+ *   get:
+ *     summary: Get daily taken-item summary grouped by cleaner and item
+ *     tags: [Inventory Activity Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: cleaner_id
+ *         description: Optional filter by cleaner_id (admin/manager only)
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Daily taken-item summary retrieved successfully
+ *       403:
+ *         description: Forbidden
+ */
+router.get(
+  "/daily-taken-summary",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  getDailyTakenItemsSummary
+);
+
+router.get("/:id", getInventoryActivityLogById);
 
 /**
  * @swagger

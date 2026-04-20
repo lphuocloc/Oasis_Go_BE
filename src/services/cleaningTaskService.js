@@ -994,6 +994,81 @@ const cancelOpenTasksForNoShowBooking = async (bookingId) => {
 
 exports.cancelOpenTasksForNoShowBooking = cancelOpenTasksForNoShowBooking;
 
+/**
+ * Cancel all active cleaning tasks when their bookings are cancelled.
+ * Used for user-initiated cancellations, payment timeouts, and expired order cleanup.
+ */
+const cancelCleaningTasksForCancelledBookings = async (bookingIds) => {
+  if (!bookingIds || bookingIds.length === 0) return 0;
+
+  const bookingIdStrings = bookingIds.map((id) => String(id)).filter(Boolean);
+
+  const openTasks = await CleaningTask.find({
+    booking_id: { $in: bookingIdStrings },
+    status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
+  })
+    .select("id booking_id pod_id cleaner_id")
+    .lean();
+
+  if (openTasks.length === 0) return 0;
+
+  let cancelledCount = 0;
+
+  for (const task of openTasks) {
+    const updated = await CleaningTask.updateOne(
+      {
+        id: String(task.id),
+        status: { $in: CANCELLABLE_TASK_STATUSES_FOR_NO_SHOW },
+      },
+      { $set: { status: "CANCELLED" } }
+    );
+
+    if (Number(updated?.modifiedCount || 0) !== 1) continue;
+
+    cancelledCount += 1;
+
+    const cleanerUserId = await resolveNotificationUserId(task.cleaner_id);
+    if (!cleanerUserId) continue;
+
+    const { podCode } = await resolvePodContext(task.pod_id);
+
+    await notificationService.sendToUser(cleanerUserId, {
+      title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+      message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
+      type: "CLEANING",
+      event_code: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
+      dedupe_key: `CLEANING_TASK_CANCELLED_BOOKING_CANCELLED:${String(task.id)}:${cleanerUserId}`,
+      data: {
+        cleaning_task_id: String(task.id),
+        booking_id: String(task.booking_id),
+        pod_id: String(task.pod_id || ""),
+        pod_code: podCode,
+        cancelled_reason: "BOOKING_CANCELLED",
+      },
+    });
+
+    emitCleanerNotificationEvent({
+      user_id: cleanerUserId,
+      notification: {
+        event: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
+        payload: {
+          cleaning_task_id: String(task.id),
+          booking_id: String(task.booking_id),
+          pod_id: String(task.pod_id || ""),
+          pod_code: podCode,
+          cancelled_reason: "BOOKING_CANCELLED",
+          title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+          message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
+        },
+      },
+    });
+  }
+
+  return cancelledCount;
+};
+
+exports.cancelCleaningTasksForCancelledBookings = cancelCleaningTasksForCancelledBookings;
+
 exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const includeDebug = options.include_debug === true;
   const dryRun = options.dry_run === true;
