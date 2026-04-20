@@ -13,12 +13,12 @@ const podClusterSchema = new mongoose.Schema(
         },
         location_id: {
             type: String,
-            required: [true, "Location ID is required"],
+            required: [true, "ID địa điểm là bắt buộc"],
             ref: "Location",
         },
         name: {
             type: String,
-            required: [true, "Pod cluster name is required"],
+            required: [true, "Tên cụm pod là bắt buộc"],
             trim: true,
         },
         description: {
@@ -33,7 +33,7 @@ const podClusterSchema = new mongoose.Schema(
                 validator: function (value) {
                     return !isNaN(value);
                 },
-                message: "Base price modifier must be a valid number",
+                message: "Hệ số giá phải là một số hợp lệ",
             },
         },
         slot_duration_minutes: {
@@ -41,7 +41,7 @@ const podClusterSchema = new mongoose.Schema(
             default: 30,
             enum: {
                 values: ALLOWED_SLOT_DURATIONS,
-                message: `Slot duration must be one of: ${ALLOWED_SLOT_DURATIONS.join(", ")}`,
+                message: `Thời gian slot phải là một trong các giá trị: ${ALLOWED_SLOT_DURATIONS.join(", ")}`,
             },
         },
     },
@@ -70,7 +70,7 @@ podClusterSchema.pre("save", async function () {
         const Location = mongoose.model("Location");
         const location = await Location.findOne({ id: this.location_id });
         if (!location) {
-            throw new Error("Location does not exist");
+            throw new Error("Địa điểm không tồn tại");
         }
     }
 });

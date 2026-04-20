@@ -48,12 +48,12 @@ const {
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
  *           type: string
- *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *       - in: query
  *         name: due_from
  *         schema:
@@ -148,12 +148,12 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *         name: status
  *         schema:
  *           type: string
- *           enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *           enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *       - in: query
  *         name: request_source
  *         schema:
  *           type: string
- *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *       - in: query
  *         name: due_from
  *         schema:
@@ -210,6 +210,14 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *                       booking_guest_name:
  *                         type: string
  *                         nullable: true
+ *                       booking_status:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Status of the linked booking (e.g. BOOKED, IN_USE, COMPLETED, CANCELLED)
+ *                       pod_status:
+ *                         type: string
+ *                         nullable: true
+ *                         description: Current status of the pod (e.g. AVAILABLE, IN_USE, NEEDS_CLEANING, CLEANING)
  *                       estimated_start_time:
  *                         type: string
  *                         format: date-time
@@ -343,7 +351,7 @@ router.post("/backfill", protect, authorize("admin", "manager"), backfillCleanin
  *                           properties:
  *                             request_source:
  *                               type: string
- *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *                             estimated_start_time:
  *                               type: string
  *                               format: date-time
@@ -352,7 +360,7 @@ router.post("/backfill", protect, authorize("admin", "manager"), backfillCleanin
  *                               format: date-time
  *                             status:
  *                               type: string
- *                               enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *                               enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  */
 router.get(
   "/debug/auto-assign/:bookingId",
@@ -463,7 +471,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *                 description: Optional shift assignment ID
  *               request_source:
  *                 type: string
- *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *                 description: Request source
  *               estimated_start_time:
  *                 type: string
@@ -475,7 +483,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *                 description: Due timestamp for task completion
  *               status:
  *                 type: string
- *                 enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *                 enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *                 description: Task status
  *               note:
  *                 type: string
@@ -518,7 +526,7 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *                 type: string
  *               request_source:
  *                 type: string
- *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *               estimated_start_time:
  *                 type: string
  *                 format: date-time
@@ -528,11 +536,8 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *                 format: date-time
  *               status:
  *                 type: string
- *                 enum: [ASSIGNED, NOTIFIED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *                 enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
  *               assigned_at:
- *                 type: string
- *                 format: date-time
- *               notified_at:
  *                 type: string
  *                 format: date-time
  *               accepted_at:

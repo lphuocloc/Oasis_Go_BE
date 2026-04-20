@@ -140,14 +140,14 @@ exports.updatePodCluster = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Pod cluster updated successfully",
+      message: "Cập nhật cụm pod thành công",
       data: podCluster,
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error updating pod cluster",
+      message: error.message || "Cập nhật cụm pod thất bại",
     });
   }
 };
@@ -167,7 +167,7 @@ exports.deletePodCluster = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error deleting pod cluster",
+      message: error.message || "Xóa cụm pod thất bại",
     });
   }
 };
@@ -188,7 +188,7 @@ exports.getPodClusterImages = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching pod cluster images",
+      message: error.message || "Lỗi khi fetching hình ảnh cụm pod",
     });
   }
 };
@@ -211,7 +211,7 @@ exports.deletePodClusterImage = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error deleting pod cluster image",
+      message: error.message || "Lỗi khi xóa hình ảnh cụm pod",
     });
   }
 };

@@ -1,6 +1,7 @@
 const Booking = require("../models/Bookings");
 const BookingSlot = require("../models/BookingSlot");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
+const CleaningTask = require("../models/CleaningTask");
 const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
 const Pod = require("../models/Pod");
@@ -14,6 +15,7 @@ const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
+const cleaningTaskService = require("./cleaningTaskService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 const { getSocketServer } = require("../socket/socketServer");
 
@@ -32,6 +34,78 @@ const createError = (message, statusCode = 400) => {
 const normalizeUpper = (value) => String(value || "").trim().toUpperCase();
 
 const normalizeSupportStatus = (status) => normalizeUpper(status);
+
+const buildUserIdentityQuery = (identity) => {
+  const normalizedIdentity = String(identity || "").trim();
+  if (!normalizedIdentity) return null;
+
+  const orQuery = [{ id: normalizedIdentity }];
+  if (mongoose.Types.ObjectId.isValid(normalizedIdentity)) {
+    orQuery.push({ _id: new mongoose.Types.ObjectId(normalizedIdentity) });
+  }
+
+  return { $or: orQuery };
+};
+
+const notifyCleanerOldPodNeedsCleaningAfterRoomChange = async ({
+  task,
+  oldPod,
+  newPod,
+  supportRequest,
+}) => {
+  if (!task || !task.cleaner_id || !oldPod) return;
+
+  const cleanerQuery = buildUserIdentityQuery(task.cleaner_id);
+  if (!cleanerQuery) return;
+
+  const cleanerUser = await User.findOne(cleanerQuery).select("_id").lean();
+  if (!cleanerUser || !cleanerUser._id) return;
+
+  const cleanerUserId = String(cleanerUser._id);
+  const oldPodCode = oldPod.code || oldPod.id || "Unknown";
+  const newPodCode = newPod?.code || newPod?.id || "Unknown";
+
+  const title = `Can don pod cu: ${oldPodCode}`;
+  const message = `Khach da doi sang pod ${newPodCode}. Vui long don pod cu ${oldPodCode} ngay.`;
+
+  await notificationService.sendToUser(cleanerUserId, {
+    title,
+    message,
+    type: "CLEANING",
+    event_code: "CLEANING_TASK_ASSIGNED",
+    dedupe_key: `CLEANING_TASK_ASSIGNED:${String(task.id)}:${cleanerUserId}:ROOM_CHANGE_VACATED`,
+    data: {
+      cleaning_task_id: String(task.id),
+      support_request_id: supportRequest?.id ? String(supportRequest.id) : null,
+      booking_id: supportRequest?.booking_id ? String(supportRequest.booking_id) : null,
+      pod_id: String(oldPod.id || ""),
+      pod_code: oldPodCode,
+      moved_to_pod_id: newPod?.id ? String(newPod.id) : null,
+      moved_to_pod_code: newPodCode,
+      request_source: "ROOM_CHANGE_VACATED",
+      reason: "ROOM_CHANGE_VACATED",
+    },
+  });
+
+  emitCleanerNotificationEvent({
+    user_id: cleanerUserId,
+    notification: {
+      event: "CLEANING_TASK_ASSIGNED",
+      payload: {
+        cleaning_task_id: String(task.id),
+        support_request_id: supportRequest?.id ? String(supportRequest.id) : null,
+        booking_id: supportRequest?.booking_id ? String(supportRequest.booking_id) : null,
+        pod_id: String(oldPod.id || ""),
+        pod_code: oldPodCode,
+        moved_to_pod_id: newPod?.id ? String(newPod.id) : null,
+        moved_to_pod_code: newPodCode,
+        request_source: "ROOM_CHANGE_VACATED",
+        title,
+        message,
+      },
+    },
+  });
+};
 
 class SupportRequestService {
   _getActorId(actor) {
@@ -966,6 +1040,44 @@ class SupportRequestService {
       currentPod.maintenance_status = String(payload.old_pod_reason || supportRequest.description || "") || null;
     }
     await currentPod.save();
+
+    if (oldPodNextStatus === "NEEDS_CLEANING") {
+      try {
+        const now = new Date();
+        const existingOldPodTask = await CleaningTask.findOne({
+          booking_id: booking.id,
+          pod_id: currentPod.id,
+          status: { $in: ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"] },
+        }).sort({ created_at: -1 });
+
+        if (existingOldPodTask) {
+          existingOldPodTask.estimated_start_time = new Date(now.getTime() + 5 * 60 * 1000);
+          existingOldPodTask.due_at = new Date(now.getTime() + 30 * 60 * 1000);
+          existingOldPodTask.request_source = "ROOM_CHANGE_VACATED";
+          await existingOldPodTask.save();
+
+          await notifyCleanerOldPodNeedsCleaningAfterRoomChange({
+            task: existingOldPodTask,
+            oldPod: currentPod,
+            newPod: nextPod,
+            supportRequest,
+          });
+        }
+
+        await cleaningTaskService.autoAssignTaskForBooking(
+          {
+            id: booking.id,
+            pod_id: nextPod.id,
+            status: "IN_USE",
+            checkin_state: booking.checkin_state || null,
+            end_time: booking.end_time,
+          },
+          { trigger: "ROOM_CHANGE_AFTER_CHECKOUT" }
+        );
+      } catch (cleaningErr) {
+        console.error(`[executeRoomChange] Failed to auto-assign cleaning task for old pod ${currentPod.id}:`, cleaningErr.message);
+      }
+    }
 
     supportRequest.pod_id = nextPod.id;
     supportRequest.location_id = nextCluster.location_id;

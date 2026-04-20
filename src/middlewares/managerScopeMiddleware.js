@@ -29,9 +29,9 @@ const loadManagerScope = async (req, res, next) => {
     const staffIds = uniqueStrings([req.user.id, req.user._id]);
 
     const todayStart = new Date();
-    todayStart.setHours(0, 0, 0, 0);
+    todayStart.setUTCHours(0, 0, 0, 0);
     const todayEnd = new Date(todayStart);
-    todayEnd.setHours(23, 59, 59, 999);
+    todayEnd.setUTCHours(23, 59, 59, 999);
 
     const [assignments, rosters] = await Promise.all([
       StaffShiftAssignment.find({
@@ -195,7 +195,7 @@ const applyManagerBookingScope = (req, res, next) => {
 
   const scopedPodIds = (req.managerScope && req.managerScope.podIds) || [];
   let requestedIds = [];
-  
+
   if (req.query.pod_ids) {
     requestedIds = String(req.query.pod_ids).split(",");
   } else if (req.query.pod_id) {

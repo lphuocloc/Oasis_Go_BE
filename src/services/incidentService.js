@@ -24,7 +24,7 @@ const INCIDENT_STATUSES = ["PENDING", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT"];
 const INCIDENT_DETAIL_TYPES = ["ITEM", "SERVICE"];
-const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
+const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const ORDER_BOOKING_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
 
 const createError = (message, statusCode) => {
@@ -1328,8 +1328,8 @@ exports.createDamageReport = async (
 
     if (cleanerUserId) {
       await notificationService.sendToUser(cleanerUserId, {
-        title: "Bao cao hu hai da duoc gui",
-        message: `Bao cao hu hai tai Pod ${podCode} da duoc gui toi he thong.`,
+        title: "Báo cáo hư hại đã được gửi",
+        message: `Báo cáo hư hại tại Pod ${podCode} đã được gửi tới hệ thống.`,
         type: "INCIDENT",
         event_code: "INCIDENT_REPORTED",
         dedupe_key: `INCIDENT_REPORTED:${incident.id}:${cleanerUserId}`,
@@ -1354,8 +1354,8 @@ exports.createDamageReport = async (
             status: String(incident.status || "PENDING").toUpperCase(),
             incident_type: "DAMAGE_REPORT",
             estimated_total_value: incident.estimated_total_value,
-            title: "Bao cao hu hai da duoc gui",
-            message: `Bao cao hu hai tai Pod ${podCode} da duoc gui toi he thong.`,
+            title: "Báo cáo hư hại đã được gửi",
+            message: `Báo cáo hư hại tại Pod ${podCode} đã được gửi tới hệ thống.`,
           },
         },
       });
@@ -1365,8 +1365,8 @@ exports.createDamageReport = async (
     await Promise.all(
       managerUserIds.map((managerUserId) =>
         notificationService.sendToUser(managerUserId, {
-          title: "Co bao cao hu hai moi",
-          message: `Cleaner vua gui bao cao hu hai cho Pod ${podCode}. Vui long kiem tra va duyet.`,
+          title: "Có báo cáo hư hại mới",
+          message: `Cleaner vừa gửi báo cáo hư hại cho Pod ${podCode}. Vui lòng kiểm tra và duyệt.`,
           type: "INCIDENT",
           event_code: "INCIDENT_REVIEW_REQUIRED",
           dedupe_key: `INCIDENT_REVIEW_REQUIRED:${incident.id}:${managerUserId}`,
@@ -1500,11 +1500,11 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
       const podCode = pod?.code || incident.pod_id || "Unknown";
 
       await notificationService.sendToUser(reporter._id, {
-        title: normalizedStatus === "DISMISSED" ? "Bao cao da bi bac bo" : "Bao cao da duoc duyet",
+        title: normalizedStatus === "DISMISSED" ? "Báo cáo đã bị bác bỏ" : "Báo cáo đã được duyệt",
         message:
           normalizedStatus === "DISMISSED"
-            ? `Bao cao hu hai tai Pod ${podCode} da bi manager bac bo.`
-            : `Bao cao hu hai tai Pod ${podCode} da duoc manager xac nhan va xu ly.`,
+            ? `Báo cáo hư hại tại Pod ${podCode} đã bị manager bác bỏ.`
+            : `Báo cáo hư hại tại Pod ${podCode} đã được manager xác nhận và xử lý.`,
         type: "INCIDENT",
         event_code: normalizedStatus === "DISMISSED" ? "INCIDENT_DISMISSED" : "INCIDENT_RESOLVED",
         dedupe_key: `INCIDENT_REVIEWED:${incident.id}:${normalizedStatus}`,

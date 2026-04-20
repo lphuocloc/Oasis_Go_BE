@@ -1,29 +1,30 @@
-const express = require("express");
+﻿const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
-  createInventoryCheckoutLog,
-  createInventoryCheckoutLogsBulk,
+  createInventoryActivityLog,
+  createInventoryActivityLogsBulk,
   getShiftInventoryEstimation,
-  getCleanerDailyCheckoutLogs,
-  getAllInventoryCheckoutLogs,
-  getInventoryCheckoutLogById,
-  updateInventoryCheckoutLog,
-  deleteInventoryCheckoutLog,
-} = require("../controllers/inventoryCheckoutLogController");
+  getCleanerDailyActivityLogs,
+  getDailyTakenItemsSummary,
+  getAllInventoryActivityLogs,
+  getInventoryActivityLogById,
+  updateInventoryActivityLog,
+  deleteInventoryActivityLog,
+} = require("../controllers/inventoryActivityLogController");
 
 /**
  * @swagger
  * tags:
- *   name: Inventory Checkout Logs
- *   description: Track inventory item checkout, return, and waste actions
+ *   name: Inventory Activity Logs
+ *   description: Track inventory item checkout, return, consumed, and waste actions
  */
 
 /**
  * @swagger
  * components:
  *   schemas:
- *     InventoryCheckoutLog:
+ *     InventoryActivityLog:
  *       type: object
  *       properties:
  *         id:
@@ -49,12 +50,12 @@ const {
  *           example: 2
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *           enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *           example: CHECKOUT
  *         reason:
  *           type: string
  *           nullable: true
- *     InventoryCheckoutLogBulkInput:
+ *     InventoryActivityLogBulkInput:
  *       type: object
  *       required:
  *         - logs
@@ -87,7 +88,7 @@ const {
  *                 description: Used for ownership/permission guard only, not persisted
  *               action_type:
  *                 type: string
- *                 enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *                 enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *                 default: CHECKOUT
  *               quantity:
  *                 type: number
@@ -103,7 +104,7 @@ const {
  *         created_at:
  *           type: string
  *           format: date-time
- *     InventoryCheckoutLogInput:
+ *     InventoryActivityLogInput:
  *       type: object
  *       required:
  *         - inventory_stock_id
@@ -121,7 +122,7 @@ const {
  *         shift_assignment_id:
  *           type: string
  *           nullable: true
- *           description: Used for ownership/permission guard only, not persisted to inventory_checkout_logs
+ *           description: Used for ownership/permission guard only, not persisted to inventory_activity_logs
  *         cleaning_task_id:
  *           type: string
  *           nullable: true
@@ -134,7 +135,7 @@ const {
  *           example: 1
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *           enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *           example: RETURN
  *         reason:
  *           type: string
@@ -172,22 +173,22 @@ const {
 
 /**
  * @swagger
- * /api/inventory-checkout-logs:
+ * /api/inventory-activity-logs:
  *   get:
- *     summary: Get all inventory checkout logs
- *     tags: [Inventory Checkout Logs]
+ *     summary: Get all Inventory Activity Logs
+ *     tags: [Inventory Activity Logs]
  *     responses:
  *       200:
- *         description: Inventory checkout logs retrieved successfully
+ *         description: Inventory Activity Logs retrieved successfully
  */
-router.get("/", getAllInventoryCheckoutLogs);
+router.get("/", getAllInventoryActivityLogs);
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/{id}:
+ * /api/inventory-activity-logs/{id}:
  *   get:
- *     summary: Get inventory checkout log by ID
- *     tags: [Inventory Checkout Logs]
+ *     summary: Get inventory activity log by ID
+ *     tags: [Inventory Activity Logs]
  *     parameters:
  *       - in: path
  *         name: id
@@ -196,18 +197,17 @@ router.get("/", getAllInventoryCheckoutLogs);
  *           type: string
  *     responses:
  *       200:
- *         description: Inventory checkout log retrieved successfully
+ *         description: inventory activity log retrieved successfully
  *       404:
- *         description: Inventory checkout log not found
+ *         description: inventory activity log not found
  */
-router.get("/:id", getInventoryCheckoutLogById);
 
 /**
  * @swagger
- * /api/inventory-checkout-logs:
+ * /api/inventory-activity-logs:
  *   post:
- *     summary: Create inventory checkout log
- *     tags: [Inventory Checkout Logs]
+ *     summary: Create inventory activity log
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -215,19 +215,19 @@ router.get("/:id", getInventoryCheckoutLogById);
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/InventoryCheckoutLogInput'
+ *             $ref: '#/components/schemas/InventoryActivityLogInput'
  *     responses:
  *       201:
- *         description: Inventory checkout log created successfully
+ *         description: inventory activity log created successfully
  */
-router.post("/", protect, authorize("admin", "manager", "cleaner"), createInventoryCheckoutLog);
+router.post("/", protect, authorize("admin", "manager", "cleaner"), createInventoryActivityLog);
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/bulk:
+ * /api/inventory-activity-logs/bulk:
  *   post:
- *     summary: Create multiple inventory checkout logs in one request
- *     tags: [Inventory Checkout Logs]
+ *     summary: Create multiple Inventory Activity Logs in one request
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     requestBody:
@@ -235,19 +235,19 @@ router.post("/", protect, authorize("admin", "manager", "cleaner"), createInvent
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/InventoryCheckoutLogBulkInput'
+ *             $ref: '#/components/schemas/InventoryActivityLogBulkInput'
  *     responses:
  *       201:
- *         description: Inventory checkout logs created successfully
+ *         description: Inventory Activity Logs created successfully
  */
-router.post("/bulk", protect, authorize("admin", "manager", "cleaner"), createInventoryCheckoutLogsBulk);
+router.post("/bulk", protect, authorize("admin", "manager", "cleaner"), createInventoryActivityLogsBulk);
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/estimate/{cleaner_id}:
+ * /api/inventory-activity-logs/estimate/{cleaner_id}:
  *   get:
  *     summary: Estimate required inventory for a cleaner in a day (default today)
- *     tags: [Inventory Checkout Logs]
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -258,12 +258,13 @@ router.post("/bulk", protect, authorize("admin", "manager", "cleaner"), createIn
  *           type: string
  *       - in: query
  *         name: date
- *         description: Date to estimate (ISO date, default is server local today)
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
  *         schema:
  *           type: string
  *           format: date
  *       - in: query
  *         name: include_done
+ *         description: Include DONE tasks in estimation (default true)
  *         schema:
  *           type: boolean
  *           default: true
@@ -284,10 +285,10 @@ router.get(
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/daily/{cleaner_id}:
+ * /api/inventory-activity-logs/daily/{cleaner_id}:
  *   get:
  *     summary: Get all CHECKOUT logs for a cleaner on a specific day
- *     tags: [Inventory Checkout Logs]
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -298,7 +299,7 @@ router.get(
  *           type: string
  *       - in: query
  *         name: date
- *         description: Date to query (ISO date e.g. 2026-04-15, default today)
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
  *         schema:
  *           type: string
  *           format: date
@@ -314,15 +315,50 @@ router.get(
   "/daily/:cleaner_id",
   protect,
   authorize("admin", "manager", "cleaner"),
-  getCleanerDailyCheckoutLogs
+  getCleanerDailyActivityLogs
 );
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/{id}:
+ * /api/inventory-activity-logs/daily-taken-summary:
+ *   get:
+ *     summary: Get daily taken-item summary grouped by cleaner and item
+ *     tags: [Inventory Activity Logs]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: date
+ *         description: Business date in Vietnam timezone (UTC+7), format YYYY-MM-DD; default is today in UTC+7
+ *         schema:
+ *           type: string
+ *           format: date
+ *       - in: query
+ *         name: cleaner_id
+ *         description: Optional filter by cleaner_id (admin/manager only)
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Daily taken-item summary retrieved successfully
+ *       403:
+ *         description: Forbidden
+ */
+router.get(
+  "/daily-taken-summary",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  getDailyTakenItemsSummary
+);
+
+router.get("/:id", getInventoryActivityLogById);
+
+/**
+ * @swagger
+ * /api/inventory-activity-logs/{id}:
  *   put:
- *     summary: Update inventory checkout log
- *     tags: [Inventory Checkout Logs]
+ *     summary: Update inventory activity log
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -336,19 +372,19 @@ router.get(
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/InventoryCheckoutLogInput'
+ *             $ref: '#/components/schemas/InventoryActivityLogInput'
  *     responses:
  *       200:
- *         description: Inventory checkout log updated successfully
+ *         description: inventory activity log updated successfully
  */
-router.put("/:id", protect, authorize("admin", "manager"), updateInventoryCheckoutLog);
+router.put("/:id", protect, authorize("admin", "manager"), updateInventoryActivityLog);
 
 /**
  * @swagger
- * /api/inventory-checkout-logs/{id}:
+ * /api/inventory-activity-logs/{id}:
  *   delete:
- *     summary: Delete inventory checkout log
- *     tags: [Inventory Checkout Logs]
+ *     summary: Delete inventory activity log
+ *     tags: [Inventory Activity Logs]
  *     security:
  *       - bearerAuth: []
  *     parameters:
@@ -359,8 +395,8 @@ router.put("/:id", protect, authorize("admin", "manager"), updateInventoryChecko
  *           type: string
  *     responses:
  *       200:
- *         description: Inventory checkout log deleted successfully
+ *         description: inventory activity log deleted successfully
  */
-router.delete("/:id", protect, authorize("admin"), deleteInventoryCheckoutLog);
+router.delete("/:id", protect, authorize("admin"), deleteInventoryActivityLog);
 
 module.exports = router;

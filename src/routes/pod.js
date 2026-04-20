@@ -215,7 +215,7 @@ router.post("/create", protect, authorize("admin"), podController.createPods);
 router.get(
 	"/",
 	protect,
-	authorize("admin", "manager", "user"),
+	authorize("admin", "manager", "user", "cleaner"),
 	loadManagerScope,
 	applyManagerPodScope,
 	podController.getAllPods
@@ -242,7 +242,7 @@ router.get(
 router.get(
 	"/available",
 	protect,
-	authorize("admin", "manager", "user"),
+	authorize("admin", "manager", "user", "cleaner"),
 	loadManagerScope,
 	applyManagerPodScope,
 	podController.getAvailablePods
@@ -269,7 +269,7 @@ router.get(
 router.get(
 	"/cluster/:clusterId",
 	protect,
-	authorize("admin", "manager", "user"),
+	authorize("admin", "manager", "user", "cleaner"),
 	loadManagerScope,
 	applyManagerPodScope,
 	podController.getPodsByCluster
@@ -298,7 +298,7 @@ router.get(
 router.get(
 	"/:id",
 	protect,
-	authorize("admin", "manager", "user"),
+	authorize("admin", "manager", "user", "cleaner"),
 	loadManagerScope,
 	requireManagerPodAccess({ source: "params", key: "id" }),
 	podController.getPodById

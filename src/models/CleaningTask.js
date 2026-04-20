@@ -3,7 +3,6 @@ const { v4: uuidv4 } = require("uuid");
 
 const CLEANING_TASK_STATUSES = [
   "ASSIGNED",
-  "NOTIFIED",
   "ACCEPTED",
   "IN_PROGRESS",
   "DONE",
@@ -15,6 +14,7 @@ const CLEANING_REQUEST_SOURCES = [
   "USER_REQUEST",
   "AUTO_AFTER_CHECKOUT",
   "SYSTEM_RETRY",
+  "ROOM_CHANGE_VACATED",
 ];
 
 const cleaningTaskSchema = new mongoose.Schema(

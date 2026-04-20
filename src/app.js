@@ -1,4 +1,7 @@
-require("dotenv").config();
+﻿require("dotenv").config();
+
+// Ensure server-side Date operations run in UTC unless explicitly overridden.
+process.env.TZ = process.env.TZ || "Etc/UTC";
 
 const express = require("express");
 const path = require("path");
@@ -98,7 +101,7 @@ const itemRouter = require("./routes/item");
 const warehouseRouter = require("./routes/warehouse");
 const locationWarehouseRouter = require("./routes/locationWarehouse");
 const inventoryStockRouter = require("./routes/inventoryStock");
-const inventoryCheckoutLogRouter = require("./routes/inventoryCheckoutLog");
+const inventoryActivityLogRouter = require("./routes/inventoryActivityLog");
 const cleaningTaskRouter = require("./routes/cleaningTask");
 const cleaningPhotoRouter = require("./routes/cleaningPhoto");
 const maintenanceTaskRouter = require("./routes/maintenanceTask");
@@ -121,8 +124,37 @@ const bookingVoucherRouter = require("./routes/bookingVoucher");
 const pricingRuleRouter = require("./routes/pricingRule");
 const app = express();
 
+const parseAllowedOrigins = (origins = "") =>
+  origins
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+const allowedOrigins = parseAllowedOrigins(process.env.ALLOWED_ORIGINS || "");
+const corsOptions = {
+  origin: (origin, callback) => {
+    // Native mobile/curl requests may not include Origin.
+    if (!origin) {
+      callback(null, true);
+      return;
+    }
+
+    if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+      callback(null, true);
+      return;
+    }
+
+    callback(new Error("Not allowed by CORS"));
+  },
+  credentials: true,
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization"],
+  optionsSuccessStatus: 204,
+};
+
 // Middlewares
-app.use(cors());
+app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 app.use(logger("dev"));
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
@@ -169,7 +201,7 @@ app.use("/api/items", itemRouter);
 app.use("/api/warehouses", warehouseRouter);
 app.use("/api/location-warehouses", locationWarehouseRouter);
 app.use("/api/inventory-stocks", inventoryStockRouter);
-app.use("/api/inventory-checkout-logs", inventoryCheckoutLogRouter);
+app.use("/api/inventory-activity-logs", inventoryActivityLogRouter);
 app.use("/api/cleaning-tasks", cleaningTaskRouter);
 app.use("/api/cleaning-photos", cleaningPhotoRouter);
 app.use("/api/maintenance-tasks", maintenanceTaskRouter);

@@ -1,4 +1,4 @@
-const mongoose = require("mongoose");
+﻿const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
 const normalizeTaskId = (value) => {
@@ -7,7 +7,7 @@ const normalizeTaskId = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const inventoryCheckoutLogSchema = new mongoose.Schema(
+const inventoryActivityLogSchema = new mongoose.Schema(
   {
     id: {
       type: String,
@@ -52,7 +52,7 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
       type: String,
       required: [true, "Action type is required"],
       enum: {
-        values: ["CHECKOUT", "RETURN", "WASTE", "INITIAL", "ADJUSTMENT"],
+        values: ["CHECKOUT", "RETURN", "CONSUMED", "WASTE", "INITIAL", "ADJUSTMENT"],
         message: "{VALUE} is not a valid action type",
       },
       index: true,
@@ -68,29 +68,19 @@ const inventoryCheckoutLogSchema = new mongoose.Schema(
   }
 );
 
-inventoryCheckoutLogSchema.pre("validate", function () {
+inventoryActivityLogSchema.pre("validate", function () {
   const hasCleaningTask = Boolean(this.cleaning_task_id);
   const hasMaintenanceTask = Boolean(this.maintenance_task_id);
-  const isAdminAction = this.action_type === "INITIAL" || this.action_type === "ADJUSTMENT";
 
-  if (!isAdminAction) {
-    if (hasCleaningTask && hasMaintenanceTask) {
-      this.invalidate(
-        "cleaning_task_id",
-        "Only one of cleaning_task_id or maintenance_task_id can be provided"
-      );
-      this.invalidate(
-        "maintenance_task_id",
-        "Only one of cleaning_task_id or maintenance_task_id can be provided"
-      );
-    }
-
-    if (!hasCleaningTask && !hasMaintenanceTask) {
-      this.invalidate(
-        "cleaning_task_id",
-        "Either cleaning_task_id or maintenance_task_id is required"
-      );
-    }
+  if (hasCleaningTask && hasMaintenanceTask) {
+    this.invalidate(
+      "cleaning_task_id",
+      "Only one of cleaning_task_id or maintenance_task_id can be provided"
+    );
+    this.invalidate(
+      "maintenance_task_id",
+      "Only one of cleaning_task_id or maintenance_task_id can be provided"
+    );
   }
 
   if (this.action_type === "WASTE" && !this.reason) {
@@ -98,9 +88,9 @@ inventoryCheckoutLogSchema.pre("validate", function () {
   }
 });
 
-inventoryCheckoutLogSchema.index({ created_at: -1 });
-inventoryCheckoutLogSchema.index({ inventory_stock_id: 1, created_at: -1 });
-inventoryCheckoutLogSchema.index({ staff_id: 1, created_at: -1 });
-inventoryCheckoutLogSchema.index({ actor_id: 1, created_at: -1 });
+inventoryActivityLogSchema.index({ created_at: -1 });
+inventoryActivityLogSchema.index({ inventory_stock_id: 1, created_at: -1 });
+inventoryActivityLogSchema.index({ staff_id: 1, created_at: -1 });
+inventoryActivityLogSchema.index({ actor_id: 1, created_at: -1 });
 
-module.exports = mongoose.model("InventoryCheckoutLog", inventoryCheckoutLogSchema);
+module.exports = mongoose.model("InventoryActivityLog", inventoryActivityLogSchema);

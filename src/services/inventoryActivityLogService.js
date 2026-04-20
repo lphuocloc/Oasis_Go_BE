@@ -1,5 +1,5 @@
-const mongoose = require("mongoose");
-const InventoryCheckoutLog = require("../models/InventoryCheckoutLog");
+﻿const mongoose = require("mongoose");
+const InventoryActivityLog = require("../models/InventoryActivityLog");
 const InventoryStock = require("../models/InventoryStock");
 const CleaningTask = require("../models/CleaningTask");
 const MaintenanceTask = require("../models/MaintenanceTask");
@@ -66,19 +66,70 @@ const normalizeCleanerId = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const buildDayRange = (dateValue) => {
-  const target = dateValue ? new Date(dateValue) : new Date();
-  if (Number.isNaN(target.getTime())) {
+const BUSINESS_TZ_OFFSET_MINUTES = 7 * 60; // Asia/Ho_Chi_Minh (UTC+7)
+
+const getDatePartsInBusinessTimezone = (date) => {
+  const shifted = new Date(date.getTime() + BUSINESS_TZ_OFFSET_MINUTES * 60 * 1000);
+  return {
+    year: shifted.getUTCFullYear(),
+    month: shifted.getUTCMonth() + 1,
+    day: shifted.getUTCDate(),
+  };
+};
+
+const parseBusinessDateInput = (dateValue) => {
+  if (dateValue === undefined || dateValue === null || String(dateValue).trim() === "") {
+    return getDatePartsInBusinessTimezone(new Date());
+  }
+
+  const raw = String(dateValue).trim();
+  const dateOnlyMatch = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (dateOnlyMatch) {
+    const year = Number(dateOnlyMatch[1]);
+    const month = Number(dateOnlyMatch[2]);
+    const day = Number(dateOnlyMatch[3]);
+
+    const probe = new Date(Date.UTC(year, month - 1, day));
+    if (
+      probe.getUTCFullYear() !== year
+      || probe.getUTCMonth() !== month - 1
+      || probe.getUTCDate() !== day
+    ) {
+      throw createError("Invalid date", 400);
+    }
+
+    return { year, month, day };
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) {
     throw createError("Invalid date", 400);
   }
 
-  const dayStart = new Date(target);
-  dayStart.setHours(0, 0, 0, 0);
+  return getDatePartsInBusinessTimezone(parsed);
+};
 
-  const dayEnd = new Date(target);
-  dayEnd.setHours(23, 59, 59, 999);
+const buildDayRange = (dateValue) => {
+  const { year, month, day } = parseBusinessDateInput(dateValue);
+
+  // Convert business-day [00:00, 23:59:59.999] in UTC+7 to UTC for Mongo filtering.
+  const startUtcMillis = Date.UTC(year, month - 1, day, 0, 0, 0, 0) - BUSINESS_TZ_OFFSET_MINUTES * 60 * 1000;
+  const dayStart = new Date(startUtcMillis);
+  const dayEnd = new Date(startUtcMillis + (24 * 60 * 60 * 1000 - 1));
 
   return { dayStart, dayEnd };
+};
+
+const parseBooleanOption = (value, defaultValue = false) => {
+  if (value === undefined || value === null || String(value).trim() === "") {
+    return defaultValue;
+  }
+
+  const normalized = String(value).trim().toLowerCase();
+  if (["true", "1", "yes", "y", "on"].includes(normalized)) return true;
+  if (["false", "0", "no", "n", "off"].includes(normalized)) return false;
+
+  throw createError("Invalid include_done value. Use true/false", 400);
 };
 
 const normalizeActionType = (value) => {
@@ -86,17 +137,36 @@ const normalizeActionType = (value) => {
   return String(value).trim().toUpperCase();
 };
 
-const normalizeQuantity = (value) => {
+const normalizeQuantity = (value, options = {}) => {
+  const { allowNegative = false } = options;
   const quantity = Number(value);
-  if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isInteger(quantity)) {
+  const invalid = !Number.isFinite(quantity) || !Number.isInteger(quantity) || quantity === 0;
+
+  if (invalid) {
+    throw createError("quantity must be a non-zero integer", 400);
+  }
+
+  if (!allowNegative && quantity < 0) {
     throw createError("quantity must be a positive integer", 400);
   }
+
   return quantity;
+};
+
+const normalizeQuantityByActionType = (actionType, value) => {
+  const normalizedActionType = normalizeActionType(actionType);
+
+  if (normalizedActionType === "RETURN") {
+    // Backward-compatible: accept both +N and -N for RETURN, store as absolute quantity.
+    return Math.abs(normalizeQuantity(value, { allowNegative: true }));
+  }
+
+  return normalizeQuantity(value);
 };
 
 const getStockDelta = (actionType, quantity) => {
   if (actionType === "RETURN") return quantity;
-  if (actionType === "CHECKOUT" || actionType === "WASTE") return -quantity;
+  if (actionType === "CHECKOUT" || actionType === "CONSUMED" || actionType === "WASTE") return -quantity;
   if (actionType === "INITIAL" || actionType === "ADJUSTMENT") return 0;
   throw createError("Invalid action_type", 400);
 };
@@ -106,18 +176,11 @@ const validateLogBusinessRules = ({ actionType, reason, cleaningTaskId, maintena
     throw createError("action_type is required", 400);
   }
 
-  const isAdminAction = actionType === "INITIAL" || actionType === "ADJUSTMENT";
   const hasCleaningTask = Boolean(cleaningTaskId);
   const hasMaintenanceTask = Boolean(maintenanceTaskId);
 
-  if (!isAdminAction) {
-    if (!hasCleaningTask && !hasMaintenanceTask) {
-      throw createError("Either cleaning_task_id or maintenance_task_id is required", 400);
-    }
-
-    if (hasCleaningTask && hasMaintenanceTask) {
-      throw createError("Only one of cleaning_task_id or maintenance_task_id can be provided", 400);
-    }
+  if (hasCleaningTask && hasMaintenanceTask) {
+    throw createError("Only one of cleaning_task_id or maintenance_task_id can be provided", 400);
   }
 
   if (actionType === "WASTE") {
@@ -165,10 +228,6 @@ const validateCleanerOwnership = async ({ actor, staffId, shiftAssignmentId, cle
 
   if (maintenanceTaskId) {
     throw createError("Cleaner is not allowed to use maintenance_task_id", 403);
-  }
-
-  if (!shiftAssignmentId && !cleaningTaskId) {
-    throw createError("Cleaner requests must include shift_assignment_id or cleaning_task_id", 400);
   }
 
   const [assignment, cleaningTask] = await Promise.all([
@@ -272,7 +331,7 @@ const applyStockDelta = async (stockId, delta, session) => {
   return updatedStock;
 };
 
-exports.createInventoryCheckoutLog = async (data, actor = null) => {
+exports.createInventoryActivityLog = async (data, actor = null) => {
   const {
     inventory_stock_id,
     staff_id,
@@ -302,7 +361,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
     maintenanceTaskId: normalizedMaintenanceTaskId,
   });
 
-  const normalizedQuantity = normalizeQuantity(quantity);
+  const normalizedQuantity = normalizeQuantityByActionType(normalizedActionType, quantity);
   const effectiveActor = actor || (actor_id ? { id: actor_id } : null);
   const resolvedParticipants = resolveCheckoutParticipants({ actor: effectiveActor, staffId: staff_id });
 
@@ -334,7 +393,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
 
     await applyStockDelta(inventory_stock_id, delta, session);
 
-    const [createdLog] = await InventoryCheckoutLog.create(
+    const [createdLog] = await InventoryActivityLog.create(
       [
         {
           inventory_stock_id,
@@ -352,21 +411,46 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
 
     await session.commitTransaction();
 
-    if (String(staff.role || "").toLowerCase() === "cleaner" && normalizedActionType === "CHECKOUT") {
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "CONSUMED", "WASTE"];
+    if (String(staff.role || "").toLowerCase() === "cleaner" && notifyActionTypes.includes(normalizedActionType)) {
       const [item, warehouse] = await Promise.all([
         Item.findOne({ id: stock.item_id }).select("id name").lean(),
         Warehouse.findOne({ id: stock.warehouse_id }).select("id name").lean(),
       ]);
 
+      const notificationConfig = {
+        CHECKOUT: {
+          title: "Xác nhận xuất kho",
+          message: `Bạn đã xuất ${normalizedQuantity} ${item?.name || "vật tư"} từ kho ${warehouse?.name || "Unknown"}.`,
+          event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+        },
+        RETURN: {
+          title: "Xác nhận hoàn kho",
+          message: `Bạn đã trả lại ${normalizedQuantity} ${item?.name || "vật tư"} vào kho ${warehouse?.name || "Unknown"}.`,
+          event_code: "INVENTORY_RETURN_CONFIRMED",
+        },
+        CONSUMED: {
+          title: "Xác nhận tiêu hao",
+          message: `Bạn đã ghi nhận tiêu hao ${normalizedQuantity} ${item?.name || "vật tư"}.`,
+          event_code: "INVENTORY_CONSUMED_CONFIRMED",
+        },
+        WASTE: {
+          title: "Xác nhận báo hỏng",
+          message: `Bạn đã báo ${normalizedQuantity} ${item?.name || "vật tư"} bị hỏng/thất thoát.`,
+          event_code: "INVENTORY_WASTE_CONFIRMED",
+        },
+      }[normalizedActionType];
+
       await notificationService.sendToUser(staff._id, {
-        title: "Xac nhan xuat kho",
-        message: `Ban da xuat ${normalizedQuantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+        title: notificationConfig.title,
+        message: notificationConfig.message,
         type: "INVENTORY",
-        event_code: "INVENTORY_CHECKOUT_CONFIRMED",
-        dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${createdLog.id}:${String(staff._id)}`,
+        event_code: notificationConfig.event_code,
+        dedupe_key: `${notificationConfig.event_code}:${createdLog.id}:${String(staff._id)}`,
         data: {
-          checkout_log_id: createdLog.id,
+          activity_log_id: createdLog.id,
           inventory_stock_id,
+          action_type: normalizedActionType,
           quantity: String(normalizedQuantity),
           item_id: stock.item_id || null,
           item_name: item?.name || null,
@@ -385,7 +469,7 @@ exports.createInventoryCheckoutLog = async (data, actor = null) => {
   }
 };
 
-exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
+exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
   const payload = data || {};
   const logs = Array.isArray(payload.logs) ? payload.logs : [];
 
@@ -425,7 +509,7 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
       const normalizedShiftAssignmentId = normalizeShiftAssignmentId(entry.shift_assignment_id);
       const normalizedCleaningTaskId = normalizeTaskId(entry.cleaning_task_id);
       const normalizedMaintenanceTaskId = normalizeTaskId(entry.maintenance_task_id);
-      const normalizedQuantity = normalizeQuantity(entry.quantity);
+      const normalizedQuantity = normalizeQuantityByActionType(normalizedActionType, entry.quantity);
       const normalizedReason = entry.reason === undefined || entry.reason === null ? null : String(entry.reason).trim();
 
       validateLogBusinessRules({
@@ -460,7 +544,7 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
       const delta = getStockDelta(normalizedActionType, normalizedQuantity);
       await applyStockDelta(inventoryStockId, delta, session);
 
-      const [createdLog] = await InventoryCheckoutLog.create(
+      const [createdLog] = await InventoryActivityLog.create(
         [
           {
             inventory_stock_id: inventoryStockId,
@@ -487,24 +571,49 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
 
     await session.commitTransaction();
 
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "CONSUMED", "WASTE"];
     if (String(staff.role || "").toLowerCase() === "cleaner") {
       for (const draft of notificationDrafts) {
-        if (draft.actionType !== "CHECKOUT") continue;
+        if (!notifyActionTypes.includes(draft.actionType)) continue;
 
         const [item, warehouse] = await Promise.all([
           Item.findOne({ id: draft.stock.item_id }).select("id name").lean(),
           Warehouse.findOne({ id: draft.stock.warehouse_id }).select("id name").lean(),
         ]);
 
+        const notificationConfig = {
+          CHECKOUT: {
+            title: "Xác nhận xuất kho",
+            message: `Bạn đã xuất ${draft.quantity} ${item?.name || "vật tư"} từ kho ${warehouse?.name || "Unknown"}.`,
+            event_code: "INVENTORY_CHECKOUT_CONFIRMED",
+          },
+          RETURN: {
+            title: "Xác nhận hoàn kho",
+            message: `Bạn đã trả lại ${draft.quantity} ${item?.name || "vật tư"} vào kho ${warehouse?.name || "Unknown"}.`,
+            event_code: "INVENTORY_RETURN_CONFIRMED",
+          },
+          CONSUMED: {
+            title: "Xác nhận tiêu hao",
+            message: `Bạn đã ghi nhận tiêu hao ${draft.quantity} ${item?.name || "vật tư"}.`,
+            event_code: "INVENTORY_CONSUMED_CONFIRMED",
+          },
+          WASTE: {
+            title: "Xác nhận báo hỏng",
+            message: `Bạn đã báo ${draft.quantity} ${item?.name || "vật tư"} bị hỏng/thất thoát.`,
+            event_code: "INVENTORY_WASTE_CONFIRMED",
+          },
+        }[draft.actionType];
+
         await notificationService.sendToUser(staff._id, {
-          title: "Xac nhan xuat kho",
-          message: `Ban da xuat ${draft.quantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+          title: notificationConfig.title,
+          message: notificationConfig.message,
           type: "INVENTORY",
-          event_code: "INVENTORY_CHECKOUT_CONFIRMED",
-          dedupe_key: `INVENTORY_CHECKOUT_CONFIRMED:${draft.logId}:${String(staff._id)}`,
+          event_code: notificationConfig.event_code,
+          dedupe_key: `${notificationConfig.event_code}:${draft.logId}:${String(staff._id)}`,
           data: {
-            checkout_log_id: draft.logId,
+            activity_log_id: draft.logId,
             inventory_stock_id: draft.stock.id,
+            action_type: draft.actionType,
             quantity: String(draft.quantity),
             item_id: draft.stock.item_id || null,
             item_name: item?.name || null,
@@ -527,7 +636,7 @@ exports.createInventoryCheckoutLogsBulk = async (data, actor = null) => {
   }
 };
 
-exports.getAllInventoryCheckoutLogs = async (query = {}) => {
+exports.getAllInventoryActivityLogs = async (query = {}) => {
   const filter = {};
   if (query.inventory_stock_id) filter.inventory_stock_id = query.inventory_stock_id;
   if (query.staff_id) filter.staff_id = query.staff_id;
@@ -539,24 +648,27 @@ exports.getAllInventoryCheckoutLogs = async (query = {}) => {
     if (query.to) filter.created_at.$lte = new Date(query.to);
   }
 
-  return InventoryCheckoutLog.find(filter).sort({ created_at: -1 });
+  return InventoryActivityLog.find(filter).sort({ created_at: -1 });
 };
 
-exports.getInventoryCheckoutLogById = async (id) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.getInventoryActivityLogById = async (id) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
   return log;
 };
 
-exports.updateInventoryCheckoutLog = async (id, data, actor = null) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.updateInventoryActivityLog = async (id, data, actor = null) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
 
   const nextInventoryStockId = data.inventory_stock_id !== undefined ? data.inventory_stock_id : log.inventory_stock_id;
   const nextStaffId = data.staff_id !== undefined ? data.staff_id : log.staff_id;
   const nextActionType =
     data.action_type !== undefined ? normalizeActionType(data.action_type) : normalizeActionType(log.action_type);
-  const nextQuantity = data.quantity !== undefined ? normalizeQuantity(data.quantity) : log.quantity;
+  const nextQuantity =
+    data.quantity !== undefined
+      ? normalizeQuantityByActionType(nextActionType, data.quantity)
+      : log.quantity;
   const nextShiftAssignmentId =
     data.shift_assignment_id !== undefined ? normalizeShiftAssignmentId(data.shift_assignment_id) : null;
   const nextCleaningTaskId =
@@ -634,9 +746,9 @@ exports.updateInventoryCheckoutLog = async (id, data, actor = null) => {
   }
 };
 
-exports.deleteInventoryCheckoutLog = async (id) => {
-  const log = await InventoryCheckoutLog.findOne({ id });
-  if (!log) throw createError("Inventory checkout log not found", 404);
+exports.deleteInventoryActivityLog = async (id) => {
+  const log = await InventoryActivityLog.findOne({ id });
+  if (!log) throw createError("inventory activity log not found", 404);
 
   const delta = getStockDelta(log.action_type, log.quantity);
   const session = await mongoose.startSession();
@@ -645,10 +757,10 @@ exports.deleteInventoryCheckoutLog = async (id) => {
     session.startTransaction();
 
     await applyStockDelta(log.inventory_stock_id, -delta, session);
-    await InventoryCheckoutLog.deleteOne({ id }).session(session);
+    await InventoryActivityLog.deleteOne({ id }).session(session);
 
     await session.commitTransaction();
-    return { message: "Inventory checkout log deleted successfully" };
+    return { message: "inventory activity log deleted successfully" };
   } catch (error) {
     await session.abortTransaction();
     throw error;
@@ -663,7 +775,7 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   }
 
   const normalizedActionType = normalizeActionType(action_type);
-  const normalizedQuantity = normalizeQuantity(quantity);
+  const normalizedQuantity = normalizeQuantityByActionType(normalizedActionType, quantity);
   const normalizedReason = reason === undefined || reason === null ? null : String(reason).trim();
   const resolvedParticipants = resolveCheckoutParticipants({
     actor: actor_id ? { id: actor_id } : null,
@@ -679,7 +791,7 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   if (!staff) throw createError("Staff user not found", 404);
   if (!staff.isActive) throw createError("Staff user is inactive", 403);
 
-  return InventoryCheckoutLog.create({
+  return InventoryActivityLog.create({
     inventory_stock_id,
     staff_id: resolvedParticipants.staff_id,
     actor_id: resolvedParticipants.actor_id,
@@ -691,7 +803,7 @@ exports.createAutoLog = async ({ inventory_stock_id, staff_id, actor_id, quantit
   });
 };
 
-exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = {}) => {
+exports.getCleanerDailyActivityLogs = async (cleanerId, actor = null, options = {}) => {
   const normalizedCleanerId = normalizeCleanerId(cleanerId);
   if (!normalizedCleanerId) {
     throw createError("cleaner_id is required", 400);
@@ -710,11 +822,15 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
 
   const { dayStart, dayEnd } = buildDayRange(options.date);
 
-  const logs = await InventoryCheckoutLog.find({
+  const logFilter = {
     staff_id: normalizedCleanerId,
-    action_type: "CHECKOUT",
     created_at: { $gte: dayStart, $lte: dayEnd },
-  })
+  };
+  if (options.action_type) {
+    logFilter.action_type = normalizeActionType(options.action_type);
+  }
+
+  const logs = await InventoryActivityLog.find(logFilter)
     .sort({ created_at: -1 })
     .lean();
 
@@ -724,7 +840,7 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
       date: dayStart.toISOString().slice(0, 10),
       day_start: dayStart,
       day_end: dayEnd,
-      total_checkout_count: 0,
+      total_log_count: 0,
       total_quantity: 0,
       logs: [],
     };
@@ -771,12 +887,19 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
       summaryByItem.set(itemId, {
         item_id: itemId,
         item_name: log.item_name,
-        total_quantity: 0,
+        checkout_quantity: 0,
+        return_quantity: 0,
+        consumed_quantity: 0,
+        waste_quantity: 0,
         log_count: 0,
       });
     }
     const entry = summaryByItem.get(itemId);
-    entry.total_quantity += Number(log.quantity || 0);
+    const qty = Number(log.quantity || 0);
+    if (log.action_type === "CHECKOUT") entry.checkout_quantity += qty;
+    else if (log.action_type === "RETURN") entry.return_quantity += qty;
+    else if (log.action_type === "CONSUMED") entry.consumed_quantity += qty;
+    else if (log.action_type === "WASTE") entry.waste_quantity += qty;
     entry.log_count += 1;
   }
 
@@ -785,10 +908,177 @@ exports.getCleanerDailyCheckoutLogs = async (cleanerId, actor = null, options = 
     date: dayStart.toISOString().slice(0, 10),
     day_start: dayStart,
     day_end: dayEnd,
-    total_checkout_count: enrichedLogs.length,
+    total_log_count: enrichedLogs.length,
     total_quantity: totalQuantity,
     summary_by_item: [...summaryByItem.values()],
     logs: enrichedLogs,
+  };
+};
+
+exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  const actorId = getUserIdentity(actor);
+  const normalizedCleanerId = normalizeCleanerId(options.cleaner_id);
+  const { dayStart, dayEnd } = buildDayRange(options.date);
+
+  const allowedRoles = new Set(["admin", "manager", "cleaner"]);
+  if (!allowedRoles.has(actorRole)) {
+    throw createError("Forbidden", 403);
+  }
+
+  let targetCleanerId = normalizedCleanerId || null;
+  if (actorRole === "cleaner") {
+    if (!actorId) {
+      throw createError("Unable to resolve cleaner identity", 401);
+    }
+    if (targetCleanerId && targetCleanerId !== actorId) {
+      throw createError("Cleaners can only view their own daily taken-item summary", 403);
+    }
+    targetCleanerId = actorId;
+  }
+
+  const filter = {
+    action_type: { $in: ["CHECKOUT", "RETURN"] },
+    created_at: { $gte: dayStart, $lte: dayEnd },
+  };
+  if (targetCleanerId) {
+    filter.staff_id = targetCleanerId;
+  }
+
+  const logs = await InventoryActivityLog.find(filter)
+    .select("staff_id inventory_stock_id action_type quantity created_at")
+    .lean();
+
+  if (logs.length === 0) {
+    return {
+      date: dayStart.toISOString().slice(0, 10),
+      day_start: dayStart,
+      day_end: dayEnd,
+      cleaner_count: 0,
+      total_item_count: 0,
+      total_net_quantity: 0,
+      cleaners: [],
+    };
+  }
+
+  const staffIds = [...new Set(logs.map((log) => String(log.staff_id || "")).filter(Boolean))];
+  const stockIds = [...new Set(logs.map((log) => String(log.inventory_stock_id || "")).filter(Boolean))];
+
+  const [staffUsers, stocks] = await Promise.all([
+    User.find({ id: { $in: staffIds } })
+      .select("id name role")
+      .lean(),
+    InventoryStock.find({ id: { $in: stockIds } })
+      .select("id item_id")
+      .lean(),
+  ]);
+
+  const stockById = new Map(stocks.map((stock) => [String(stock.id), stock]));
+
+  const itemIds = [...new Set(stocks.map((stock) => String(stock.item_id || "")).filter(Boolean))];
+  const items = itemIds.length > 0
+    ? await Item.find({ id: { $in: itemIds } })
+      .select("id name")
+      .lean()
+    : [];
+
+  const cleanerById = new Map(staffUsers.map((user) => [
+    String(user.id),
+    {
+      cleaner_id: user.id,
+      cleaner_name: user.name || null,
+      cleaner_role: user.role || null,
+    },
+  ]));
+  const itemById = new Map(items.map((item) => [String(item.id), item]));
+
+  const cleanerSummaryMap = new Map();
+  for (const log of logs) {
+    const staffId = String(log.staff_id || "");
+    if (!staffId) continue;
+
+    const cleanerMeta = cleanerById.get(staffId) || {
+      cleaner_id: staffId,
+      cleaner_name: null,
+      cleaner_role: null,
+    };
+
+    if (!cleanerSummaryMap.has(staffId)) {
+      cleanerSummaryMap.set(staffId, {
+        cleaner_id: cleanerMeta.cleaner_id,
+        cleaner_name: cleanerMeta.cleaner_name,
+        cleaner_role: cleanerMeta.cleaner_role,
+        total_checkout_quantity: 0,
+        total_return_quantity: 0,
+        total_net_quantity: 0,
+        item_count: 0,
+        items: new Map(),
+      });
+    }
+
+    const cleanerEntry = cleanerSummaryMap.get(staffId);
+    const stock = stockById.get(String(log.inventory_stock_id || "")) || null;
+    const itemId = String(stock?.item_id || "");
+    if (!itemId) continue;
+
+    if (!cleanerEntry.items.has(itemId)) {
+      const itemMeta = itemById.get(itemId) || null;
+      cleanerEntry.items.set(itemId, {
+        item_id: itemId,
+        item_name: itemMeta?.name || null,
+        checkout_quantity: 0,
+        return_quantity: 0,
+        net_quantity: 0,
+      });
+    }
+
+    const itemEntry = cleanerEntry.items.get(itemId);
+    const qty = Math.abs(Number(log.quantity || 0));
+    if (qty === 0) continue;
+
+    if (log.action_type === "CHECKOUT") {
+      itemEntry.checkout_quantity += qty;
+      itemEntry.net_quantity += qty;
+      cleanerEntry.total_checkout_quantity += qty;
+      cleanerEntry.total_net_quantity += qty;
+    } else if (log.action_type === "RETURN") {
+      itemEntry.return_quantity += qty;
+      itemEntry.net_quantity -= qty;
+      cleanerEntry.total_return_quantity += qty;
+      cleanerEntry.total_net_quantity -= qty;
+    }
+  }
+
+  const cleaners = [...cleanerSummaryMap.values()]
+    .map((cleanerEntry) => {
+      const itemList = [...cleanerEntry.items.values()]
+        .filter((item) => item.checkout_quantity > 0 || item.return_quantity > 0)
+        .sort((a, b) => String(a.item_name || "").localeCompare(String(b.item_name || "")));
+
+      return {
+        cleaner_id: cleanerEntry.cleaner_id,
+        cleaner_name: cleanerEntry.cleaner_name,
+        cleaner_role: cleanerEntry.cleaner_role,
+        total_checkout_quantity: cleanerEntry.total_checkout_quantity,
+        total_return_quantity: cleanerEntry.total_return_quantity,
+        total_net_quantity: cleanerEntry.total_net_quantity,
+        item_count: itemList.length,
+        items: itemList,
+      };
+    })
+    .sort((a, b) => String(a.cleaner_name || "").localeCompare(String(b.cleaner_name || "")));
+
+  const totalItemCount = cleaners.reduce((sum, cleaner) => sum + Number(cleaner.item_count || 0), 0);
+  const totalNetQuantity = cleaners.reduce((sum, cleaner) => sum + Number(cleaner.total_net_quantity || 0), 0);
+
+  return {
+    date: dayStart.toISOString().slice(0, 10),
+    day_start: dayStart,
+    day_end: dayEnd,
+    cleaner_count: cleaners.length,
+    total_item_count: totalItemCount,
+    total_net_quantity: totalNetQuantity,
+    cleaners,
   };
 };
 
@@ -814,7 +1104,10 @@ exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => 
   }
 
   const { dayStart, dayEnd } = buildDayRange(options.date);
-  const taskStatuses = ["ASSIGNED", "NOTIFIED", "ACCEPTED", "IN_PROGRESS"];
+  const includeDone = parseBooleanOption(options.include_done, true);
+  const taskStatuses = includeDone
+    ? ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "DONE"]
+    : ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"];
 
   const assignments = await StaffShiftAssignment.find({
     staff_id: normalizedCleanerId,
@@ -833,7 +1126,10 @@ exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => 
   const tasks = await CleaningTask.find({
     cleaner_id: normalizedCleanerId,
     status: { $in: taskStatuses },
-    estimated_start_time: { $gte: dayStart, $lte: dayEnd },
+    $or: [
+      { estimated_start_time: { $gte: dayStart, $lte: dayEnd } },
+      { due_at: { $gte: dayStart, $lte: dayEnd } },
+    ],
   })
     .select("id pod_id status shift_assignment_id")
     .lean();

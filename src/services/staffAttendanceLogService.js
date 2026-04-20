@@ -3,6 +3,8 @@ const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 
 const CHECKIN_EARLY_MINUTES = 30;
 const CHECKOUT_LATE_MINUTES = 180;
+const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
 
 const toStartOfDay = (value) => {
   const date = new Date(value);
@@ -66,7 +68,8 @@ const withTime = (baseDate, parts) => {
 const formatDateTimeVi = (value) => {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return null;
-  return date.toLocaleString("vi-VN", {
+
+  const formatOptions = {
     hour12: false,
     year: "numeric",
     month: "2-digit",
@@ -74,7 +77,17 @@ const formatDateTimeVi = (value) => {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
-  });
+    timeZone: APP_TIMEZONE,
+  };
+
+  try {
+    return date.toLocaleString(APP_LOCALE, formatOptions);
+  } catch (error) {
+    return date.toLocaleString("vi-VN", {
+      ...formatOptions,
+      timeZone: "UTC",
+    });
+  }
 };
 
 const formatDateYmd = (value) => {

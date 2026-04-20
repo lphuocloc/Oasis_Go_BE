@@ -129,6 +129,62 @@ router
 
 /**
  * @swagger
+ * /api/pod-items/pod/{pod_id}:
+ *   get:
+ *     summary: Get all items of a specific pod
+ *     tags: [Pod Items]
+ *     parameters:
+ *       - in: path
+ *         name: pod_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The ID of the pod
+ *     responses:
+ *       200:
+ *         description: Pod items retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     pod_id:
+ *                       type: string
+ *                     pod_name:
+ *                       type: string
+ *                     pod_code:
+ *                       type: string
+ *                     count:
+ *                       type: number
+ *                     items:
+ *                       type: array
+ *                       items:
+ *                         allOf:
+ *                           - $ref: '#/components/schemas/PodItem'
+ *                           - type: object
+ *                             properties:
+ *                               item_name:
+ *                                 type: string
+ *                               item:
+ *                                 type: object
+ *                               status:
+ *                                 type: string
+ *                               message:
+ *                                 type: string
+ *                               difference:
+ *                                 type: number
+ *       404:
+ *         description: Pod not found
+ */
+router.get("/pod/:pod_id", protect, podItemController.getPodItemsByPodId);
+
+/**
+ * @swagger
  * /api/pod-items/cluster/bulk:
  *   post:
  *     summary: Assign selected items to all pods in a pod cluster
