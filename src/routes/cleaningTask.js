@@ -53,7 +53,7 @@ const {
  *         name: request_source
  *         schema:
  *           type: string
- *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *       - in: query
  *         name: due_from
  *         schema:
@@ -153,7 +153,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *         name: request_source
  *         schema:
  *           type: string
- *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *       - in: query
  *         name: due_from
  *         schema:
@@ -351,7 +351,7 @@ router.post("/backfill", protect, authorize("admin", "manager"), backfillCleanin
  *                           properties:
  *                             request_source:
  *                               type: string
- *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *                             estimated_start_time:
  *                               type: string
  *                               format: date-time
@@ -471,7 +471,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *                 description: Optional shift assignment ID
  *               request_source:
  *                 type: string
- *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *                 description: Request source
  *               estimated_start_time:
  *                 type: string
@@ -526,7 +526,7 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *                 type: string
  *               request_source:
  *                 type: string
- *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY]
+ *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
  *               estimated_start_time:
  *                 type: string
  *                 format: date-time

@@ -506,8 +506,8 @@ class StaffShiftAssignmentService {
       }
 
       await notificationService.sendToUser(cleaner._id, {
-        title: `Nhac gio vao ca ${shift?.shift_name || ""}`,
-        message: `Ca lam viec ${shift?.shift_name || ""} cua ban bat dau sau 30 phut. Dung quen Check-in!`,
+        title: `Nhắc giờ vào ca ${shift?.shift_name || ""}`,
+        message: `Ca làm việc ${shift?.shift_name || ""} của bạn bắt đầu sau 30 phút. Đừng quên Check-in!`,
         type: "SHIFT",
         event_code: "SHIFT_START_REMINDER",
         dedupe_key: `SHIFT_START_REMINDER:${assignment.id}:${shiftStart.toISOString().slice(0, 16)}`,

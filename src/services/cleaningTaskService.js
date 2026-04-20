@@ -38,7 +38,7 @@ const CLEANING_TASK_STATUSES = [
   "MISSED",
 ];
 
-const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY"];
+const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY", "ROOM_CHANGE_VACATED"];
 const ACTIVE_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"];
 const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const REFUND_TRIGGER_TERMINAL_STATUSES = ["DONE", "CANCELLED", "MISSED"];
@@ -48,7 +48,7 @@ const CLEANER_POST_CHECKOUT_WINDOW_MINUTES = 30;
 const CHECKIN_EARLY_WINDOW_MINUTES = readEnvMinutes("BOOKING_CHECKIN_EARLY_WINDOW_MINUTES", 15, 0);
 const CHECKIN_EARLY_WINDOW_MS = CHECKIN_EARLY_WINDOW_MINUTES * 60 * 1000;
 const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
-const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Ho_Chi_Minh";
 
 const resolveOrderForTaskBooking = async (bookingId, session = null) => {
   if (!bookingId) return null;
@@ -586,7 +586,7 @@ const formatDateTimeVi = (value) => {
   } catch (error) {
     return date.toLocaleString("vi-VN", {
       ...formatOptions,
-      timeZone: "UTC",
+      timeZone: "Asia/Ho_Chi_Minh",
     });
   }
 };
@@ -1032,36 +1032,43 @@ const cancelCleaningTasksForCancelledBookings = async (bookingIds) => {
 
     const { podCode } = await resolvePodContext(task.pod_id);
 
-    await notificationService.sendToUser(cleanerUserId, {
-      title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
-      message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
-      type: "CLEANING",
-      event_code: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
-      dedupe_key: `CLEANING_TASK_CANCELLED_BOOKING_CANCELLED:${String(task.id)}:${cleanerUserId}`,
-      data: {
-        cleaning_task_id: String(task.id),
-        booking_id: String(task.booking_id),
-        pod_id: String(task.pod_id || ""),
-        pod_code: podCode,
-        cancelled_reason: "BOOKING_CANCELLED",
-      },
-    });
-
-    emitCleanerNotificationEvent({
-      user_id: cleanerUserId,
-      notification: {
-        event: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
-        payload: {
+    try {
+      await notificationService.sendToUser(cleanerUserId, {
+        title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+        message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
+        type: "CLEANING",
+        event_code: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
+        dedupe_key: `CLEANING_TASK_CANCELLED_BOOKING_CANCELLED:${String(task.id)}:${cleanerUserId}`,
+        data: {
           cleaning_task_id: String(task.id),
           booking_id: String(task.booking_id),
           pod_id: String(task.pod_id || ""),
           pod_code: podCode,
           cancelled_reason: "BOOKING_CANCELLED",
-          title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
-          message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
         },
-      },
-    });
+      });
+
+      emitCleanerNotificationEvent({
+        user_id: cleanerUserId,
+        notification: {
+          event: "CLEANING_TASK_CANCELLED_BOOKING_CANCELLED",
+          payload: {
+            cleaning_task_id: String(task.id),
+            booking_id: String(task.booking_id),
+            pod_id: String(task.pod_id || ""),
+            pod_code: podCode,
+            cancelled_reason: "BOOKING_CANCELLED",
+            title: `Nhiệm vụ đã hủy: Pod ${podCode}`,
+            message: `Nhiệm vụ vệ sinh Pod ${podCode} đã được hủy vì đặt phòng bị hủy.`,
+          },
+        },
+      });
+    } catch (error) {
+      console.error(
+        `[cancelCleaningTasksForCancelledBookings] Failed to notify cleaner for task ${String(task.id)}:`,
+        error.message || error
+      );
+    }
   }
 
   return cancelledCount;
