@@ -420,23 +420,23 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
 
       const notificationConfig = {
         CHECKOUT: {
-          title: "Xac nhan xuat kho",
-          message: `Ban da xuat ${normalizedQuantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+          title: "Xác nhận xuất kho",
+          message: `Bạn đã xuất ${normalizedQuantity} ${item?.name || "vật tư"} từ kho ${warehouse?.name || "Unknown"}.`,
           event_code: "INVENTORY_CHECKOUT_CONFIRMED",
         },
         RETURN: {
-          title: "Xac nhan hoan kho",
-          message: `Ban da tra lai ${normalizedQuantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
+          title: "Xác nhận hoàn kho",
+          message: `Bạn đã trả lại ${normalizedQuantity} ${item?.name || "vật tư"} vào kho ${warehouse?.name || "Unknown"}.`,
           event_code: "INVENTORY_RETURN_CONFIRMED",
         },
         CONSUMED: {
-          title: "Xac nhan tieu hao",
-          message: `Ban da ghi nhan tieu hao ${normalizedQuantity} ${item?.name || "vat tu"}.`,
+          title: "Xác nhận tiêu hao",
+          message: `Bạn đã ghi nhận tiêu hao ${normalizedQuantity} ${item?.name || "vật tư"}.`,
           event_code: "INVENTORY_CONSUMED_CONFIRMED",
         },
         WASTE: {
-          title: "Xac nhan bao hong",
-          message: `Ban da bao ${normalizedQuantity} ${item?.name || "vat tu"} bi hong/that thoat.`,
+          title: "Xác nhận báo hỏng",
+          message: `Bạn đã báo ${normalizedQuantity} ${item?.name || "vật tư"} bị hỏng/thất thoát.`,
           event_code: "INVENTORY_WASTE_CONFIRMED",
         },
       }[normalizedActionType];
@@ -583,23 +583,23 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
 
         const notificationConfig = {
           CHECKOUT: {
-            title: "Xac nhan xuat kho",
-            message: `Ban da xuat ${draft.quantity} ${item?.name || "vat tu"} tu kho ${warehouse?.name || "Unknown"}.`,
+            title: "Xác nhận xuất kho",
+            message: `Bạn đã xuất ${draft.quantity} ${item?.name || "vật tư"} từ kho ${warehouse?.name || "Unknown"}.`,
             event_code: "INVENTORY_CHECKOUT_CONFIRMED",
           },
           RETURN: {
-            title: "Xac nhan hoan kho",
-            message: `Ban da tra lai ${draft.quantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
+            title: "Xác nhận hoàn kho",
+            message: `Bạn đã trả lại ${draft.quantity} ${item?.name || "vật tư"} vào kho ${warehouse?.name || "Unknown"}.`,
             event_code: "INVENTORY_RETURN_CONFIRMED",
           },
           CONSUMED: {
-            title: "Xac nhan tieu hao",
-            message: `Ban da ghi nhan tieu hao ${draft.quantity} ${item?.name || "vat tu"}.`,
+            title: "Xác nhận tiêu hao",
+            message: `Bạn đã ghi nhận tiêu hao ${draft.quantity} ${item?.name || "vật tư"}.`,
             event_code: "INVENTORY_CONSUMED_CONFIRMED",
           },
           WASTE: {
-            title: "Xac nhan bao hong",
-            message: `Ban da bao ${draft.quantity} ${item?.name || "vat tu"} bi hong/that thoat.`,
+            title: "Xác nhận báo hỏng",
+            message: `Bạn đã báo ${draft.quantity} ${item?.name || "vật tư"} bị hỏng/thất thoát.`,
             event_code: "INVENTORY_WASTE_CONFIRMED",
           },
         }[draft.actionType];

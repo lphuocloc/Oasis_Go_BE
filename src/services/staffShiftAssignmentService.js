@@ -4,6 +4,7 @@ const Location = require("../models/Location");
 const StaffShift = require("../models/StaffShift");
 const User = require("../models/User");
 const mongoose = require("mongoose");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const notificationService = require("./notificationService");
 
 const toDateRangeText = (startDate, endDate) => {
@@ -506,8 +507,8 @@ class StaffShiftAssignmentService {
       }
 
       await notificationService.sendToUser(cleaner._id, {
-        title: `Nhac gio vao ca ${shift?.shift_name || ""}`,
-        message: `Ca lam viec ${shift?.shift_name || ""} cua ban bat dau sau 30 phut. Dung quen Check-in!`,
+        title: `Nhắc giờ vào ca ${shift?.shift_name || ""}`,
+        message: `Ca làm việc ${shift?.shift_name || ""} của bạn bắt đầu sau 30 phút. Đừng quên Check-in!`,
         type: "SHIFT",
         event_code: "SHIFT_START_REMINDER",
         dedupe_key: `SHIFT_START_REMINDER:${assignment.id}:${shiftStart.toISOString().slice(0, 16)}`,
@@ -553,8 +554,87 @@ class StaffShiftAssignmentService {
     runReminders().catch(() => null);
     setInterval(runReminders, safeIntervalMinutes * 60 * 1000);
   }
+  async generateAssignments(data) {
+    const { staff_id, start_date, end_date } = data;
 
+    if (!start_date || !end_date) {
+      const error = new Error("start_date and end_date are required for generation");
+      error.statusCode = 400;
+      throw error;
+    }
 
+    const { startDate, endDate } = this.normalizeDateRange(start_date, end_date);
+    
+    // Find all rosters fitting criteria
+    const rosterQuery = {};
+    if (staff_id) rosterQuery.staff_id = staff_id;
+    const rosters = await StaffWorkRoster.find(rosterQuery).lean();
+
+    if (rosters.length === 0) {
+      return { created: 0, message: "No rosters found to generate assignments from." };
+    }
+
+    // Prepare batch operations
+    const bulkOps = [];
+    const loopDate = new Date(startDate);
+    let createdCount = 0;
+
+    // Cache to prevent recreating existing overlaps on the same day
+    const existingAssignments = await StaffShiftAssignment.find({
+      start_date: { $gte: startDate, $lte: endDate }
+    }).select("staff_id location_shift_id start_date").lean();
+
+    const existingSet = new Set(
+      existingAssignments.map(a => `${a.staff_id}_${a.location_shift_id}_${a.start_date.toISOString().split('T')[0]}`)
+    );
+
+    // To get start_time, end_time we need loc_shifts -> shifts
+    const locShiftIds = [...new Set(rosters.map(r => r.location_shift_id))];
+    const locShifts = await LocationShift.find({ id: { $in: locShiftIds } }).lean();
+    const shiftIds = [...new Set(locShifts.map(ls => ls.shift_id))];
+    const rawShifts = await StaffShift.find({ id: { $in: shiftIds } }).lean();
+    const shiftMap = new Map(rawShifts.map(s => [s.id, s]));
+    const locShiftMap = new Map(locShifts.map(ls => [ls.id, { ...ls, shift: shiftMap.get(ls.shift_id) }]));
+
+    while (loopDate <= endDate) {
+      const dayOfWeek = loopDate.getDay();
+      const loopDateStr = loopDate.toISOString().split('T')[0];
+
+      for (const roster of rosters) {
+        if (roster.day_of_week === dayOfWeek) {
+          const key = `${roster.staff_id}_${roster.location_shift_id}_${loopDateStr}`;
+          if (!existingSet.has(key)) {
+            const locShiftInfo = locShiftMap.get(roster.location_shift_id);
+            if (locShiftInfo && locShiftInfo.shift) {
+              bulkOps.push({
+                insertOne: {
+                  document: {
+                    id: require("uuid").v4(),
+                    staff_id: roster.staff_id,
+                    location_shift_id: roster.location_shift_id,
+                    start_date: new Date(loopDate),
+                    end_date: new Date(loopDate),
+                    start_time: locShiftInfo.shift.start_time,
+                    end_time: locShiftInfo.shift.end_time,
+                    status: "ASSIGNED",
+                  }
+                }
+              });
+              existingSet.add(key);
+              createdCount++;
+            }
+          }
+        }
+      }
+      loopDate.setDate(loopDate.getDate() + 1);
+    }
+
+    if (bulkOps.length > 0) {
+      await StaffShiftAssignment.bulkWrite(bulkOps);
+    }
+
+    return { created: createdCount, message: `Successfully generated ${createdCount} assignment(s).` };
+  }
 
   async findUserById(staffId) {
     const userQuery = { $or: [{ id: staffId }] };
