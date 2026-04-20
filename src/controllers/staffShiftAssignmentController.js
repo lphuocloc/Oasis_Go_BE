@@ -170,7 +170,20 @@ const deleteAssignment = async (req, res) => {
   }
 };
 
-
+const generateAssignments = async (req, res) => {
+  try {
+    const result = await staffShiftAssignmentService.generateAssignments(req.body);
+    res.status(200).json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to generate assignments",
+    });
+  }
+};
 
 module.exports = {
   getMyAssignments,
@@ -179,4 +192,5 @@ module.exports = {
   getAssignmentById,
   updateAssignment,
   deleteAssignment,
+  generateAssignments,
 };

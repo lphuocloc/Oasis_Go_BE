@@ -111,6 +111,41 @@ router.post(
 
 /**
  * @swagger
+ * /api/staff-shift-assignments/generate:
+ *   post:
+ *     summary: Generate shift assignments from rosters
+ *     tags: [Staff Assignments]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               staff_id:
+ *                 type: string
+ *               start_date:
+ *                 type: string
+ *                 format: date
+ *               end_date:
+ *                 type: string
+ *                 format: date
+ *     responses:
+ *       200:
+ *         description: Assignments generated
+ */
+router.post(
+	"/generate",
+	authMiddleware.protect,
+	authMiddleware.authorize("admin", "manager"),
+	loadManagerScope,
+	staffShiftAssignmentController.generateAssignments
+);
+
+/**
+ * @swagger
  * /api/staff-shift-assignments:
  *   get:
  *     summary: Get all shift assignments

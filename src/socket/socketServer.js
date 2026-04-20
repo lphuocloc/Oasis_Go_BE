@@ -281,6 +281,7 @@ const initSocketServer = (httpServer) => {
         let registeredDeviceId = null;
         let registeredPodId = null;
         let registeredCleanerId = null;
+        let registeredUserId = null;
         let authenticatedUser = null;
 
         const registerDevice = async ({ device_id, pod_id } = {}) => {
@@ -465,6 +466,14 @@ const initSocketServer = (httpServer) => {
 
 const getSocketServer = () => ioInstance;
 
+const emitDashboardRefreshEvent = () => {
+    if (!ioInstance) return;
+    ioInstance.emit("dashboard:refresh", {
+        type: "SYSTEM_REFRESH",
+        timestamp: new Date().toISOString()
+    });
+};
+
 module.exports = {
     initSocketServer,
     getSocketServer,
@@ -473,4 +482,5 @@ module.exports = {
     emitPodCheckinConfirmed,
     emitCleanerNotificationEvent,
     emitUserNotificationEvent,
+    emitDashboardRefreshEvent,
 };

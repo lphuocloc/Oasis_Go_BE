@@ -239,7 +239,7 @@ class SupportRequestService {
     const relatedClusters = await PodCluster.find({
       location_id: { $in: allowedLocationIds.map((item) => String(item)) },
     })
-      .select("id location_id")
+      .select("id name location_id")
       .lean();
 
     const sameClusterIds = new Set([String(currentCluster.id)]);
@@ -249,8 +249,6 @@ class SupportRequestService {
     const scopedPodIds = new Set(((managerScope && managerScope.podIds) || []).map((item) => String(item)));
     const podQuery = {
       cluster_id: { $in: candidateClusterIds },
-      status: "AVAILABLE",
-      id: { $ne: String(currentPod.id) },
     };
 
     const rawPods = await Pod.find(podQuery).select("id code name cluster_id status type").lean();
@@ -265,6 +263,7 @@ class SupportRequestService {
     const clusterById = new Map(relatedClusters.map((item) => [String(item.id), item]));
     clusterById.set(String(currentCluster.id), {
       id: String(currentCluster.id),
+      name: currentCluster.name,
       location_id: String(currentCluster.location_id),
     });
 
@@ -282,32 +281,41 @@ class SupportRequestService {
       });
 
       const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
-      if (remainingStart >= bufferedEnd) {
-        return null; // Time exhausted
+      let isSelectable = true;
+
+      if (pod.status !== "AVAILABLE" || String(pod.id) === String(currentPod.id)) {
+        isSelectable = false;
       }
 
-      const isBookingAvailable = await Booking.isPodAvailable(
-        pod.id,
-        remainingStart,
-        bufferedEnd,
-        booking.id
-      );
-
-      if (!isBookingAvailable) {
-        return null;
+      if (isSelectable && remainingStart >= bufferedEnd) {
+        isSelectable = false; // Time exhausted
       }
 
-      const conflictingTimeSlot = await TimeSlot.findOne({
-        pod_id: pod.id,
-        status: "RESERVED",
-        start_time: { $lt: bufferedEnd },
-        end_time: { $gt: remainingStart },
-      })
-        .select("id")
-        .lean();
+      if (isSelectable) {
+        const isBookingAvailable = await Booking.isPodAvailable(
+          pod.id,
+          remainingStart,
+          bufferedEnd,
+          booking.id
+        );
+        if (!isBookingAvailable) {
+          isSelectable = false;
+        }
+      }
 
-      if (conflictingTimeSlot) {
-        return null;
+      if (isSelectable) {
+        const conflictingTimeSlot = await TimeSlot.findOne({
+          pod_id: pod.id,
+          status: "RESERVED",
+          start_time: { $lt: bufferedEnd },
+          end_time: { $gt: remainingStart },
+        })
+          .select("id")
+          .lean();
+
+        if (conflictingTimeSlot) {
+          isSelectable = false;
+        }
       }
 
       return {
@@ -315,12 +323,15 @@ class SupportRequestService {
         pod_code: pod.code,
         pod_name: pod.name,
         cluster_id: String(pod.cluster_id),
+        cluster_name: podCluster.name || "Khác",
         location_id: String(podCluster.location_id),
         scope_level: String(pod.cluster_id) === String(currentCluster.id) ? "SAME_CLUSTER" : "SAME_PARENT_LOCATION",
         type: pod.type || "STANDARD",
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
+        is_selectable: isSelectable,
+        status: pod.status
       };
     });
 
@@ -426,8 +437,8 @@ class SupportRequestService {
       cleaners.map((cleaner) => {
         const cleanerId = cleaner.id || cleaner._id;
         return notificationService.sendToUser(cleanerId, {
-          title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
-          message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+          title: `Yêu cầu vệ sinh đột xuất - Pod ${podCode}`,
+          message: `Khách hàng tại Pod ${podCode} yêu cầu vệ sinh đột xuất. Lý do: ${description}`,
           type: "SUPPORT",
           event_code: "SUPPORT_CLEANING_REQUEST",
           dedupe_key: `SUPPORT_CLEANING_REQUEST:${supportRequest.id}:${String(cleanerId)}`,
@@ -456,8 +467,8 @@ class SupportRequestService {
             pod_id: booking.pod_id,
             pod_code: podCode,
             description,
-            title: `Yeu cau ve sinh dot xuat - Pod ${podCode}`,
-            message: `Khach hang tai Pod ${podCode} yeu cau ve sinh dot xuat. Ly do: ${description}`,
+            title: `Yêu cầu vệ sinh đột xuất - Pod ${podCode}`,
+            message: `Khách hàng tại Pod ${podCode} yêu cầu vệ sinh đột xuất. Lý do: ${description}`,
           },
         },
       });
@@ -467,57 +478,78 @@ class SupportRequestService {
   async _notifyManagersForSupportRequest(supportRequest, podCode) {
     if (!supportRequest || !supportRequest.location_id) return;
 
-    const locationShifts = await LocationShift.find({ location_id: String(supportRequest.location_id) }).select("id shift_id").lean();
-    if (!locationShifts.length) return;
+    let managerUserIds = [];
 
-    const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
-    const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
-      .select("id")
-      .lean()
-      .then((rows) => rows.map((row) => String(row.id)));
+    try {
+      const locationShifts = await LocationShift.find({ location_id: String(supportRequest.location_id) }).select("id shift_id").lean();
+      if (locationShifts.length > 0) {
+        const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
+        const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
+          .select("id")
+          .lean()
+          .then((rows) => rows.map((row) => String(row.id)));
 
-    if (!managerShiftIds.length) return;
+        if (managerShiftIds.length > 0) {
+          const managerLocationShiftIds = locationShifts
+            .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
+            .map((entry) => String(entry.id));
 
-    const managerLocationShiftIds = locationShifts
-      .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
-      .map((entry) => String(entry.id));
+          if (managerLocationShiftIds.length > 0) {
+            const now = new Date();
+            const startOfDay = new Date(now);
+            startOfDay.setHours(0, 0, 0, 0);
+            const endOfDay = new Date(now);
+            endOfDay.setHours(23, 59, 59, 999);
 
-    if (!managerLocationShiftIds.length) return;
+            const assignments = await StaffShiftAssignment.find({
+              location_shift_id: { $in: managerLocationShiftIds },
+              status: { $in: ["CHECKED_IN", "ASSIGNED"] },
+              start_date: { $lte: endOfDay },
+              end_date: { $gte: startOfDay },
+            })
+              .select("staff_id")
+              .lean();
 
-    const now = new Date();
-    const assignments = await StaffShiftAssignment.find({
-      location_shift_id: { $in: managerLocationShiftIds },
-      status: "ASSIGNED",
-      start_date: { $lte: now },
-      end_date: { $gte: now },
-    })
-      .select("staff_id")
-      .lean();
+            const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
 
-    const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-    if (!assignmentStaffIds.length) return;
+            if (assignmentStaffIds.length > 0) {
+              const assignmentObjectIds = assignmentStaffIds
+                .filter((id) => mongoose.Types.ObjectId.isValid(id))
+                .map((id) => new mongoose.Types.ObjectId(id));
 
-    const assignmentObjectIds = assignmentStaffIds
-      .filter((id) => mongoose.Types.ObjectId.isValid(id))
-      .map((id) => new mongoose.Types.ObjectId(id));
+              const managers = await User.find({
+                role: "manager",
+                isActive: true,
+                $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+              })
+                .select("_id")
+                .lean();
 
-    const managers = await User.find({
-      role: "manager",
-      isActive: true,
-      $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
-    })
-      .select("_id")
-      .lean();
+              managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error("Error finding manager by shifts:", err);
+    }
 
-    const managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
+    // Fallback if no specific manager on duty is found
+    if (!managerUserIds || managerUserIds.length === 0) {
+      const allManagers = await User.find({ role: "manager", isActive: true }).select("_id").lean();
+      managerUserIds = [...new Set(allManagers.map((manager) => String(manager._id || "")).filter(Boolean))];
+    }
 
-    const typeLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "ve sinh" : "ho tro";
+    if (!managerUserIds.length) return; // Still no managers found in system
+
+    const typeLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "vệ sinh" : "hỗ trợ";
+    const titleLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "Yêu Cầu Vệ Sinh" : "Yêu Cầu Hỗ Trợ";
     
     await Promise.all(
       managerUserIds.map((managerUserId) =>
         notificationService.sendToUser(managerUserId, {
-          title: `Co yeu cau ${typeLabel} doc lap moi`,
-          message: `Khach hang tai Pod ${podCode || 'Khong ro'} vua gui yeu cau ${typeLabel}. Vui long kiem tra.`,
+          title: titleLabel,
+          message: `Khách hàng tại Pod ${podCode || 'Không rõ'} vừa gửi yêu cầu ${typeLabel}, vui lòng kiểm tra.`,
           type: "SUPPORT",
           event_code: "SUPPORT_REQUEST_CREATED",
           dedupe_key: `SUPPORT_REQUEST_CREATED:${supportRequest.id}:${managerUserId}`,
@@ -594,7 +626,7 @@ class SupportRequestService {
     }
 
 
-    const pod = await Pod.findOne({ id: booking.pod_id }).select("id cluster_id");
+    const pod = await Pod.findOne({ id: booking.pod_id }).select("id cluster_id code name");
     if (!pod) {
       throw createError("Pod not found for this booking", 404);
     }
@@ -843,7 +875,7 @@ class SupportRequestService {
       throw createError("Current booking pod not found", 404);
     }
 
-    const resolvedCurrentCluster = await PodCluster.findOne({ id: currentPod.cluster_id }).select("id location_id");
+    const resolvedCurrentCluster = await PodCluster.findOne({ id: currentPod.cluster_id }).select("id name location_id");
     if (!resolvedCurrentCluster) {
       throw createError("Current pod cluster not found", 404);
     }

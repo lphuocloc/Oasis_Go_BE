@@ -659,7 +659,7 @@ const resolveManagersForPod = async (podId) => {
   const now = new Date();
   const assignments = await StaffShiftAssignment.find({
     location_shift_id: { $in: managerLocationShiftIds },
-    status: "ASSIGNED",
+    status: { $in: ["ASSIGNED", "CHECKED_IN"] },
     start_date: { $lte: now },
     end_date: { $gte: now },
   })
@@ -667,7 +667,13 @@ const resolveManagersForPod = async (podId) => {
     .lean();
 
   const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-  if (!assignmentStaffIds.length) return [];
+  
+  if (!assignmentStaffIds.length) {
+    const allManagers = await User.find({ role: "manager", isActive: true })
+      .select("_id")
+      .lean();
+    return [...new Set(allManagers.map((m) => String(m._id || "")).filter(Boolean))];
+  }
 
   const assignmentObjectIds = assignmentStaffIds
     .filter((id) => mongoose.Types.ObjectId.isValid(id))

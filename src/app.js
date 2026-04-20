@@ -161,6 +161,25 @@ app.use(express.urlencoded({ extended: false }));
 app.use(cookieParser());
 app.use(express.static(path.join(__dirname, "../public")));
 
+const { emitDashboardRefreshEvent } = require("./socket/socketServer");
+app.use((req, res, next) => {
+  const method = req.method;
+  if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+    res.on("finish", () => {
+      if (res.statusCode >= 200 && res.statusCode < 300) {
+        try {
+          if (typeof emitDashboardRefreshEvent === "function") {
+            emitDashboardRefreshEvent();
+          }
+        } catch (error) {
+          console.error("Failed to emit dashboard refresh event", error);
+        }
+      }
+    });
+  }
+  next();
+});
+
 // Routes
 app.use("/api/auth", authRouter);
 app.use("/api/vnpay", vnpayRouter);
