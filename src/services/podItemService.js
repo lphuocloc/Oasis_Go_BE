@@ -332,13 +332,14 @@ class PodItemService {
     const enrichedItems = await Promise.all(
       podItems.map(async (podItem) => {
         const item = await Item.findOne({ id: podItem.item_id })
-          .select("id name unit_price")
+          .select("id name item_type unit_price")
           .lean();
         const statusInfo = calculateStatus(podItem.expected_quantity, podItem.current_quantity);
 
         return {
           ...podItem,
           item_name: item ? item.name : null,
+          item_type: item ? item.item_type : null,
           item: item || null,
           ...statusInfo,
         };
