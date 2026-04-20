@@ -891,15 +891,16 @@ exports.getCleanerDailyActivityLogs = async (cleanerId, actor = null, options = 
         return_quantity: 0,
         consumed_quantity: 0,
         waste_quantity: 0,
+        net_quantity: 0,
         log_count: 0,
       });
     }
     const entry = summaryByItem.get(itemId);
     const qty = Number(log.quantity || 0);
-    if (log.action_type === "CHECKOUT") entry.checkout_quantity += qty;
-    else if (log.action_type === "RETURN") entry.return_quantity += qty;
-    else if (log.action_type === "CONSUMED") entry.consumed_quantity += qty;
-    else if (log.action_type === "WASTE") entry.waste_quantity += qty;
+    if (log.action_type === "CHECKOUT") { entry.checkout_quantity += qty; entry.net_quantity += qty; }
+    else if (log.action_type === "RETURN") { entry.return_quantity += qty; entry.net_quantity -= qty; }
+    else if (log.action_type === "CONSUMED") { entry.consumed_quantity += qty; entry.net_quantity -= qty; }
+    else if (log.action_type === "WASTE") { entry.waste_quantity += qty; entry.net_quantity -= qty; }
     entry.log_count += 1;
   }
 
@@ -938,7 +939,7 @@ exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
   }
 
   const filter = {
-    action_type: { $in: ["CHECKOUT", "RETURN"] },
+    action_type: { $in: ["CHECKOUT", "RETURN", "CONSUMED", "WASTE"] },
     created_at: { $gte: dayStart, $lte: dayEnd },
   };
   if (targetCleanerId) {
@@ -1010,6 +1011,8 @@ exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
         cleaner_role: cleanerMeta.cleaner_role,
         total_checkout_quantity: 0,
         total_return_quantity: 0,
+        total_consumed_quantity: 0,
+        total_waste_quantity: 0,
         total_net_quantity: 0,
         item_count: 0,
         items: new Map(),
@@ -1028,6 +1031,8 @@ exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
         item_name: itemMeta?.name || null,
         checkout_quantity: 0,
         return_quantity: 0,
+        consumed_quantity: 0,
+        waste_quantity: 0,
         net_quantity: 0,
       });
     }
@@ -1046,13 +1051,23 @@ exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
       itemEntry.net_quantity -= qty;
       cleanerEntry.total_return_quantity += qty;
       cleanerEntry.total_net_quantity -= qty;
+    } else if (log.action_type === "CONSUMED") {
+      itemEntry.consumed_quantity += qty;
+      itemEntry.net_quantity -= qty;
+      cleanerEntry.total_consumed_quantity += qty;
+      cleanerEntry.total_net_quantity -= qty;
+    } else if (log.action_type === "WASTE") {
+      itemEntry.waste_quantity += qty;
+      itemEntry.net_quantity -= qty;
+      cleanerEntry.total_waste_quantity += qty;
+      cleanerEntry.total_net_quantity -= qty;
     }
   }
 
   const cleaners = [...cleanerSummaryMap.values()]
     .map((cleanerEntry) => {
       const itemList = [...cleanerEntry.items.values()]
-        .filter((item) => item.checkout_quantity > 0 || item.return_quantity > 0)
+        .filter((item) => item.checkout_quantity > 0 || item.return_quantity > 0 || item.consumed_quantity > 0 || item.waste_quantity > 0)
         .sort((a, b) => String(a.item_name || "").localeCompare(String(b.item_name || "")));
 
       return {
@@ -1061,6 +1076,8 @@ exports.getDailyTakenItemsSummary = async (actor = null, options = {}) => {
         cleaner_role: cleanerEntry.cleaner_role,
         total_checkout_quantity: cleanerEntry.total_checkout_quantity,
         total_return_quantity: cleanerEntry.total_return_quantity,
+        total_consumed_quantity: cleanerEntry.total_consumed_quantity,
+        total_waste_quantity: cleanerEntry.total_waste_quantity,
         total_net_quantity: cleanerEntry.total_net_quantity,
         item_count: itemList.length,
         items: itemList,
