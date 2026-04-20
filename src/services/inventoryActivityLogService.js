@@ -166,7 +166,7 @@ const normalizeQuantityByActionType = (actionType, value) => {
 
 const getStockDelta = (actionType, quantity) => {
   if (actionType === "RETURN") return quantity;
-  if (actionType === "CHECKOUT" || actionType === "WASTE") return -quantity;
+  if (actionType === "CHECKOUT" || actionType === "CONSUMED" || actionType === "WASTE") return -quantity;
   if (actionType === "INITIAL" || actionType === "ADJUSTMENT") return 0;
   throw createError("Invalid action_type", 400);
 };
@@ -411,7 +411,7 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
 
     await session.commitTransaction();
 
-    const notifyActionTypes = ["CHECKOUT", "RETURN", "WASTE"];
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "CONSUMED", "WASTE"];
     if (String(staff.role || "").toLowerCase() === "cleaner" && notifyActionTypes.includes(normalizedActionType)) {
       const [item, warehouse] = await Promise.all([
         Item.findOne({ id: stock.item_id }).select("id name").lean(),
@@ -428,6 +428,11 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
           title: "Xac nhan hoan kho",
           message: `Ban da tra lai ${normalizedQuantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
           event_code: "INVENTORY_RETURN_CONFIRMED",
+        },
+        CONSUMED: {
+          title: "Xac nhan tieu hao",
+          message: `Ban da ghi nhan tieu hao ${normalizedQuantity} ${item?.name || "vat tu"}.`,
+          event_code: "INVENTORY_CONSUMED_CONFIRMED",
         },
         WASTE: {
           title: "Xac nhan bao hong",
@@ -566,7 +571,7 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
 
     await session.commitTransaction();
 
-    const notifyActionTypes = ["CHECKOUT", "RETURN", "WASTE"];
+    const notifyActionTypes = ["CHECKOUT", "RETURN", "CONSUMED", "WASTE"];
     if (String(staff.role || "").toLowerCase() === "cleaner") {
       for (const draft of notificationDrafts) {
         if (!notifyActionTypes.includes(draft.actionType)) continue;
@@ -586,6 +591,11 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
             title: "Xac nhan hoan kho",
             message: `Ban da tra lai ${draft.quantity} ${item?.name || "vat tu"} vao kho ${warehouse?.name || "Unknown"}.`,
             event_code: "INVENTORY_RETURN_CONFIRMED",
+          },
+          CONSUMED: {
+            title: "Xac nhan tieu hao",
+            message: `Ban da ghi nhan tieu hao ${draft.quantity} ${item?.name || "vat tu"}.`,
+            event_code: "INVENTORY_CONSUMED_CONFIRMED",
           },
           WASTE: {
             title: "Xac nhan bao hong",
@@ -879,6 +889,7 @@ exports.getCleanerDailyActivityLogs = async (cleanerId, actor = null, options = 
         item_name: log.item_name,
         checkout_quantity: 0,
         return_quantity: 0,
+        consumed_quantity: 0,
         waste_quantity: 0,
         log_count: 0,
       });
@@ -887,6 +898,7 @@ exports.getCleanerDailyActivityLogs = async (cleanerId, actor = null, options = 
     const qty = Number(log.quantity || 0);
     if (log.action_type === "CHECKOUT") entry.checkout_quantity += qty;
     else if (log.action_type === "RETURN") entry.return_quantity += qty;
+    else if (log.action_type === "CONSUMED") entry.consumed_quantity += qty;
     else if (log.action_type === "WASTE") entry.waste_quantity += qty;
     entry.log_count += 1;
   }

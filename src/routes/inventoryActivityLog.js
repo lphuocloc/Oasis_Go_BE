@@ -17,7 +17,7 @@ const {
  * @swagger
  * tags:
  *   name: Inventory Activity Logs
- *   description: Track inventory item checkout, return, and waste actions
+ *   description: Track inventory item checkout, return, consumed, and waste actions
  */
 
 /**
@@ -50,7 +50,7 @@ const {
  *           example: 2
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *           enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *           example: CHECKOUT
  *         reason:
  *           type: string
@@ -88,7 +88,7 @@ const {
  *                 description: Used for ownership/permission guard only, not persisted
  *               action_type:
  *                 type: string
- *                 enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *                 enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *                 default: CHECKOUT
  *               quantity:
  *                 type: number
@@ -135,7 +135,7 @@ const {
  *           example: 1
  *         action_type:
  *           type: string
- *           enum: [CHECKOUT, RETURN, WASTE, INITIAL, ADJUSTMENT]
+ *           enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
  *           example: RETURN
  *         reason:
  *           type: string
