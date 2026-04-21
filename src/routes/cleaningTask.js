@@ -11,7 +11,6 @@ const {
   updateCleaningTask,
   deleteCleaningTask,
   backfillCleaningTasks,
-  debugAutoAssignForBooking,
 } = require("../controllers/cleaningTaskController");
 
 /**
@@ -305,75 +304,6 @@ router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleani
  *                             example: ALREADY_BACKFILLED
  */
 router.post("/backfill", protect, authorize("admin", "manager"), backfillCleaningTasks);
-
-/**
- * @swagger
- * /api/cleaning-tasks/debug/auto-assign/{bookingId}:
- *   get:
- *     summary: Diagnose auto-assignment pipeline for a booking (dry-run, no data mutation)
- *     tags: [Cleaning Tasks]
- *     security:
- *       - bearerAuth: []
- *     description: |
- *       Returns diagnostic information for auto-assignment without creating/updating records.
- *       Current business rules reflected in diagnostics:
- *       - One booking can have many cleaning tasks.
- *       - For cleaner-access triggers (SET_CLEANER_ACCESS_TRUE, BOOKING_UPDATED_CLEANER_ACCESS_TRUE),
- *         request_source becomes USER_REQUEST only when booking.status is IN_USE and checkin_state is not NO_SHOW.
- *       - If booking checkin_state is NO_SHOW, no new task is created.
- *         In real execution (not dry-run), open tasks for that booking are moved to CANCELLED.
- *     parameters:
- *       - in: path
- *         name: bookingId
- *         required: true
- *         schema:
- *           type: string
- *       - in: query
- *         name: trigger
- *         schema:
- *           type: string
- *         description: Optional trigger label for diagnostic context
- *     responses:
- *       200:
- *         description: Diagnostic result generated successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   type: object
- *                   properties:
- *                     auto_assign_diagnostic:
- *                       type: object
- *                       properties:
- *                         reason:
- *                           type: string
- *                           example: DRY_RUN_ELIGIBLE
- *                         preview:
- *                           type: object
- *                           properties:
- *                             request_source:
- *                               type: string
- *                               enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
- *                             estimated_start_time:
- *                               type: string
- *                               format: date-time
- *                             due_at:
- *                               type: string
- *                               format: date-time
- *                             status:
- *                               type: string
- *                               enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
- */
-router.get(
-  "/debug/auto-assign/:bookingId",
-  protect,
-  authorize("admin", "manager"),
-  debugAutoAssignForBooking
-);
 
 /**
  * @swagger
