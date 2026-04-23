@@ -1,5 +1,5 @@
 const CleaningTask = require("../models/CleaningTask");
-const CleaningPhoto = require("../models/CleaningPhoto");
+const CleaningMedia = require("../models/CleaningMedia");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
@@ -1709,7 +1709,7 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       : Promise.resolve([]),
     bookingIds.length > 0
       ? Booking.find({ id: { $in: bookingIds } })
-        .select("id user_id start_time end_time actual_end_time checked_in_at checkin_state status")
+        .select("id order_id user_id start_time end_time actual_end_time checked_in_at checkin_state status")
         .lean()
       : Promise.resolve([]),
   ]);
@@ -1770,8 +1770,10 @@ const enrichCleaningTasksWithRelatedData = async (tasks = []) => {
       pod_cluster_name: podCluster ? podCluster.name || null : null,
       location_id: podCluster ? podCluster.location_id || null : null,
       location_name: location ? location.name || null : null,
+      booking_order_id: booking ? booking.order_id || null : null,
       booking_guest_id: booking ? booking.user_id || null : null,
       booking_guest_name: bookingUser ? bookingUser.name || null : null,
+      booking_user_name: bookingUser ? bookingUser.name || null : null,
       booking_start_time: booking ? booking.start_time || null : null,
       booking_end_time: booking ? booking.end_time || null : null,
       booking_actual_end_time: booking ? booking.actual_end_time || null : null,
@@ -2080,9 +2082,9 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   }
 
   if (nextStatus === "DONE") {
-    const afterPhotoCount = await CleaningPhoto.countDocuments({
+    const afterPhotoCount = await CleaningMedia.countDocuments({
       cleaning_task_id: String(task.id),
-      type: "AFTER",
+      media_type: "AFTER",
     });
 
     if (afterPhotoCount < 1) {

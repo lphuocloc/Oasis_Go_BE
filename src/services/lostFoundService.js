@@ -1,4 +1,5 @@
 const LostFoundItem = require("../models/LostFoundItem");
+const LostFoundMedia = require("../models/LostFoundMedia");
 const Pod = require("../models/Pod");
 const Warehouse = require("../models/Warehouse");
 const User = require("../models/User");
@@ -31,13 +32,15 @@ const parsePositiveInt = (value, fallback) => {
   return parsed;
 };
 
-// ── Photo upload helpers ──────────────────────────────────────────────────────
+// ── Media upload helpers ──────────────────────────────────────────────────────
 
 const BASE64_IMAGE_DATA_URI_REGEX = /^data:(image\/[a-zA-Z0-9.+-]+);base64,/;
+const BASE64_VIDEO_DATA_URI_REGEX = /^data:(video\/[a-zA-Z0-9.+-]+);base64,/;
 const MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024;
 const MAX_IMAGE_BYTES_AFTER_PREPROCESS = 6 * 1024 * 1024;
+const MAX_VIDEO_UPLOAD_BYTES = 100 * 1024 * 1024;
 const TARGET_LONG_EDGE = 1920;
-const CLOUDINARY_UPLOAD_AGENT = new https.Agent({ keepAlive: true, timeout: 180000 });
+const CLOUDINARY_UPLOAD_AGENT = new https.Agent({ keepAlive: true, timeout: 300000 });
 
 const createErrorWithCode = (message, statusCode, errorCode) => {
   const err = createError(message, statusCode);
@@ -50,19 +53,31 @@ const isBase64ImageDataUri = (value) => {
   return BASE64_IMAGE_DATA_URI_REGEX.test(String(value).trim());
 };
 
-const decodeBase64ImageDataUri = (dataUri) => {
+const isBase64VideoDataUri = (value) => {
+  if (!value || typeof value !== "string") return false;
+  return BASE64_VIDEO_DATA_URI_REGEX.test(String(value).trim());
+};
+
+const isBase64MediaDataUri = (value) => isBase64ImageDataUri(value) || isBase64VideoDataUri(value);
+
+const isVideoMimeType = (mimeType) => String(mimeType || "").toLowerCase().startsWith("video/");
+
+const decodeBase64MediaDataUri = (dataUri) => {
   const trimmed = String(dataUri).trim();
-  const matched = trimmed.match(BASE64_IMAGE_DATA_URI_REGEX);
-  const mimeType = matched ? matched[1] : "image/jpeg";
-  const base64Payload = trimmed.replace(BASE64_IMAGE_DATA_URI_REGEX, "");
+  const imageMatch = trimmed.match(BASE64_IMAGE_DATA_URI_REGEX);
+  const videoMatch = trimmed.match(BASE64_VIDEO_DATA_URI_REGEX);
+  const matched = imageMatch || videoMatch;
+  if (!matched) throw createErrorWithCode("Invalid base64 media data", 400, "INVALID_BASE64_IMAGE_DATA");
+  const mimeType = matched[1];
+  const base64Payload = trimmed.replace(matched[0], "");
   let buffer;
   try {
     buffer = Buffer.from(base64Payload, "base64");
   } catch (_) {
-    throw createErrorWithCode("Invalid base64 image payload", 400, "INVALID_BASE64_IMAGE_DATA");
+    throw createErrorWithCode("Invalid base64 media payload", 400, "INVALID_BASE64_IMAGE_DATA");
   }
   if (!buffer || buffer.length === 0) {
-    throw createErrorWithCode("Image payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
+    throw createErrorWithCode("Media payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
   }
   return { buffer, mimeType };
 };
@@ -114,7 +129,7 @@ const mapCloudinaryUploadError = (error) => {
   return err;
 };
 
-const uploadBufferToCloudinary = async ({ buffer, mimeType }) => {
+const uploadImageBufferToCloudinary = async ({ buffer, mimeType }) => {
   const preprocessed = await preprocessImageBuffer({ buffer, mimeType });
   if (!Buffer.isBuffer(preprocessed.buffer) || preprocessed.buffer.length === 0) {
     throw createErrorWithCode("Image payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
@@ -122,7 +137,7 @@ const uploadBufferToCloudinary = async ({ buffer, mimeType }) => {
   const attemptUpload = () =>
     new Promise((resolve, reject) => {
       const upload = cloudinary.uploader.upload_stream(
-        { folder: "oasisgo/lost-found", resource_type: "image", overwrite: false, timeout: 180000, agent: CLOUDINARY_UPLOAD_AGENT },
+        { folder: "oasisgo/lost-found-media", resource_type: "image", overwrite: false, timeout: 180000, agent: CLOUDINARY_UPLOAD_AGENT },
         (error, result) => { if (error) return reject(error); return resolve(result); }
       );
       upload.on("error", reject);
@@ -130,30 +145,67 @@ const uploadBufferToCloudinary = async ({ buffer, mimeType }) => {
     });
   try {
     const uploaded = await attemptUpload();
-    return { photo_url: uploaded?.secure_url || uploaded?.url || null };
+    return { media_url: uploaded?.secure_url || uploaded?.url || null, media_public_id: uploaded?.public_id || null, file_type: "IMAGE" };
   } catch (firstError) {
     const mapped = mapCloudinaryUploadError(firstError);
     if (mapped.errorCode !== "CLOUDINARY_UPLOAD_TIMEOUT") throw mapped;
     try {
       const uploaded = await attemptUpload();
-      return { photo_url: uploaded?.secure_url || uploaded?.url || null };
+      return { media_url: uploaded?.secure_url || uploaded?.url || null, media_public_id: uploaded?.public_id || null, file_type: "IMAGE" };
     } catch (retryError) {
       throw mapCloudinaryUploadError(retryError);
     }
   }
 };
 
-const resolvePhotoUrl = async ({ photo_url, photo_buffer, photo_mime_type }) => {
-  if (photo_buffer) {
-    const result = await uploadBufferToCloudinary({ buffer: photo_buffer, mimeType: photo_mime_type });
-    return result.photo_url;
+const uploadVideoBufferToCloudinary = async ({ buffer, mimeType }) => {
+  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
+    throw createErrorWithCode("Video payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
   }
-  if (isBase64ImageDataUri(photo_url)) {
-    const decoded = decodeBase64ImageDataUri(photo_url);
-    const result = await uploadBufferToCloudinary({ buffer: decoded.buffer, mimeType: decoded.mimeType });
-    return result.photo_url;
+  if (buffer.length > MAX_VIDEO_UPLOAD_BYTES) {
+    throw createErrorWithCode("Video file is too large", 413, "CLOUDINARY_FILE_TOO_LARGE");
   }
-  return photo_url || null;
+  const attemptUpload = () =>
+    new Promise((resolve, reject) => {
+      const upload = cloudinary.uploader.upload_stream(
+        { folder: "oasisgo/lost-found-media", resource_type: "video", overwrite: false, timeout: 300000, agent: CLOUDINARY_UPLOAD_AGENT },
+        (error, result) => { if (error) return reject(error); return resolve(result); }
+      );
+      upload.on("error", reject);
+      upload.end(buffer);
+    });
+  try {
+    const uploaded = await attemptUpload();
+    return { media_url: uploaded?.secure_url || uploaded?.url || null, media_public_id: uploaded?.public_id || null, file_type: "VIDEO" };
+  } catch (firstError) {
+    const mapped = mapCloudinaryUploadError(firstError);
+    if (mapped.errorCode !== "CLOUDINARY_UPLOAD_TIMEOUT") throw mapped;
+    try {
+      const uploaded = await attemptUpload();
+      return { media_url: uploaded?.secure_url || uploaded?.url || null, media_public_id: uploaded?.public_id || null, file_type: "VIDEO" };
+    } catch (retryError) {
+      throw mapCloudinaryUploadError(retryError);
+    }
+  }
+};
+
+const resolveMediaAsset = async ({ media_url, media_buffer, media_mime_type, file_type }) => {
+  const isVideo = file_type === "VIDEO" || isVideoMimeType(media_mime_type);
+
+  if (media_buffer) {
+    return isVideo
+      ? uploadVideoBufferToCloudinary({ buffer: media_buffer, mimeType: media_mime_type })
+      : uploadImageBufferToCloudinary({ buffer: media_buffer, mimeType: media_mime_type });
+  }
+
+  if (isBase64MediaDataUri(media_url)) {
+    const decoded = decodeBase64MediaDataUri(media_url);
+    return isVideoMimeType(decoded.mimeType)
+      ? uploadVideoBufferToCloudinary({ buffer: decoded.buffer, mimeType: decoded.mimeType })
+      : uploadImageBufferToCloudinary({ buffer: decoded.buffer, mimeType: decoded.mimeType });
+  }
+
+  return { media_url: media_url || null, media_public_id: null, file_type: isVideo ? "VIDEO" : "IMAGE" };
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -163,11 +215,12 @@ const resolveActorIds = (actor) => [actor?.id, actor?._id].filter(Boolean).map((
 const populateLostFoundItem = async (item) => {
   const raw = typeof item.toObject === "function" ? item.toObject() : { ...item };
 
-  const [pod, warehouse, foundByUser, claimedByUser] = await Promise.all([
+  const [pod, warehouse, foundByUser, claimedByUser, mediaList] = await Promise.all([
     raw.pod_id ? Pod.findOne({ id: raw.pod_id }).select("id name").lean() : null,
     raw.warehouse_id ? Warehouse.findOne({ id: raw.warehouse_id }).select("id name").lean() : null,
     raw.found_by_user_id ? User.findOne({ $or: [{ id: raw.found_by_user_id }, { _id: raw.found_by_user_id }] }).select("id name").lean() : null,
     raw.claimed_by_user_id ? User.findOne({ $or: [{ id: raw.claimed_by_user_id }, { _id: raw.claimed_by_user_id }] }).select("id name").lean() : null,
+    LostFoundMedia.find({ lost_found_item_id: raw.id }).select("id media_url file_type created_at").lean(),
   ]);
 
   return {
@@ -176,6 +229,7 @@ const populateLostFoundItem = async (item) => {
     warehouse_name: warehouse?.name || null,
     found_by_user_name: foundByUser?.name || null,
     claimed_by_user_name: claimedByUser?.name || null,
+    media: Array.isArray(mediaList) ? mediaList : [],
   };
 };
 
@@ -198,7 +252,7 @@ const resolveCreateContext = async ({ pod_id, booking_id, warehouse_id }) => {
   };
 };
 
-exports.createLostFoundItem = async ({ pod_id, booking_id, item_name, description, photo_url, photo_buffer, photo_mime_type, found_at, warehouse_id }, actor) => {
+exports.createLostFoundItem = async ({ pod_id, booking_id, item_name, description, media_url, media_buffer, media_mime_type, file_type, found_at, warehouse_id }, actor) => {
   const context = await resolveCreateContext({ pod_id, booking_id, warehouse_id });
 
   const normalizedItemName = String(item_name || "").trim();
@@ -206,7 +260,9 @@ exports.createLostFoundItem = async ({ pod_id, booking_id, item_name, descriptio
   const actorIds = resolveActorIds(actor);
   if (!actorIds[0]) throw createError("Unable to resolve finder identity", 401);
 
-  const resolvedPhotoUrl = await resolvePhotoUrl({ photo_url, photo_buffer, photo_mime_type });
+  const resolvedAsset = media_url || media_buffer
+    ? await resolveMediaAsset({ media_url, media_buffer, media_mime_type, file_type })
+    : null;
 
   const item = await LostFoundItem.create({
     pod_id: context.pod_id,
@@ -215,10 +271,18 @@ exports.createLostFoundItem = async ({ pod_id, booking_id, item_name, descriptio
     warehouse_id: warehouse_id || null,
     item_name: normalizedItemName,
     description: description ? String(description).trim() : null,
-    photo_url: resolvedPhotoUrl,
     found_at: found_at ? new Date(found_at) : new Date(),
     status: "FOUND",
   });
+
+  if (resolvedAsset && resolvedAsset.media_url) {
+    await LostFoundMedia.create({
+      lost_found_item_id: item.id,
+      media_url: resolvedAsset.media_url,
+      media_public_id: resolvedAsset.media_public_id || null,
+      file_type: resolvedAsset.file_type || "IMAGE",
+    });
+  }
 
   return populateLostFoundItem(item);
 };

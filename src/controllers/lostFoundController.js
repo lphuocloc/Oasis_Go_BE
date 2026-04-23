@@ -3,6 +3,8 @@ const lostFoundService = require("../services/lostFoundService");
 const resolveUploadedFile = (req) => {
   if (req.file) return req.file;
   if (req.files && typeof req.files === "object") {
+    const mediaFile = Array.isArray(req.files.media) ? req.files.media[0] : null;
+    if (mediaFile) return mediaFile;
     const photoFile = Array.isArray(req.files.photo) ? req.files.photo[0] : null;
     if (photoFile) return photoFile;
     const imageFile = Array.isArray(req.files.image) ? req.files.image[0] : null;
@@ -16,8 +18,11 @@ exports.createLostFoundItem = async (req, res) => {
     const uploadedFile = resolveUploadedFile(req);
     const payload = {
       ...req.body,
-      photo_buffer: uploadedFile?.buffer || undefined,
-      photo_mime_type: uploadedFile?.mimetype || undefined,
+      media_buffer: uploadedFile?.buffer || undefined,
+      media_mime_type: uploadedFile?.mimetype || undefined,
+      file_type: uploadedFile
+        ? (String(uploadedFile.mimetype || "").toLowerCase().startsWith("video/") ? "VIDEO" : "IMAGE")
+        : req.body.file_type || undefined,
     };
     const item = await lostFoundService.createLostFoundItem(payload, req.user);
     res.status(201).json({

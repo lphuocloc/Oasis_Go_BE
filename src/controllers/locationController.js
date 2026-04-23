@@ -131,7 +131,7 @@ exports.getPodOccupancyRateByParentLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.createLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
+        const { name, type, parent_id, description, address, city, lat, lng, isActive } = req.body;
 
         const location = await locationService.createLocation({
             type,
@@ -139,6 +139,7 @@ exports.createLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            city,
             lat,
             lng,
             isActive,
@@ -163,7 +164,7 @@ exports.createLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.updateLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
+        const { name, type, parent_id, description, address, city, lat, lng, isActive } = req.body;
 
         const location = await locationService.updateLocation(req.params.id, {
             type,
@@ -171,6 +172,7 @@ exports.updateLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            city,
             lat,
             lng,
             isActive,

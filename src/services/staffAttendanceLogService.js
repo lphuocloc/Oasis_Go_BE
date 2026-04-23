@@ -4,7 +4,7 @@ const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CHECKIN_EARLY_MINUTES = 30;
 const CHECKOUT_LATE_MINUTES = 180;
 const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
-const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Ho_Chi_Minh";
 
 const toStartOfDay = (value) => {
   const date = new Date(value);
@@ -59,10 +59,78 @@ const resolveAssignmentTimeValue = (assignment, kind) => {
   return null;
 };
 
-const withTime = (baseDate, parts) => {
-  const date = new Date(baseDate);
-  date.setHours(parts.hours, parts.minutes, parts.seconds, 0);
-  return date;
+/**
+ * Returns the UTC offset in milliseconds for APP_TIMEZONE at a given instant.
+ * Positive value means the timezone is ahead of UTC (e.g. UTC+7 returns 7*3600*1000).
+ */
+const getAppTzOffsetMs = (date) => {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(date).map(({ type, value }) => [type, value])
+  );
+  const localAsUtcMs = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    parts.hour === "24" ? 0 : Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return localAsUtcMs - date.getTime();
+};
+
+/**
+ * Returns a Date representing midnight (00:00:00.000) in APP_TIMEZONE on the
+ * same calendar day as `date` when viewed in APP_TIMEZONE.
+ */
+const toStartOfDayInAppTz = (date) => {
+  const offsetMs = getAppTzOffsetMs(date);
+  const localMs = date.getTime() + offsetMs;
+  const localMidnightMs = localMs - (localMs % (24 * 60 * 60 * 1000));
+  return new Date(localMidnightMs - offsetMs);
+};
+
+/**
+ * Returns a Date representing 23:59:59.999 in APP_TIMEZONE on the same
+ * calendar day as `date` when viewed in APP_TIMEZONE.
+ */
+const toEndOfDayInAppTz = (date) => {
+  const startOfDay = toStartOfDayInAppTz(date);
+  return new Date(startOfDay.getTime() + 24 * 60 * 60 * 1000 - 1);
+};
+
+/**
+ * Builds a Date whose UTC value corresponds to parts.hours:parts.minutes:parts.seconds
+ * in APP_TIMEZONE, on the same calendar day as `baseDate` in APP_TIMEZONE.
+ * Replaces the plain `withTime` which incorrectly uses server-local (UTC) setHours.
+ */
+const withTimeInAppTz = (baseDate, parts) => {
+  // Get the calendar date string (YYYY-MM-DD) in APP_TIMEZONE
+  const dateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(baseDate);
+
+  const hh = String(parts.hours).padStart(2, "0");
+  const mm = String(parts.minutes).padStart(2, "0");
+  const ss = String(parts.seconds).padStart(2, "0");
+
+  // Parse the combined string as if it were UTC (naive), then subtract the
+  // timezone offset to get the actual UTC timestamp for that local wall-clock time.
+  const naiveMs = Date.parse(`${dateStr}T${hh}:${mm}:${ss}Z`);
+  const offsetMs = getAppTzOffsetMs(new Date(naiveMs));
+  return new Date(naiveMs - offsetMs);
 };
 
 const formatDateTimeVi = (value) => {
@@ -163,13 +231,16 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    const assignmentStartDay = toStartOfDay(assignment.start_date);
-    const assignmentEndDay = toEndOfDay(assignment.end_date);
+    // Use timezone-aware helpers so that start_time "12:00" is treated as
+    // 12:00 in APP_TIMEZONE (Asia/Ho_Chi_Minh, UTC+7), not as 12:00 UTC.
+    const assignmentStartDay = toStartOfDayInAppTz(new Date(assignment.start_date));
+    const assignmentEndDay = toEndOfDayInAppTz(new Date(assignment.end_date));
     const nowTime = now.getTime();
 
+    const todayInAppTz = toStartOfDayInAppTz(now);
     const candidateDays = [
-      toStartOfDay(now),
-      new Date(toStartOfDay(now).getTime() - 24 * 60 * 60 * 1000),
+      todayInAppTz,
+      new Date(todayInAppTz.getTime() - 24 * 60 * 60 * 1000),
     ];
 
     let selectedWindow = null;
@@ -179,8 +250,8 @@ class StaffAttendanceLogService {
         continue;
       }
 
-      const shiftStart = withTime(day, startParts);
-      let shiftEnd = withTime(day, endParts);
+      const shiftStart = withTimeInAppTz(day, startParts);
+      let shiftEnd = withTimeInAppTz(day, endParts);
       if (shiftEnd <= shiftStart) {
         shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
       }

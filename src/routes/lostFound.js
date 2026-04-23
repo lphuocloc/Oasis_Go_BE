@@ -10,13 +10,14 @@ const {
   updateLostFoundStatus,
 } = require("../controllers/lostFoundController");
 
-const uploadLostFoundPhotoInMemory = multer({
+const uploadLostFoundMediaInMemory = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB to support video
 });
 
-const handleLostFoundPhotoUpload = (req, res, next) => {
-  uploadLostFoundPhotoInMemory.fields([
+const handleLostFoundMediaUpload = (req, res, next) => {
+  uploadLostFoundMediaInMemory.fields([
+    { name: "media", maxCount: 1 },
     { name: "photo", maxCount: 1 },
     { name: "image", maxCount: 1 },
   ])(req, res, (error) => {
@@ -248,7 +249,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundI
  *       413:
  *         description: Ảnh vượt quá giới hạn 8MB
  */
-router.post("/", protect, authorize("admin", "manager", "cleaner"), handleLostFoundPhotoUpload, createLostFoundItem);
+router.post("/", protect, authorize("admin", "manager", "cleaner"), handleLostFoundMediaUpload, createLostFoundItem);
 
 /**
  * @swagger

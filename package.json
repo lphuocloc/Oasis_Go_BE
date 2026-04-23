@@ -4,7 +4,8 @@
   "private": true,
   "scripts": {
     "start": "node ./bin/www",
-    "dev": "nodemon ./bin/www"
+    "dev": "nodemon ./bin/www",
+    "generate:city": "node generate_city_for_locations.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
@@ -21,6 +22,7 @@
     "morgan": "~1.9.1",
     "multer": "^2.1.0",
     "multer-storage-cloudinary": "^4.0.0",
+    "node-geocoder": "^4.4.1",
     "nodemailer": "^7.0.12",
     "sharp": "^0.34.5",
     "socket.io": "^4.8.3",
