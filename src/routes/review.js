@@ -1,8 +1,28 @@
 const express = require("express");
 const router = express.Router();
+
 const reviewController = require("../controllers/reviewController");
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const { loadManagerScope } = require("../middlewares/managerScopeMiddleware");
+
+/**
+ * @swagger
+ * /api/reviews/stats:
+ *   get:
+ *     summary: Get global review statistics (admin only)
+ *     tags: [Reviews]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Review statistics
+ */
+router.get(
+  "/stats",
+  protect,
+  authorize("admin", "manager"),
+  reviewController.getGlobalStats
+);
 
 /**
  * @swagger
@@ -303,43 +323,44 @@ router.post(
 
 /**
  * @swagger
- * /api/reviews/admin/pending:
- *   get:
- *     summary: Get pending reviews not yet submitted (admin only)
+ * /api/reviews/{review_id}/restore:
+ *   post:
+ *     summary: Restore a hidden review (admin/manager only)
  *     tags: [Reviews]
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: page
+ *       - in: path
+ *         name: review_id
+ *         required: true
  *         schema:
- *           type: integer
- *           default: 1
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           default: 10
+ *           type: string
  *     responses:
  *       200:
- *         description: List of pending reviews
+ *         description: Review restored successfully
  */
-router.get(
-  "/admin/pending",
+router.post(
+  "/:review_id/restore",
   protect,
   authorize("admin", "manager"),
-  reviewController.getPendingReviews
+  reviewController.restoreReview
 );
 
 /**
  * @swagger
- * /api/reviews/admin/rejected:
+ * /api/reviews/admin/all:
  *   get:
- *     summary: Get rejected reviews (admin only)
+ *     summary: Get all submitted reviews for moderation (admin only)
  *     tags: [Reviews]
  *     security:
  *       - bearerAuth: []
  *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [active, hidden]
+ *           default: active
  *       - in: query
  *         name: page
  *         schema:
@@ -352,13 +373,13 @@ router.get(
  *           default: 10
  *     responses:
  *       200:
- *         description: List of rejected reviews
+ *         description: List of reviews
  */
 router.get(
-  "/admin/rejected",
+  "/admin/all",
   protect,
   authorize("admin", "manager"),
-  reviewController.getRejectedReviews
+  reviewController.getAdminAllReviews
 );
 
 module.exports = router;

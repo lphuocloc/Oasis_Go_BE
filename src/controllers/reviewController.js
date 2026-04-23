@@ -155,7 +155,7 @@ class ReviewController {
 
       return res.status(200).json({
         success: true,
-        message: "Review rejected successfully",
+        message: "Đã ẩn đánh giá!",
         data: review,
       });
     } catch (error) {
@@ -167,16 +167,40 @@ class ReviewController {
   }
 
   /**
-   * Get pending reviews (admin view)
-   * GET /api/reviews/admin/pending
+   * Restore a hidden review (Admin/Manager only)
+   * POST /api/reviews/:review_id/restore
    */
-  async getPendingReviews(req, res, next) {
+  async restoreReview(req, res, next) {
     try {
-      const { page = 1, limit = 10 } = req.query;
+      const { review_id } = req.params;
 
-      const result = await reviewService.getPendingReviews({
+      const review = await reviewService.restoreReview(review_id);
+
+      return res.status(200).json({
+        success: true,
+        message: "Đã hiển thị lại đánh giá!",
+        data: review,
+      });
+    } catch (error) {
+      if (error.statusCode === 404) {
+        return res.status(404).json({ message: error.message });
+      }
+      next(error);
+    }
+  }
+
+  /**
+   * Get all reviews for admin moderation
+   * GET /api/reviews/admin/all
+   */
+  async getAdminAllReviews(req, res, next) {
+    try {
+      const { page = 1, limit = 10, status = "active" } = req.query;
+
+      const result = await reviewService.getAdminAllReviews({
         page: parseInt(page),
         limit: parseInt(limit),
+        status,
       });
 
       return res.status(200).json({
@@ -190,22 +214,16 @@ class ReviewController {
   }
 
   /**
-   * Get rejected reviews (admin view)
-   * GET /api/reviews/admin/rejected
+   * Get global review stats
+   * GET /api/reviews/stats
    */
-  async getRejectedReviews(req, res, next) {
+  async getGlobalStats(req, res, next) {
     try {
-      const { page = 1, limit = 10 } = req.query;
-
-      const result = await reviewService.getRejectedReviews({
-        page: parseInt(page),
-        limit: parseInt(limit),
-      });
+      const stats = await reviewService.getGlobalStats();
 
       return res.status(200).json({
         success: true,
-        data: result.data,
-        pagination: result.pagination,
+        data: stats,
       });
     } catch (error) {
       next(error);

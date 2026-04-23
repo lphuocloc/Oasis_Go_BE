@@ -162,4 +162,26 @@ router.get("/dashboard/summary-cards", protect, authorize("admin"), dashboardCon
  */
 router.get("/users", protect, authorize("admin", "manager"), userController.getActiveUsers);
 
+/**
+ * @swagger
+ * /api/admin/users:
+ *   post:
+ *     summary: Create a new user (staff)
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post("/users", protect, authorize("admin"), userController.createUser);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}:
+ *   put:
+ *     summary: Update an existing user
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.put("/users/:id", protect, authorize("admin"), userController.updateUser);
+
 module.exports = router;
