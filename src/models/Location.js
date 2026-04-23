@@ -57,12 +57,17 @@ const locationSchema = new mongoose.Schema(
             trim: true,
             default: null,
         },
+        address: {
+            type: String,
+            trim: true,
+            default: null,
+        },
+        city: {
+            type: String,
+            default: null,
+            trim: true,
+        },
         isActive: {
-            city: {
-                type: String,
-                default: null,
-                trim: true,
-            },
             type: Boolean,
             default: true,
         },
@@ -159,19 +164,53 @@ locationSchema.pre("save", async function () {
         }
     }
 
-    // Auto-detect city from lat/lng if present and changed
+    // CASE 1: Có lat/lng → reverse geocode để lấy city (nếu chưa có city)
     if (this.isModified("lat") || this.isModified("lng")) {
-        if (typeof this.lat === "number" && typeof this.lng === "number" && this.lat !== null && this.lng !== null) {
-            try {
-                const res = await geocoder.reverse({ lat: this.lat, lon: this.lng });
-                this.city = res[0]?.city || res[0]?.town || res[0]?.village || null;
-                console.log(`Auto-detected city for location ${this.name}: ${this.city}`);
-            } catch (err) {
-                this.city = null;
-                console.error(`Error occurred while auto-detecting city for location ${this.name}:`, err);
+        if (typeof this.lat === "number" && typeof this.lng === "number") {
+            // Chỉ auto-detect city nếu chưa được set thủ công
+            if (!this.city || this.isModified("lat") || this.isModified("lng")) {
+                try {
+                    const res = await geocoder.reverse({ lat: this.lat, lon: this.lng });
+                    const data = res[0];
+                    // Ưu tiên state (cấp tỉnh/TP trực thuộc TW) cho Việt Nam
+                    let detectedCity = data?.state || data?.city || data?.town || data?.village || null;
+                    if (detectedCity && (detectedCity.toLowerCase().includes('ho chi minh') || detectedCity.includes('Hồ Chí Minh'))) {
+                        detectedCity = 'Thành phố Hồ Chí Minh';
+                    }
+                    this.city = detectedCity;
+                    console.log(`[Geocode] Reverse: ${this.name} → city = ${this.city}`);
+                } catch (err) {
+                    console.error(`[Geocode] Reverse error for ${this.name}:`, err.message);
+                }
             }
         } else {
             this.city = null;
+        }
+    }
+
+    // CASE 2: Có address (và/hoặc city) nhưng KHÔNG có lat/lng → forward geocode
+    if ((this.isModified("address") || this.isNew) && this.address) {
+        if (this.lat === null && this.lng === null) {
+            try {
+                // Ghép address + city để tăng độ chính xác
+                const searchQuery = this.city
+                    ? `${this.address}, ${this.city}, Vietnam`
+                    : `${this.address}, Vietnam`;
+                const res = await geocoder.geocode(searchQuery);
+                if (res && res.length > 0) {
+                    this.lat = res[0].latitude;
+                    this.lng = res[0].longitude;
+                    // Nếu chưa có city, lấy từ kết quả geocode
+                    if (!this.city) {
+                        this.city = res[0].state || res[0].city || res[0].town || res[0].village || null;
+                    }
+                    console.log(`[Geocode] Forward: ${this.name} "${searchQuery}" → lat=${this.lat}, lng=${this.lng}, city=${this.city}`);
+                } else {
+                    console.warn(`[Geocode] Forward: No results for "${searchQuery}"`);
+                }
+            } catch (err) {
+                console.error(`[Geocode] Forward error for ${this.name}:`, err.message);
+            }
         }
     }
 });

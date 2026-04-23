@@ -201,7 +201,7 @@ class LocationService {
     /**
      * Tạo location mới
      */
-    async createLocation({ type, name, description, parent_id, address, lat, lng, isActive }) {
+    async createLocation({ type, name, description, parent_id, address, city, lat, lng, isActive }) {
         // Validate required fields
         if (!type || !name) {
             throw new Error("Type and name are required");
@@ -251,12 +251,16 @@ class LocationService {
         }
 
         // Create location
+        // Pre-save hook sẽ tự động:
+        // - Forward geocode (address + city → lat/lng) nếu chỉ có address mà không có tọa độ
+        // - Reverse geocode (lat/lng → city) nếu chỉ có tọa độ mà không có city
         const location = await Location.create({
             type,
             name: normalizedName,
             description,
             parent_id: parent_id || null,
-            address,
+            address: address || null,
+            city: city || null,
             lat: lat !== undefined ? lat : null,
             lng: lng !== undefined ? lng : null,
             isActive: isActive !== undefined ? isActive : true,
@@ -269,7 +273,7 @@ class LocationService {
      * Cập nhật location
      */
     async updateLocation(locationId, updates) {
-        const { type, name, description, parent_id, address, lat, lng, isActive } = updates;
+        const { type, name, description, parent_id, address, city, lat, lng, isActive } = updates;
 
         const location = await Location.findOne({ id: locationId });
         if (!location) {
@@ -310,6 +314,7 @@ class LocationService {
         if (description !== undefined) location.description = description;
         if (parent_id !== undefined) location.parent_id = parent_id;
         if (address !== undefined) location.address = address;
+        if (city !== undefined) location.city = city;
         if (lat !== undefined) location.lat = lat;
         if (lng !== undefined) location.lng = lng;
         if (isActive !== undefined) location.isActive = isActive;
