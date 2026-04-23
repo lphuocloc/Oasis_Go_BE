@@ -2,7 +2,7 @@ const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const { loadManagerScope, applyManagerPodScope } = require("../middlewares/managerScopeMiddleware");
-const { uploadIncidentPhoto } = require("../config/cloudinary");
+const { uploadIncidentMedia } = require("../config/cloudinary");
 const {
   createIncident,
   getDamageReports,
@@ -125,12 +125,12 @@ const {
  *           type: string
  *           enum: [LOW, MEDIUM, HIGH, CRITICAL]
  *           default: MEDIUM
- *         photos:
+ *         media:
  *           type: array
  *           items:
  *             type: string
  *             format: binary
- *           description: Optional files uploaded directly to Cloudinary
+ *           description: Optional media files (ảnh hoặc video) uploaded directly to Cloudinary. Hỗ trợ jpg/png/webp và mp4/mov/webm, tối đa 8 files, mỗi file tối đa 100MB.
  *         photo_urls:
  *           type: array
  *           items:
@@ -211,11 +211,12 @@ const {
  *           type: string
  *           enum: [LOW, MEDIUM, HIGH, CRITICAL]
  *           default: MEDIUM
- *         photos:
+ *         media:
  *           type: array
  *           items:
  *             type: string
  *             format: binary
+ *           description: Ảnh hoặc video upload trực tiếp (tối đa 8 files, 100MB/file). Hỗ trợ jpg/png/webp và mp4/mov/webm.
  *         photo_urls:
  *           type: array
  *           items:
@@ -421,7 +422,7 @@ router.post(
   "/",
   protect,
   authorize("admin", "manager", "cleaner"),
-  uploadIncidentPhoto.array("photos", 8),
+  uploadIncidentMedia.array("media", 8),
   createIncident
 );
 

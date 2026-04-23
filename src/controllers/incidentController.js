@@ -34,6 +34,7 @@ const buildUploadedPhotos = (files) => {
     .map((file) => ({
       url: file.path,
       public_id: file.filename || null,
+      file_type: String(file.mimetype || "").toLowerCase().startsWith("video/") ? "VIDEO" : "IMAGE",
     }));
 };
 
@@ -43,7 +44,10 @@ const cleanupUploadedPhotos = async (uploadedPhotos = []) => {
   await Promise.all(
     uploadedPhotos
       .filter((item) => item.public_id)
-      .map((item) => cloudinary.uploader.destroy(item.public_id).catch(() => null))
+      .map((item) => {
+        const resourceType = item.file_type === "VIDEO" ? "video" : "image";
+        return cloudinary.uploader.destroy(item.public_id, { resource_type: resourceType }).catch(() => null);
+      })
   );
 };
 

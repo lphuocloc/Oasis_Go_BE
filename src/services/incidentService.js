@@ -1,6 +1,6 @@
 const Incident = require("../models/Incidents");
 const IncidentDetail = require("../models/IncidentDetail");
-const IncidentPhoto = require("../models/IncidentPhoto");
+const IncidentMedia = require("../models/IncidentMedia");
 const Booking = require("../models/Bookings");
 const BookingOrder = require("../models/BookingOrder");
 const Wallet = require("../models/Wallet");
@@ -751,13 +751,13 @@ const buildIncidentPhotoMap = async (incidentIds = []) => {
     return {};
   }
 
-  const photos = await IncidentPhoto.find({ incident_id: { $in: incidentIds } })
-    .select("incident_id photo_url")
+  const photos = await IncidentMedia.find({ incident_id: { $in: incidentIds } })
+    .select("incident_id media_url")
     .lean();
 
   return photos.reduce((map, item) => {
     if (!map[item.incident_id]) map[item.incident_id] = [];
-    map[item.incident_id].push(item.photo_url);
+    map[item.incident_id].push(item.media_url);
     return map;
   }, {});
 };
@@ -1161,7 +1161,7 @@ exports.getIncidentById = async (incidentId, actor = null, managerScope = null) 
   }
 
   const [photos, details] = await Promise.all([
-    IncidentPhoto.find({ incident_id: incidentId }).select("photo_url -_id").lean(),
+    IncidentMedia.find({ incident_id: incidentId }).select("media_url file_type -_id").lean(),
     IncidentDetail.find({ incident_id: incidentId })
       .select("type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
       .lean(),
@@ -1169,7 +1169,7 @@ exports.getIncidentById = async (incidentId, actor = null, managerScope = null) 
 
   return toIncidentView(
     incident,
-    photos.map((item) => item.photo_url),
+    photos.map((item) => item.media_url),
     details
   );
 };
@@ -1249,6 +1249,7 @@ exports.createDamageReport = async (
       .map((item) => ({
         url: String(item.url || "").trim(),
         public_id: item.public_id ? String(item.public_id).trim() : null,
+        file_type: item.file_type === "VIDEO" ? "VIDEO" : "IMAGE",
       }))
       .filter((item) => item.url)
     : [];
@@ -1305,11 +1306,12 @@ exports.createDamageReport = async (
       );
 
       if (photoRecords.length > 0) {
-        await IncidentPhoto.insertMany(
+        await IncidentMedia.insertMany(
           photoRecords.map((item) => ({
             incident_id: createdIncident.id,
-            photo_url: item.url,
-            photo_public_id: item.public_id,
+            media_url: item.url,
+            media_public_id: item.public_id || null,
+            file_type: item.file_type || "IMAGE",
           })),
           { session }
         );

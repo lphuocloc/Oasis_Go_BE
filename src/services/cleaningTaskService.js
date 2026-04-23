@@ -1,5 +1,5 @@
 const CleaningTask = require("../models/CleaningTask");
-const CleaningPhoto = require("../models/CleaningPhoto");
+const CleaningMedia = require("../models/CleaningMedia");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
@@ -2082,9 +2082,9 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
   }
 
   if (nextStatus === "DONE") {
-    const afterPhotoCount = await CleaningPhoto.countDocuments({
+    const afterPhotoCount = await CleaningMedia.countDocuments({
       cleaning_task_id: String(task.id),
-      type: "AFTER",
+      media_type: "AFTER",
     });
 
     if (afterPhotoCount < 1) {
