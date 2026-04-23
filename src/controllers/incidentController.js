@@ -51,24 +51,7 @@ const cleanupUploadedPhotos = async (uploadedPhotos = []) => {
   );
 };
 
-const mapSettlementReasonToWarningMessage = (reason) => {
-  const reasonCode = String(reason || "").trim().toUpperCase();
 
-  const messageByReason = {
-    MISSING_ORDER_ID: "Incident da duoc cap nhat, nhung khong tim thay order de doi soat coc.",
-    ORDER_NOT_FOUND: "Incident da duoc cap nhat, nhung order khong ton tai de doi soat coc.",
-    ORDER_NOT_ELIGIBLE: "Incident da duoc cap nhat, nhung order chua du dieu kien de doi soat coc.",
-    ORDER_ALREADY_SETTLED: "Incident da duoc cap nhat, nhung tien coc cua order nay da duoc doi soat truoc do.",
-    ORDER_BOOKINGS_NOT_FOUND: "Incident da duoc cap nhat, nhung order khong co booking de doi soat coc.",
-    ORDER_BOOKINGS_NOT_TERMINAL: "Incident da duoc cap nhat, nhung booking trong order chua ket thuc nen chua doi soat coc.",
-    CLEANING_NOT_COMPLETED: "Incident da duoc cap nhat, nhung cleaning task chua hoan tat nen chua doi soat coc.",
-    PENDING_INCIDENT_EXISTS: "Incident da duoc cap nhat, nhung van con incident PENDING nen chua doi soat coc.",
-    BOOKING_ORDER_NOT_FOUND: "Incident da duoc cap nhat, nhung khong tim thay booking order lien quan.",
-    SETTLEMENT_NOT_APPLIED: "Incident da duoc cap nhat, nhung chua doi soat coc cho don hang.",
-  };
-
-  return messageByReason[reasonCode] || "Incident da duoc cap nhat, nhung chua doi soat coc cho don hang.";
-};
 
 const createDamageIncident = async (req, res, { successMessage = "Incident created successfully" } = {}) => {
   const uploadedPhotos = buildUploadedPhotos(req.files);
@@ -194,24 +177,10 @@ exports.updateIncidentStatus = async (req, res) => {
 
     const incident = await incidentService.updateIncidentStatus(req.params.id, req.body, actor);
 
-    let warning;
-    if (
-      incident?.damage_billing &&
-      incident.damage_billing.settlement_applied === false &&
-      incident.damage_billing.settlement_reason
-    ) {
-      warning = {
-        code: "DEPOSIT_SETTLEMENT_NOT_APPLIED",
-        reason: String(incident.damage_billing.settlement_reason),
-        message: mapSettlementReasonToWarningMessage(incident.damage_billing.settlement_reason),
-      };
-    }
-
     res.status(200).json({
       success: true,
       message: "Incident status updated successfully",
       data: incident,
-      warning,
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;

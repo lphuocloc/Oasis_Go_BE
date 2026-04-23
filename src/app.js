@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 
 // Ensure server-side Date operations run in UTC unless explicitly overridden.
 process.env.TZ = process.env.TZ || "Etc/UTC";
@@ -118,7 +118,7 @@ const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
 const cleaningBufferPolicyRouter = require("./routes/cleaningBufferPolicy");
 const walletRouter = require("./routes/wallet");
-const depositPolicyRouter = require("./routes/depositPolicy");
+
 const voucherRouter = require("./routes/voucher");
 const bookingVoucherRouter = require("./routes/bookingVoucher");
 const pricingRuleRouter = require("./routes/pricingRule");
@@ -218,7 +218,7 @@ app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/cleaning-buffer-policies", cleaningBufferPolicyRouter);
 app.use("/api/wallets", walletRouter);
-app.use("/api/deposit-policies", depositPolicyRouter);
+
 app.use("/api/vouchers", voucherRouter);
 app.use("/api/booking-vouchers", bookingVoucherRouter);
 app.use("/api/pricing-rules", pricingRuleRouter);

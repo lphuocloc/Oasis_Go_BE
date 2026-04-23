@@ -1,4 +1,4 @@
-﻿module.exports = {
+module.exports = {
   User: require("./User"),
   Location: require("./Location"),
   PodCluster: require("./PodCluster"),
@@ -12,7 +12,7 @@
   BookingSlot: require("./BookingSlot"),
   SupportRequest: require("./SupportRequest"),
   BookingAccessSession: require("./BookingAccessSession"),
-  DepositPolicy: require("./DepositPolicy"),
+
   OnlineKey: require("./OnlineKey"),
   Wallet: require("./Wallet"),
   WalletTransaction: require("./WalletTransaction"),
