@@ -1,6 +1,9 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
+const NodeGeocoder = require('node-geocoder');
+const geocoder = NodeGeocoder({ provider: 'openstreetmap' });
+
 const locationSchema = new mongoose.Schema(
     {
         id: {
@@ -55,6 +58,11 @@ const locationSchema = new mongoose.Schema(
             default: null,
         },
         isActive: {
+            city: {
+                type: String,
+                default: null,
+                trim: true,
+            },
             type: Boolean,
             default: true,
         },
@@ -112,7 +120,7 @@ locationSchema.statics.getTree = async function (rootId = null, visited = new Se
     for (const location of locations) {
         // Prevent infinite recurse if child id points to itself
         if (visited.has(String(location.id))) continue;
-        
+
         const children = await this.getTree(location.id, new Set(visited));
         tree.push({
             ...location.toObject(),
@@ -141,11 +149,29 @@ locationSchema.statics.getDescendants = async function (locationId, visited = ne
 };
 
 // Pre-save validation: ensure parent exists if parent_id is provided
+
+// Pre-save validation: ensure parent exists if parent_id is provided
 locationSchema.pre("save", async function () {
     if (this.parent_id && this.parent_id !== null) {
         const parent = await this.model("Location").findOne({ id: this.parent_id });
         if (!parent) {
             throw new Error("Parent location does not exist");
+        }
+    }
+
+    // Auto-detect city from lat/lng if present and changed
+    if (this.isModified("lat") || this.isModified("lng")) {
+        if (typeof this.lat === "number" && typeof this.lng === "number" && this.lat !== null && this.lng !== null) {
+            try {
+                const res = await geocoder.reverse({ lat: this.lat, lon: this.lng });
+                this.city = res[0]?.city || res[0]?.town || res[0]?.village || null;
+                console.log(`Auto-detected city for location ${this.name}: ${this.city}`);
+            } catch (err) {
+                this.city = null;
+                console.error(`Error occurred while auto-detecting city for location ${this.name}:`, err);
+            }
+        } else {
+            this.city = null;
         }
     }
 });
