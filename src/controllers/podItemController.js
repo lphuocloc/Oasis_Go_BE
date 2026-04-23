@@ -75,3 +75,21 @@ exports.getPodItemsByPodId = async (req, res) => {
     res.status(statusCode).json({ success: false, message: error.message || "Error fetching pod items" });
   }
 };
+
+exports.generateReusableItemsForCluster = async (req, res) => {
+  try {
+    const clusterId = req.params.cluster_id || req.body.cluster_id;
+    const result = await podItemService.generateReusableItemsForCluster(clusterId);
+    res.status(201).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error generating reusable items for cluster",
+    });
+  }
+};

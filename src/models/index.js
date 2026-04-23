@@ -42,4 +42,5 @@ module.exports = {
   Voucher: require("./Voucher"),
   BookingVoucher: require("./BookingVoucher"),
   DebtRecord: require("./DebtRecord"),
+  BookingChecklist: require("./BookingChecklist"),
 };

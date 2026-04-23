@@ -78,6 +78,15 @@ if (
   );
 }
 
+const bookingChecklistService = require("./services/bookingChecklistService");
+if (
+  String(process.env.CHECKLIST_AUTO_ACCEPT_JOB_ENABLED || "true").toLowerCase() === "true"
+) {
+  bookingChecklistService.startAutoAcceptJob(
+    Number(process.env.CHECKLIST_AUTO_ACCEPT_JOB_INTERVAL_MINUTES || 2),
+  );
+}
+
 const indexRouter = require("./routes/index");
 const authRouter = require("./routes/auth");
 const vnpayRouter = require("./routes/vnpay");
