@@ -5,6 +5,7 @@ const PodItem = require("../models/PodItem");
 const Item = require("../models/Item");
 const Incident = require("../models/Incidents");
 const IncidentMedia = require("../models/IncidentMedia");
+const IncidentDetail = require("../models/IncidentDetail");
 const PodCluster = require("../models/PodCluster");
 const CleaningTask = require("../models/CleaningTask");
 const notificationService = require("./notificationService");
@@ -192,6 +193,7 @@ const getChecklistItems = async (bookingId, userId) => {
   // Check if already have existing checklist records
   const existingChecklist = await BookingChecklist.find({
     booking_id: booking.id,
+    type: "CHECKIN",
   })
     .select("item_id reported_status reported_quantity photo_url incident_id")
     .lean();
@@ -292,12 +294,20 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
     const reportedQty =
       entry?.quantity !== undefined ? Number(entry.quantity) : expectedQty;
 
+    if (reportedQty < 0 || reportedQty > expectedQty) {
+      throw createError(
+        `Số lượng báo cáo cho vật dụng "${reusableItem.name}" (${reportedQty}) không hợp lệ. Số lượng tối đa trong phòng là ${expectedQty}.`,
+        400
+      );
+    }
+
     const doc = {
       booking_id: booking.id,
       pod_id: booking.pod_id,
       item_id: itemId,
       item_name: reusableItem.name,
       unit_cost: reusableItem.unit_cost || 0,
+      type: "CHECKIN",
       expected_quantity: expectedQty,
       reported_status: status,
       reported_quantity: reportedQty,
@@ -486,6 +496,7 @@ const autoAcceptExpiredChecklists = async () => {
       // Check if already has checklist records (partial submit edge case)
       const existingCount = await BookingChecklist.countDocuments({
         booking_id: booking.id,
+        type: "CHECKIN",
       });
 
       if (existingCount > 0) {
@@ -530,6 +541,7 @@ const autoAcceptExpiredChecklists = async () => {
             pod_id: booking.pod_id,
             item_id: pi.item_id,
             item_name: item.name,
+            type: "CHECKIN",
             expected_quantity: pi.expected_quantity,
             reported_status: "MATCHED_BY_SYSTEM",
             reported_quantity: pi.expected_quantity,
@@ -632,10 +644,337 @@ const startAutoAcceptJob = (intervalMinutes = AUTO_ACCEPT_JOB_INTERVAL_MINUTES) 
   }, intervalMs);
 };
 
+// ─── API 4: Confirm Checkout Checklist (Cleaner) ─────────────────
+
+const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload) => {
+  const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId }).lean();
+  if (!cleaningTask) throw createError("Cleaning task not found", 404);
+
+  const actorIds = [cleanerId];
+  const user = await User.findOne(
+    mongoose.Types.ObjectId.isValid(cleanerId)
+      ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
+      : { id: cleanerId }
+  ).select("_id id").lean();
+  
+  if (user) {
+    if (user._id) actorIds.push(String(user._id));
+    if (user.id) actorIds.push(String(user.id));
+  }
+
+  if (!actorIds.includes(String(cleaningTask.cleaner_id))) {
+    throw createError("You are not authorized to access this cleaning task", 403);
+  }
+
+  if (cleaningTask.status !== "IN_PROGRESS") {
+    throw createError("Checkout checklist can only be confirmed for IN_PROGRESS cleaning task", 400);
+  }
+
+  const bookingId = cleaningTask.booking_id;
+  if (!bookingId) {
+    throw createError("This cleaning task is not associated with any booking", 400);
+  }
+
+  if (!Array.isArray(itemsPayload) || itemsPayload.length === 0) {
+    throw createError("items is required and must be a non-empty array", 400);
+  }
+
+  // Check if checkout checklist is already completed
+  const existingCheckout = await BookingChecklist.countDocuments({
+    booking_id: bookingId,
+    type: "CHECKOUT"
+  });
+
+  if (existingCheckout > 0) {
+    throw createError("Checkout checklist has already been submitted for this booking", 409);
+  }
+
+  const podItems = await PodItem.find({ pod_id: cleaningTask.pod_id })
+    .select("item_id expected_quantity")
+    .lean();
+
+  const itemIds = podItems.map((pi) => pi.item_id);
+  const reusableItems = await Item.find({
+    id: { $in: itemIds },
+    item_type: "REUSABLE",
+  })
+    .select("id name unit_cost")
+    .lean();
+
+  const reusableItemById = new Map(
+    reusableItems.map((item) => [String(item.id), item])
+  );
+  const podItemByItemId = new Map(
+    podItems
+      .filter((pi) => reusableItemById.has(String(pi.item_id)))
+      .map((pi) => [String(pi.item_id), pi])
+  );
+
+  const VALID_STATUSES = ["MATCHED", "DAMAGED", "MISSING"];
+  const now = new Date();
+  const checklistDocs = [];
+  const incidentItems = [];
+
+  for (let i = 0; i < itemsPayload.length; i++) {
+    const entry = itemsPayload[i];
+    const itemId = String(entry?.item_id || "").trim();
+
+    if (!itemId) {
+      throw createError(`items[${i}].item_id is required`, 400);
+    }
+
+    const reusableItem = reusableItemById.get(itemId);
+    if (!reusableItem) {
+      throw createError(
+        `items[${i}].item_id "${itemId}" is not a valid REUSABLE item in this pod`,
+        400
+      );
+    }
+
+    const status = String(entry?.status || "").trim().toUpperCase();
+    if (!VALID_STATUSES.includes(status)) {
+      throw createError(
+        `items[${i}].status must be one of: ${VALID_STATUSES.join(", ")}`,
+        400
+      );
+    }
+
+    const podItem = podItemByItemId.get(itemId);
+    const expectedQty = podItem ? podItem.expected_quantity : 0;
+    const reportedQty =
+      entry?.quantity !== undefined ? Number(entry.quantity) : expectedQty;
+
+    if (reportedQty < 0 || reportedQty > expectedQty) {
+      throw createError(
+        `Số lượng báo cáo cho vật dụng "${reusableItem.name}" (${reportedQty}) không hợp lệ. Số lượng tối đa trong phòng là ${expectedQty}.`,
+        400
+      );
+    }
+
+    const doc = {
+      booking_id: bookingId,
+      pod_id: cleaningTask.pod_id,
+      item_id: itemId,
+      item_name: reusableItem.name,
+      unit_cost: reusableItem.unit_cost || 0,
+      type: "CHECKOUT",
+      expected_quantity: expectedQty,
+      reported_status: status,
+      reported_quantity: reportedQty,
+      incident_id: null,
+      confirmed_by: "CLEANER",
+      confirmed_at: now,
+    };
+
+    checklistDocs.push(doc);
+
+    if (status === "DAMAGED" || status === "MISSING") {
+      incidentItems.push({
+        doc,
+        index: i,
+      });
+    }
+  }
+
+  // Insert checklist records
+  const created = await BookingChecklist.insertMany(checklistDocs, {
+    ordered: false,
+  });
+
+  const createdMap = new Map(
+    created.map((c) => [String(c.item_id), c])
+  );
+
+  // Create incidents for DAMAGED/MISSING items
+  const createdIncidents = [];
+  for (const { doc } of incidentItems) {
+    const descParts = [];
+    if (doc.reported_status === "DAMAGED") {
+      descParts.push(`${doc.reported_quantity} ${doc.item_name} bị hư hỏng lúc check-out`);
+    } else {
+      descParts.push(`${doc.reported_quantity} ${doc.item_name} bị thiếu lúc check-out`);
+    }
+    descParts.push(`(Số lượng tiêu chuẩn của phòng: ${doc.expected_quantity})`);
+
+    const estimatedValue = doc.unit_cost * doc.reported_quantity;
+
+    const incident = await Incident.create({
+      pod_id: doc.pod_id,
+      incident_type: "DAMAGE_REPORT",
+      booking_id: doc.booking_id,
+      cleaning_task_id: cleaningTaskId,
+      reported_by: cleanerId,
+      description: descParts.join(" "),
+      severity: "MEDIUM",
+      status: "PENDING",
+      estimated_total_value: estimatedValue > 0 ? estimatedValue : null,
+    });
+
+    // Create Incident Detail
+    await IncidentDetail.create({
+      incident_id: incident.id,
+      type: "ITEM",
+      item_id: doc.item_id,
+      service_catalog_id: null,
+      name_snapshot: doc.item_name,
+      unit_cost_snapshot: doc.unit_cost,
+      quantity: doc.reported_quantity,
+      total_cost: estimatedValue,
+      note: `Báo cáo qua Checkout Checklist`,
+    });
+
+    // Link incident to checklist record
+    const checklistRecord = createdMap.get(String(doc.item_id));
+    if (checklistRecord) {
+      checklistRecord.incident_id = incident.id;
+      await checklistRecord.save();
+    }
+
+    createdIncidents.push({
+      incident_id: incident.id,
+      item_name: doc.item_name,
+      status: doc.reported_status,
+      quantity: doc.reported_quantity,
+    });
+  }
+
+  // Notify manager if there are issues
+  if (createdIncidents.length > 0) {
+    const pod = await Pod.findOne({ id: cleaningTask.pod_id }).select("id code name").lean();
+    const podCode = pod?.code || pod?.name || cleaningTask.pod_id || "Unknown";
+    
+    // We can reuse the resolveManagersForPod logic from incidentService but it's not directly accessible here.
+    // Instead we can just find all managers simply, or we import it. Since we are in bookingChecklistService, 
+    // it's easier to just find all managers or a simple approach.
+    const managerIds = await User.find({ role: "manager", isActive: true }).select("_id").lean();
+    
+    for (const manager of managerIds) {
+      await notificationService.sendToUser(String(manager._id), {
+        title: "Có báo cáo hư hại từ Cleaner",
+        message: `Cleaner vừa gửi báo cáo hư hại lúc checkout cho Pod ${podCode}.`,
+        type: "INCIDENT",
+        event_code: "INCIDENT_REVIEW_REQUIRED",
+        dedupe_key: `CHECKOUT_ISSUE_REPORTED:${bookingId}:${manager._id}`,
+        data: {
+          booking_id: bookingId,
+          pod_id: cleaningTask.pod_id,
+          pod_code: podCode,
+          incident_count: String(createdIncidents.length),
+        },
+      }).catch(() => null);
+    }
+  }
+
+  return {
+    booking_id: bookingId,
+    pod_id: cleaningTask.pod_id,
+    total_items: checklistDocs.length,
+    matched_count: checklistDocs.filter(
+      (d) => d.reported_status === "MATCHED"
+    ).length,
+    issue_count: createdIncidents.length,
+    incidents: createdIncidents,
+    message:
+      createdIncidents.length > 0
+        ? `Checkout checklist hoàn tất. Đã báo cáo ${createdIncidents.length} sự cố.`
+        : "Checkout checklist hoàn tất. Tất cả vật dụng đầy đủ và hoạt động tốt.",
+  };
+};
+
+// ─── API 5: Get Checkout Checklist Items (Cleaner) ─────────────────
+
+const getCheckoutChecklistItems = async (cleaningTaskId, cleanerId) => {
+  const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId }).lean();
+  if (!cleaningTask) throw createError("Cleaning task not found", 404);
+
+  const actorIds = [cleanerId];
+  const user = await User.findOne(
+    mongoose.Types.ObjectId.isValid(cleanerId)
+      ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
+      : { id: cleanerId }
+  ).select("_id id").lean();
+
+  if (user) {
+    if (user._id) actorIds.push(String(user._id));
+    if (user.id) actorIds.push(String(user.id));
+  }
+
+  if (!actorIds.includes(String(cleaningTask.cleaner_id))) {
+    throw createError("You are not authorized to access this cleaning task", 403);
+  }
+
+  const bookingId = cleaningTask.booking_id;
+  if (!bookingId) {
+    throw createError("This cleaning task is not associated with any booking", 400);
+  }
+
+  const podItems = await PodItem.find({ pod_id: cleaningTask.pod_id })
+    .select("id pod_id item_id expected_quantity current_quantity")
+    .lean();
+
+  if (!podItems.length) {
+    return {
+      booking_id: bookingId,
+      pod_id: cleaningTask.pod_id,
+      items: [],
+    };
+  }
+
+  const itemIds = podItems.map((pi) => pi.item_id);
+  const items = await Item.find({
+    id: { $in: itemIds },
+    item_type: "REUSABLE",
+  })
+    .select("id name item_type")
+    .lean();
+
+  const itemById = new Map(items.map((item) => [String(item.id), item]));
+
+  const checklistItems = podItems
+    .filter((pi) => itemById.has(String(pi.item_id)))
+    .map((pi) => {
+      const item = itemById.get(String(pi.item_id));
+      return {
+        item_id: item.id,
+        item_name: item.name,
+        expected_quantity: pi.expected_quantity,
+      };
+    });
+
+  // Get user's checkin records so cleaner knows what was reported initially
+  const checkinRecords = await BookingChecklist.find({
+    booking_id: bookingId,
+    type: "CHECKIN",
+  })
+    .select("item_id reported_status reported_quantity")
+    .lean();
+
+  const checkinMap = new Map(
+    checkinRecords.map((c) => [String(c.item_id), c])
+  );
+
+  const enrichedItems = checklistItems.map((item) => {
+    const checkin = checkinMap.get(String(item.item_id));
+    return {
+      ...item,
+      user_reported_status: checkin ? checkin.reported_status : null,
+      user_reported_quantity: checkin ? checkin.reported_quantity : null,
+    };
+  });
+
+  return {
+    booking_id: bookingId,
+    pod_id: cleaningTask.pod_id,
+    items: enrichedItems,
+  };
+};
+
 module.exports = {
   getChecklistItems,
   confirmChecklist,
   getChecklistStatus,
   autoAcceptExpiredChecklists,
   startAutoAcceptJob,
+  confirmCheckoutChecklist,
+  getCheckoutChecklistItems,
 };

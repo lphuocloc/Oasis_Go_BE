@@ -12,6 +12,7 @@ const {
   deleteCleaningTask,
   backfillCleaningTasks,
 } = require("../controllers/cleaningTaskController");
+const bookingChecklistController = require("../controllers/bookingChecklistController");
 
 /**
  * @swagger
@@ -533,5 +534,89 @@ router.put("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *         description: Cleaning task deleted successfully
  */
 router.delete("/:id", protect, authorize("admin"), deleteCleaningTask);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{taskId}/checkout-checklist:
+ *   post:
+ *     summary: Confirm checkout checklist (Cleaner)
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 description: JSON array of item results
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     item_id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       enum: [MATCHED, DAMAGED, MISSING]
+ *                     quantity:
+ *                       type: number
+ *     responses:
+ *       200:
+ *         description: Checkout checklist confirmed
+ *       400:
+ *         description: Invalid payload or task status
+ *       403:
+ *         description: Not authorized for this task
+ *       409:
+ *         description: Checklist already completed
+ */
+router.post(
+  "/:taskId/checkout-checklist",
+  protect,
+  authorize("cleaner"),
+  bookingChecklistController.confirmCheckoutChecklist
+);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{taskId}/checkout-checklist-items:
+ *   get:
+ *     summary: Get checkout checklist items (Cleaner)
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     responses:
+ *       200:
+ *         description: Checkout checklist items retrieved
+ *       403:
+ *         description: Not authorized for this task
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.get(
+  "/:taskId/checkout-checklist-items",
+  protect,
+  authorize("cleaner"),
+  bookingChecklistController.getCheckoutChecklistItems
+);
 
 module.exports = router;

@@ -98,9 +98,11 @@ const roundMoney = (value) => {
 };
 
 const getIncidentDamageTotal = async (incident) => {
-  const estimated = Number(incident?.estimated_total_value);
-  if (Number.isFinite(estimated) && estimated >= 0) {
-    return roundMoney(estimated);
+  if (incident?.estimated_total_value !== null && incident?.estimated_total_value !== undefined) {
+    const estimated = Number(incident.estimated_total_value);
+    if (Number.isFinite(estimated) && estimated >= 0) {
+      return roundMoney(estimated);
+    }
   }
 
   const detailRows = await IncidentDetail.find({ incident_id: incident.id })
@@ -1125,3 +1127,94 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   };
 };
 
+exports.getOrderIncidents = async (orderId) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id").lean();
+  if (!bookings.length) return [];
+  const bookingIds = bookings.map(b => String(b.id));
+
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds } }).lean();
+  
+  const results = [];
+  for (const inc of incidents) {
+    const totalAmount = await getIncidentDamageTotal(inc);
+    
+    // Get item names from IncidentDetail
+    const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+    const items = details.map(d => d.name_snapshot).filter(Boolean);
+
+    results.push({
+      ...inc,
+      total_amount_value: totalAmount,
+      items
+    });
+  }
+  return results;
+};
+
+exports.createOrderDamageBill = async (orderId, managerActor) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id user_id").lean();
+  if (!bookings.length) throw createError("Order not found or has no bookings", 404);
+  const userId = bookings[0].user_id;
+
+  const bookingIds = bookings.map(b => String(b.id));
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds }, incident_type: "DAMAGE_REPORT" }).lean();
+  
+  if (!incidents.length) {
+    throw createError("No damage incidents found for this order", 400);
+  }
+
+  // Validate all are RESOLVED or DISMISSED
+  const unresolved = incidents.filter(i => !["RESOLVED", "DISMISSED"].includes(i.status));
+  if (unresolved.length > 0) {
+    throw createError("Tất cả báo cáo sự cố (Damage Report) trong Order này phải được xử lý (RESOLVED hoặc DISMISSED) trước khi tạo hóa đơn.", 400);
+  }
+
+  const resolvedIncidents = incidents.filter(i => i.status === "RESOLVED");
+  if (resolvedIncidents.length === 0) {
+    throw createError("Không có sự cố nào cần đền bù (tất cả đều đã bị DISMISSED hoặc không có thiệt hại).", 400);
+  }
+
+  let totalDamageAmount = 0;
+  const incidentBreakdown = [];
+
+  for (const inc of resolvedIncidents) {
+    const amount = await getIncidentDamageTotal(inc);
+    if (amount > 0) {
+      totalDamageAmount += amount;
+      const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+      const items = details.map(d => d.name_snapshot).filter(Boolean);
+      incidentBreakdown.push({ incident_id: inc.id, amount, items });
+    }
+  }
+
+  if (totalDamageAmount <= 0) {
+    throw createError("Tổng thiệt hại bằng 0, không có hóa đơn nào được tạo.", 400);
+  }
+
+  const order = await BookingOrder.findOne({ id: orderId });
+  if (!order) {
+    throw createError("Không tìm thấy Order.", 404);
+  }
+
+  order.outstanding_damage_amount = totalDamageAmount;
+  await order.save();
+
+  // Notify user
+  await notificationService.sendToUser(userId, {
+    title: "Yêu cầu thanh toán phí đền bù hư hại",
+    message: `Đơn hàng ${orderId} có phát sinh phí đền bù hư hại là ${totalDamageAmount.toLocaleString("vi-VN")} VND. Vui lòng thanh toán tại quầy.`,
+    type: "INCIDENT",
+    event_code: "DAMAGE_BILL_CREATED",
+    dedupe_key: `DAMAGE_BILL_CREATED:ORDER:${orderId}`,
+    data: {
+      order_id: orderId,
+      outstanding_damage_amount: String(totalDamageAmount),
+    },
+  });
+
+  return {
+    order_id: orderId,
+    outstanding_damage_amount: totalDamageAmount,
+    incident_breakdown: incidentBreakdown
+  };
+};
