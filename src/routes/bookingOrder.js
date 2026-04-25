@@ -510,4 +510,88 @@ router.post(
 
 router.post("/:id/repay", protect, bookingOrderController.initiateRepayment);
 
+/**
+ * @swagger
+ * /api/booking-orders/{id}/incidents:
+ *   get:
+ *     summary: Get all incidents for a booking order
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking order ID
+ *     responses:
+ *       200:
+ *         description: List of incidents for the order
+ */
+router.get("/:id/incidents", protect, loadManagerScope, bookingOrderController.getOrderIncidents);
+
+/**
+ * @swagger
+ * /api/booking-orders/{id}/create-damage-bill:
+ *   post:
+ *     summary: Create unified damage bill for all resolved incidents in the order
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking order ID
+ *     responses:
+ *       200:
+ *         description: Damage bill created successfully
+ *       400:
+ *         description: Not all incidents are processed, or damage is 0
+ *       404:
+ *         description: Order not found
+ */
+router.post("/:id/create-damage-bill", protect, authorize("manager"), loadManagerScope, bookingOrderController.createOrderDamageBill);
+
+/**
+ * @swagger
+ * /api/booking-orders/{id}/pay-damage:
+ *   post:
+ *     summary: Pay for an order's outstanding damage bill using Wallet (with VNPay fallback)
+ *     tags: [BookingOrders]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking order ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - pin
+ *             properties:
+ *               pin:
+ *                 type: string
+ *                 description: User's wallet payment PIN
+ *               orderInfo:
+ *                 type: string
+ *                 description: Optional payment info
+ *     responses:
+ *       200:
+ *         description: Payment processed
+ *       400:
+ *         description: Bad request (no outstanding damage, wrong pin, etc.)
+ */
+router.post("/:id/pay-damage", protect, bookingOrderController.payDamageBill);
+
 module.exports = router;

@@ -2,7 +2,7 @@ const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
 const REPORTED_STATUSES = ["MATCHED", "DAMAGED", "MISSING", "MATCHED_BY_SYSTEM"];
-const CONFIRMED_BY = ["USER", "SYSTEM"];
+const CONFIRMED_BY = ["USER", "SYSTEM", "CLEANER"];
 
 const bookingChecklistSchema = new mongoose.Schema(
   {
@@ -34,6 +34,15 @@ const bookingChecklistSchema = new mongoose.Schema(
       type: String,
       required: true,
       trim: true,
+    },
+    type: {
+      type: String,
+      enum: {
+        values: ["CHECKIN", "CHECKOUT"],
+        message: "{VALUE} is not a valid checklist type",
+      },
+      default: "CHECKIN",
+      required: true,
     },
     expected_quantity: {
       type: Number,
@@ -79,6 +88,6 @@ const bookingChecklistSchema = new mongoose.Schema(
   }
 );
 
-bookingChecklistSchema.index({ booking_id: 1, item_id: 1 }, { unique: true });
+bookingChecklistSchema.index({ booking_id: 1, item_id: 1, type: 1 }, { unique: true });
 
 module.exports = mongoose.model("BookingChecklist", bookingChecklistSchema);

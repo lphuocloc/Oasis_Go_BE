@@ -367,6 +367,99 @@ class BookingOrderController {
       return res.status(500).json({ success: false, message: error.message });
     }
   }
+
+  async getOrderIncidents(req, res) {
+    try {
+      const { id } = req.params;
+      const incidentService = require("../services/incidentService");
+      const result = await incidentService.getOrderIncidents(id);
+
+      return res.status(200).json({
+        success: true,
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error getting order incidents:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to get order incidents",
+      });
+    }
+  }
+
+  async createOrderDamageBill(req, res) {
+    try {
+      const { id } = req.params;
+      const baseActor = req.user
+        ? (typeof req.user.toObject === "function" ? req.user.toObject() : req.user)
+        : null;
+      const actor = baseActor ? { ...baseActor, managerScope: req.managerScope || null } : null;
+
+      if (!actor) {
+        return res.status(401).json({
+          success: false,
+          message: "Not authorized. Please login to access this resource.",
+        });
+      }
+
+      const incidentService = require("../services/incidentService");
+      const result = await incidentService.createOrderDamageBill(id, actor);
+
+      return res.status(200).json({
+        success: true,
+        message: "Order damage bill created successfully",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error creating order damage bill:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to create order damage bill",
+      });
+    }
+  }
+
+  async payDamageBill(req, res) {
+    try {
+      const { id } = req.params;
+      const { pin, orderInfo } = req.body;
+      const userId = req.user.id || req.user._id;
+
+      if (!pin) {
+        return res.status(400).json({
+          success: false,
+          message: "Mã PIN là bắt buộc để thanh toán bằng ví",
+        });
+      }
+
+      const ipAddr =
+        req.headers["x-forwarded-for"] ||
+        req.connection.remoteAddress ||
+        req.socket.remoteAddress ||
+        "127.0.0.1";
+
+      const paymentService = require("../services/paymentService");
+      const result = await paymentService.payDamageBill({
+        bookingOrderId: id,
+        userId,
+        pin,
+        orderInfo,
+        ipAddr,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Payment processed",
+        data: result,
+      });
+    } catch (error) {
+      console.error("Error paying damage bill:", error);
+      return res.status(error.statusCode || 500).json({
+        success: false,
+        message: error.message || "Failed to pay damage bill",
+      });
+    }
+  }
 }
 
 module.exports = new BookingOrderController();
