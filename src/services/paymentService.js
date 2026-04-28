@@ -1351,6 +1351,9 @@ class PaymentService {
           }], { session });
 
           order.outstanding_damage_amount = Number(Math.max(0, payableAmount - walletDebitAmount).toFixed(2));
+          if (order.outstanding_damage_amount === 0) {
+            order.damage_payment_status = "PAID";
+          }
           await order.save({ session });
         }
 
@@ -1464,6 +1467,9 @@ class PaymentService {
       const order = await BookingOrder.findOne({ id: transaction.order_id });
       if (order && order.outstanding_damage_amount > 0) {
         order.outstanding_damage_amount = Math.max(0, order.outstanding_damage_amount - transaction.amount);
+        if (order.outstanding_damage_amount === 0) {
+          order.damage_payment_status = "PAID";
+        }
         await order.save();
 
         if (order.user_id) {

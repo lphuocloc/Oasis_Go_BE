@@ -301,6 +301,13 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       );
     }
 
+    if ((status === "DAMAGED" || status === "MISSING") && reportedQty <= 0) {
+      throw createError(
+        `Số lượng báo cáo cho vật dụng "${reusableItem.name}" phải lớn hơn 0 khi báo thiếu hoặc hỏng.`,
+        400
+      );
+    }
+
     const doc = {
       booking_id: booking.id,
       pod_id: booking.pod_id,
@@ -350,13 +357,13 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
-      incident_type: "DAMAGE_REPORT",
+      incident_type: "REPLENISHMENT_REQUEST",
       booking_id: doc.booking_id,
       reported_by: userId,
       description: descParts.join(" "),
       severity: "MEDIUM",
       status: "PENDING",
-      estimated_total_value: estimatedValue > 0 ? estimatedValue : null,
+      estimated_total_value: null,
     });
 
     // Link incident to checklist record
@@ -430,8 +437,8 @@ const _notifyCleanersAboutChecklistIssues = async (booking, incidents) => {
 
   for (const cleanerUserId of cleanerUserIds) {
     await notificationService.sendToUser(cleanerUserId, {
-      title: `Sự cố tại Pod ${podLabel}`,
-      message: `Khách báo cáo vấn đề: ${issueList}. Vui lòng kiểm tra ngay.`,
+      title: `Yêu cầu bổ sung đồ tại Pod ${podLabel}`,
+      message: `Khách báo cáo: ${issueList}. Vui lòng bổ sung ngay.`,
       type: "INCIDENT",
       event_code: "CHECKLIST_ISSUE_REPORTED",
       dedupe_key: `CHECKLIST_ISSUE_REPORTED:${booking.id}:${cleanerUserId}`,

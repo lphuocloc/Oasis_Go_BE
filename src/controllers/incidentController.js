@@ -190,3 +190,25 @@ exports.updateIncidentStatus = async (req, res) => {
     });
   }
 };
+
+exports.resolveReplenishment = async (req, res) => {
+  try {
+    const cleanerId = req.user.id || String(req.user._id);
+    const incidentId = req.params.id;
+    const { items } = req.body;
+
+    const result = await incidentService.resolveReplenishmentIncident(incidentId, cleanerId, items);
+
+    res.status(200).json({
+      success: true,
+      message: result.message,
+      data: result,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error resolving replenishment incident",
+    });
+  }
+};

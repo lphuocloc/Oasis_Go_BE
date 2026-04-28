@@ -10,6 +10,7 @@ const {
   getIncidents,
   getIncidentById,
   updateIncidentStatus,
+  resolveReplenishment,
 } = require("../controllers/incidentController");
 
 /**
@@ -642,6 +643,51 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *         description: Incident not found
  */
 router.patch("/:id/status", protect, authorize("admin", "manager"), loadManagerScope, updateIncidentStatus);
+
+/**
+ * @swagger
+ * /api/incidents/{id}/resolve-replenishment:
+ *   patch:
+ *     summary: Resolve replenishment incident (Cleaner only)
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - item_id
+ *                     - quantity
+ *                   properties:
+ *                     item_id:
+ *                       type: string
+ *                     quantity:
+ *                       type: integer
+ *     responses:
+ *       200:
+ *         description: Replenishment resolved successfully
+ *       400:
+ *         description: Invalid input or no active shift/warehouse found
+ *       404:
+ *         description: Incident not found
+ */
+router.patch("/:id/resolve-replenishment", protect, authorize("cleaner"), resolveReplenishment);
 
 module.exports = router;
 
