@@ -18,7 +18,7 @@ const incidentSchema = new mongoose.Schema(
     incident_type: {
       type: String,
       enum: {
-        values: ["OPERATIONAL", "DAMAGE_REPORT"],
+        values: ["OPERATIONAL", "DAMAGE_REPORT", "CHECKIN_REPORT", "CHECKOUT_REPORT"],
         message: "{VALUE} is not a valid incident type",
       },
       default: "OPERATIONAL",
@@ -65,7 +65,7 @@ const incidentSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "RESOLVED", "DISMISSED"],
+        values: ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"],
         message: "{VALUE} is not a valid status",
       },
       default: "PENDING",

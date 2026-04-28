@@ -350,7 +350,7 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
-      incident_type: "DAMAGE_REPORT",
+      incident_type: "CHECKIN_REPORT",
       booking_id: doc.booking_id,
       reported_by: userId,
       description: descParts.join(" "),
@@ -800,7 +800,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
-      incident_type: "DAMAGE_REPORT",
+      incident_type: "CHECKOUT_REPORT",
       booking_id: doc.booking_id,
       cleaning_task_id: cleaningTaskId,
       reported_by: cleanerId,
