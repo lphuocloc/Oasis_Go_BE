@@ -36,6 +36,7 @@ const CLEANING_TASK_STATUSES = [
   "DONE",
   "CANCELLED",
   "MISSED",
+  "REJECTED",
 ];
 
 const REQUEST_SOURCES = ["USER_REQUEST", "AUTO_AFTER_CHECKOUT", "SYSTEM_RETRY", "ROOM_CHANGE_VACATED"];
@@ -435,6 +436,106 @@ const emitCleaningTaskStatusChangedRealtime = async ({
         },
       });
     });
+};
+
+const notifyManagersTaskRejected = async (task) => {
+  if (!task || !task.pod_id) return;
+
+  const pod = await Pod.findOne({ id: String(task.pod_id) }).select("id code cluster_id").lean();
+  if (!pod) return;
+
+  const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id").lean();
+  if (!cluster) return;
+
+  const locationId = cluster.location_id;
+  const podCode = pod.code || pod.id || "Unknown";
+
+  // Find managers on shift at this location today
+  const locationShifts = await LocationShift.find({ location_id: locationId })
+    .select("id shift_id")
+    .lean();
+
+  let managerUserIds = [];
+
+  if (locationShifts.length > 0) {
+    const now = new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const managerShifts = await StaffShift.find({
+      id: { $in: locationShifts.map((ls) => ls.shift_id).filter(Boolean) },
+      role: "MANAGER",
+      is_active: true,
+    })
+      .select("id")
+      .lean();
+
+    if (managerShifts.length > 0) {
+      const managerShiftIdSet = new Set(managerShifts.map((s) => s.id));
+      const managerLocationShiftIds = locationShifts
+        .filter((ls) => managerShiftIdSet.has(ls.shift_id))
+        .map((ls) => ls.id);
+
+      if (managerLocationShiftIds.length > 0) {
+        const assignments = await StaffShiftAssignment.find({
+          location_shift_id: { $in: managerLocationShiftIds },
+          $or: [
+            { work_date: { $gte: startOfDay, $lte: endOfDay } },
+            {
+              $and: [
+                { start_date: { $lte: endOfDay } },
+                { end_date: { $gte: startOfDay } },
+              ],
+            },
+          ],
+          status: { $in: ["CHECKED_IN", "ASSIGNED"] },
+        })
+          .select("staff_id")
+          .lean();
+
+        managerUserIds = [...new Set(assignments.map((a) => String(a.staff_id)).filter(Boolean))];
+      }
+    }
+  }
+
+  // Fallback: notify all active managers in the system
+  if (managerUserIds.length === 0) {
+    const allManagers = await User.find({ role: "manager", isActive: true })
+      .select("_id id")
+      .lean();
+    managerUserIds = allManagers.map((m) => m.id || String(m._id)).filter(Boolean);
+  }
+
+  if (managerUserIds.length === 0) return;
+
+  const rejectedCleanerQuery = buildUserIdentityQuery(task.cleaner_id);
+  const rejectedCleaner = rejectedCleanerQuery
+    ? await User.findOne(rejectedCleanerQuery).select("name").lean()
+    : null;
+  const cleanerName = rejectedCleaner?.name || String(task.cleaner_id) || "Unknown";
+  const rejectionReason = String(task.rejection_reason || "").trim() || "(không có lý do)";
+
+  await Promise.all(
+    managerUserIds.map((managerId) =>
+      notificationService.sendToUser(managerId, {
+        title: `Task vệ sinh bị từ chối: Pod ${podCode}`,
+        message: `Cleaner ${cleanerName} đã từ chối task vệ sinh Pod ${podCode}. Lý do: ${rejectionReason}. Vui lòng phân công lại.`,
+        type: "CLEANING",
+        event_code: "CLEANING_TASK_REJECTED",
+        dedupe_key: `CLEANING_TASK_REJECTED:${String(task.id)}:${managerId}`,
+        data: {
+          cleaning_task_id: String(task.id),
+          pod_id: String(task.pod_id),
+          pod_code: podCode,
+          booking_id: task.booking_id ? String(task.booking_id) : null,
+          rejected_cleaner_id: String(task.cleaner_id),
+          rejection_reason: rejectionReason,
+        },
+      })
+    )
+  );
 };
 
 const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = [], options = {}) => {
@@ -2113,3 +2214,237 @@ exports.startBackfillJob = (intervalMinutes = 60, defaultOptions = {}) => {
   runBackfill().catch(() => null);
   setInterval(runBackfill, safeIntervalMinutes * 60 * 1000);
 };
+
+/**
+ * Cleaner rejects an ASSIGNED or ACCEPTED cleaning task.
+ * Saves rejection_reason, transitions status to REJECTED, and notifies managers.
+ */
+exports.rejectCleaningTask = async (id, actor, data = {}) => {
+  const rejectionReason = String(data.rejection_reason || "").trim();
+  if (!rejectionReason) {
+    throw createError("rejection_reason is required", 400);
+  }
+
+  const task = await CleaningTask.findOne({ id });
+  if (!task) throw createError("Cleaning task not found", 404);
+
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (actorRole !== "cleaner") {
+    throw createError("Only cleaners can reject tasks", 403);
+  }
+
+  const actorCleanerIds = [...new Set(resolveActorCleanerIds(actor))];
+  if (actorCleanerIds.length === 0) {
+    throw createError("Unable to resolve cleaner identity", 400);
+  }
+  if (!actorCleanerIds.includes(String(task.cleaner_id))) {
+    throw createError("You are not allowed to reject this cleaning task", 403);
+  }
+
+  const currentStatus = String(task.status || "").toUpperCase();
+  if (!["ASSIGNED", "ACCEPTED"].includes(currentStatus)) {
+    throw createError(
+      `Cannot reject a task with status ${currentStatus}. Only ASSIGNED or ACCEPTED tasks can be rejected.`,
+      400,
+      "INVALID_STATUS_TRANSITION"
+    );
+  }
+
+  const previousStatus = task.status;
+  task.status = "REJECTED";
+  task.rejection_reason = rejectionReason;
+
+  applyStatusAuditFields(task, previousStatus);
+  await task.save();
+
+  try {
+    await notifyManagersTaskRejected(task);
+  } catch (notifyErr) {
+    console.error("[rejectCleaningTask] Failed to notify managers:", notifyErr.message);
+  }
+
+  try {
+    await emitCleaningTaskStatusChangedRealtime({ task, previousStatus, previousCleanerId: String(task.cleaner_id) });
+  } catch (emitErr) {
+    console.error("[rejectCleaningTask] Failed to emit realtime event:", emitErr.message);
+  }
+
+  return task;
+};
+
+/**
+ * Manager reassigns a REJECTED (or MISSED) cleaning task to another cleaner.
+ * If target_cleaner_id is provided, assigns directly.
+ * Otherwise, auto-picks the best available cleaner via load balancing (excluding the previous one).
+ */
+exports.reassignCleaningTask = async (id, actor, data = {}, managerScope = null) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers or admins can reassign cleaning tasks", 403);
+  }
+
+  const task = await CleaningTask.findOne({ id });
+  if (!task) throw createError("Cleaning task not found", 404);
+
+  const currentStatus = String(task.status || "").toUpperCase();
+  if (!["REJECTED", "MISSED", "ASSIGNED"].includes(currentStatus)) {
+    throw createError(
+      `Cannot reassign a task with status ${currentStatus}. Only REJECTED, MISSED, or ASSIGNED tasks can be reassigned.`,
+      400,
+      "INVALID_STATUS_TRANSITION"
+    );
+  }
+
+  // Manager scope check
+  if (actorRole === "manager" && managerScope) {
+    const scopedPodIds = (managerScope.podIds || []).map(String);
+    if (scopedPodIds.length > 0 && !scopedPodIds.includes(String(task.pod_id))) {
+      throw createError("This task is outside your management scope", 403);
+    }
+  }
+
+  const previousStatus = task.status;
+  const previousCleanerId = String(task.cleaner_id || "");
+
+  const targetCleanerId = String(data.target_cleaner_id || "").trim();
+
+  if (targetCleanerId) {
+    // --- Manual reassign to specified cleaner ---
+    const cleaner = await User.findOne(buildUserIdentityQuery(targetCleanerId))
+      .select("_id id role isActive")
+      .lean();
+    if (!cleaner) throw createError("Target cleaner not found", 404);
+    if (!cleaner.isActive) throw createError("Target cleaner is inactive", 403);
+    if (cleaner.role !== "cleaner") throw createError("Target user must have cleaner role", 400);
+
+    const newCleanerId = cleaner.id || String(cleaner._id);
+    task.reassigned_from_cleaner_id = previousCleanerId;
+    task.cleaner_id = newCleanerId;
+    if (data.shift_assignment_id !== undefined) {
+      task.shift_assignment_id = data.shift_assignment_id || null;
+    }
+    task.status = "ASSIGNED";
+    task.rejection_reason = task.rejection_reason; // preserve for audit
+    applyStatusAuditFields(task, previousStatus);
+    await task.save();
+  } else {
+    // --- Auto-pick via load balancing ---
+    const pod = await Pod.findOne({ id: String(task.pod_id) }).select("id cluster_id").lean();
+    if (!pod) throw createError("Pod not found for this task", 404);
+
+    const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("id location_id").lean();
+    if (!cluster) throw createError("Pod cluster not found", 404);
+
+    const taskReferenceTime = task.due_at ? new Date(task.due_at) : new Date();
+    const { startOfDay, endOfDay } = getDateRangeForDay(taskReferenceTime);
+
+    const locationShifts = await LocationShift.find({ location_id: cluster.location_id })
+      .select("id shift_id")
+      .lean();
+    if (locationShifts.length === 0) {
+      throw createError("No location shifts found at this location", 400, "NO_LOCATION_SHIFTS");
+    }
+
+    const shiftIds = [...new Set(locationShifts.map((ls) => ls.shift_id).filter(Boolean))];
+    const cleanerShifts = await StaffShift.find({
+      id: { $in: shiftIds },
+      role: "CLEANER",
+      is_active: true,
+    })
+      .select("id")
+      .lean();
+
+    if (cleanerShifts.length === 0) {
+      throw createError("No active cleaner shifts found at this location", 400, "NO_CLEANER_SHIFTS");
+    }
+
+    const cleanerShiftIdSet = new Set(cleanerShifts.map((s) => s.id));
+    const cleanerLocationShiftIds = locationShifts
+      .filter((ls) => cleanerShiftIdSet.has(ls.shift_id))
+      .map((ls) => ls.id);
+
+    const assignments = await StaffShiftAssignment.find({
+      location_shift_id: { $in: cleanerLocationShiftIds },
+      $or: [
+        { work_date: { $gte: startOfDay, $lte: endOfDay } },
+        {
+          $and: [
+            { start_date: { $lte: endOfDay } },
+            { end_date: { $gte: startOfDay } },
+          ],
+        },
+      ],
+      status: { $in: ["CHECKED_IN", "ASSIGNED"] },
+    })
+      .sort({ created_at: 1 })
+      .select("id staff_id status checkin_at")
+      .lean();
+
+    if (assignments.length === 0) {
+      throw createError("No available cleaners on shift at this location", 400, "NO_AVAILABLE_CLEANERS");
+    }
+
+    const staffIds = [...new Set(assignments.map((a) => a.staff_id).filter(Boolean).map(String))];
+    const staffObjectIds = staffIds
+      .filter((sid) => mongoose.Types.ObjectId.isValid(sid))
+      .map((sid) => new mongoose.Types.ObjectId(sid));
+
+    const staffUsers = await User.find({
+      $or: [{ id: { $in: staffIds } }, { _id: { $in: staffObjectIds } }],
+    })
+      .select("_id id role isActive")
+      .lean();
+
+    // Exclude the previously rejected/assigned cleaner and inactive/non-cleaner users
+    const availableCleaners = staffUsers.filter(
+      (u) =>
+        String(u.role || "").toLowerCase() === "cleaner" &&
+        u.isActive === true &&
+        String(u.id || String(u._id)) !== previousCleanerId &&
+        String(u._id) !== previousCleanerId
+    );
+
+    if (availableCleaners.length === 0) {
+      throw createError(
+        "No other available cleaners found for auto-reassignment at this location",
+        400,
+        "NO_AVAILABLE_CLEANERS"
+      );
+    }
+
+    const eligibleCleanerIds = availableCleaners
+      .map((u) => getCleanerIdentity(u))
+      .filter(Boolean);
+
+    const selectedAssignment = await selectAssignmentWithLoadBalancing(assignments, eligibleCleanerIds, {
+      requestSource: task.request_source || "AUTO_AFTER_CHECKOUT",
+      dueAt: task.due_at,
+    });
+
+    if (!selectedAssignment) {
+      throw createError("Could not select a cleaner via load balancing", 400, "NO_AVAILABLE_CLEANERS");
+    }
+
+    task.reassigned_from_cleaner_id = previousCleanerId;
+    task.cleaner_id = selectedAssignment.staff_id;
+    task.shift_assignment_id = selectedAssignment.id;
+    task.status = "ASSIGNED";
+    applyStatusAuditFields(task, previousStatus);
+    await task.save();
+  }
+
+  try {
+    await notifyCleanerTaskAssigned(task, { dedupeSuffix: "REASSIGNED" });
+  } catch (notifyErr) {
+    console.error("[reassignCleaningTask] Failed to notify new cleaner:", notifyErr.message);
+  }
+
+  try {
+    await emitCleaningTaskStatusChangedRealtime({ task, previousStatus, previousCleanerId });
+  } catch (emitErr) {
+    console.error("[reassignCleaningTask] Failed to emit realtime event:", emitErr.message);
+  }
+
+  return task;
+};
+

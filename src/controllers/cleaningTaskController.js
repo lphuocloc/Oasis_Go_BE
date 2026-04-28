@@ -112,3 +112,50 @@ exports.backfillCleaningTasks = async (req, res) => {
   }
 };
 
+exports.rejectCleaningTask = async (req, res) => {
+  try {
+    const task = await cleaningTaskService.rejectCleaningTask(req.params.id, req.user, req.body);
+    res.status(200).json({
+      success: true,
+      message: "Cleaning task rejected successfully",
+      data: task,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error rejecting cleaning task",
+      error_code: error.errorCode || undefined,
+    });
+  }
+};
+
+exports.reassignCleaningTask = async (req, res) => {
+  try {
+    if (req.user && req.user.role === "manager" && req.managerScope) {
+      const task = await cleaningTaskService.getCleaningTaskById(req.params.id);
+      if (!req.managerScope.podIds.includes(String(task.pod_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+    }
+    const task = await cleaningTaskService.reassignCleaningTask(
+      req.params.id,
+      req.user,
+      req.body,
+      req.managerScope || null
+    );
+    res.status(200).json({
+      success: true,
+      message: "Cleaning task reassigned successfully",
+      data: task,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error reassigning cleaning task",
+      error_code: error.errorCode || undefined,
+    });
+  }
+};
+

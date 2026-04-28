@@ -24,9 +24,9 @@ const InventoryStock = require("../models/InventoryStock");
 const InventoryActivityLog = require("../models/InventoryActivityLog");
 const PodItem = require("../models/PodItem");
 
-const INCIDENT_STATUSES = ["PENDING", "RESOLVED", "DISMISSED"];
+const INCIDENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
-const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST"];
+const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST", "CHECKOUT_REPORT"];
 const INCIDENT_DETAIL_TYPES = ["ITEM", "SERVICE"];
 const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const ORDER_BOOKING_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
@@ -530,7 +530,7 @@ exports.getIncidents = async (filters = {}, actor = null) => {
   if (filters.incident_type) {
     const incidentType = normalizeIncidentType(filters.incident_type);
     if (!INCIDENT_TYPES.includes(incidentType)) {
-      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT", 400);
+      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT, CHECKIN_REPORT, CHECKOUT_REPORT", 400);
     }
     query.incident_type = incidentType;
   }
@@ -1314,5 +1314,200 @@ exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayloa
     incident_id: incident.id,
     warehouse_id: warehouseId,
     items_processed: itemQuantities.size
+  };
+};
+
+// ─── Cleaner Incident APIs ────────────────────────────────────────
+
+/**
+ * Validate that the logged-in cleaner has access to a given incident.
+ * Access is granted when:
+ *  - The incident.reported_by matches the cleaner (CHECKOUT_REPORT), OR
+ *  - The incident is a CHECKIN_REPORT whose booking_id links to a
+ *    CleaningTask assigned to this cleaner.
+ * Returns the associated CleaningTask if found.
+ */
+const _resolveCleanerAccessToIncident = async (incident, actorIds) => {
+  // Own incident (DAMAGE_REPORT reported by cleaner during checkout)
+  if (actorIds.includes(String(incident.reported_by || ""))) {
+    const task = incident.cleaning_task_id
+      ? await CleaningTask.findOne({ id: incident.cleaning_task_id })
+        .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+        .lean()
+      : null;
+    return { allowed: true, cleaningTask: task };
+  }
+
+  // Guest reports (REPLENISHMENT_REQUEST) during current cleaning session
+  if (incident.incident_type === "REPLENISHMENT_REQUEST" && incident.booking_id) {
+    const task = await CleaningTask.findOne({
+      booking_id: incident.booking_id,
+      cleaner_id: { $in: actorIds },
+    })
+      .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+      .lean();
+
+    if (task) {
+      return { allowed: true, cleaningTask: task };
+    }
+  }
+
+  return { allowed: false, cleaningTask: null };
+};
+
+/**
+ * API 1 (Cleaner): Get incident detail enriched with booking and cleaning task info.
+ */
+exports.getCleanerIncidentDetail = async (incidentId, actor) => {
+  const incident = await Incident.findOne({ id: incidentId }).lean();
+  if (!incident) throw createError("Incident not found", 404);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const { allowed, cleaningTask } = await _resolveCleanerAccessToIncident(incident, actorIds);
+  if (!allowed) {
+    throw createError("You are not allowed to access this incident", 403);
+  }
+
+  const [photos, details, booking] = await Promise.all([
+    IncidentMedia.find({ incident_id: incidentId }).select("media_url file_type -_id").lean(),
+    IncidentDetail.find({ incident_id: incidentId })
+      .select("type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
+      .lean(),
+    incident.booking_id
+      ? Booking.findOne({ id: incident.booking_id })
+        .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+        .lean()
+      : null,
+  ]);
+
+  return {
+    ...incident,
+    photo_urls: photos.map((p) => p.media_url),
+    details,
+    booking: booking || null,
+    cleaning_task: cleaningTask || null,
+  };
+};
+
+/**
+ * API 2 (Cleaner): Get all REPLENISHMENT_REQUEST incidents for a cleaning task assigned to the cleaner.
+ */
+exports.getCheckinReportsByCleaner = async (cleaningTaskId, actor) => {
+  if (!cleaningTaskId) throw createError("cleaning_task_id is required", 400);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId })
+    .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+    .lean();
+
+  if (!cleaningTask) throw createError("Cleaning task not found", 404);
+
+  const taskCleanerId = String(cleaningTask.cleaner_id || "");
+  if (!actorIds.includes(taskCleanerId)) {
+    throw createError("This cleaning task is not assigned to you", 403);
+  }
+
+  const booking = cleaningTask.booking_id
+    ? await Booking.findOne({ id: cleaningTask.booking_id })
+      .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+      .lean()
+    : null;
+
+  if (!cleaningTask.booking_id) {
+    return { cleaning_task: cleaningTask, booking: null, incidents: [] };
+  }
+
+  const incidents = await Incident.find({
+    booking_id: cleaningTask.booking_id,
+    incident_type: "REPLENISHMENT_REQUEST",
+  })
+    .sort({ created_at: -1 })
+    .lean();
+
+  if (!incidents.length) {
+    return { cleaning_task: cleaningTask, booking: booking || null, incidents: [] };
+  }
+
+  const incidentIds = incidents.map((i) => i.id);
+  const [photoMap, detailMap] = await Promise.all([
+    buildIncidentPhotoMap(incidentIds),
+    buildIncidentDetailMap(incidentIds),
+  ]);
+
+  const enrichedIncidents = incidents.map((inc) => ({
+    ...inc,
+    photo_urls: photoMap[inc.id] || [],
+    details: detailMap[inc.id] || [],
+  }));
+
+  return {
+    cleaning_task: cleaningTask,
+    booking: booking || null,
+    incidents: enrichedIncidents,
+  };
+};
+
+/**
+ * API 3 (Cleaner): Update incident status along the cleaner workflow.
+ * Allowed transitions: PENDING → PROCESSING, PROCESSING → COMPLETED.
+ */
+exports.updateCleanerIncidentStatus = async (incidentId, payload, actor) => {
+  const { status, resolution_note } = payload;
+  const normalizedStatus = normalizeStatus(status);
+
+  const ALLOWED_TARGET_STATUSES = ["PROCESSING", "COMPLETED"];
+  if (!ALLOWED_TARGET_STATUSES.includes(normalizedStatus)) {
+    throw createError(
+      "Cleaner can only set incident status to PROCESSING or COMPLETED",
+      400
+    );
+  }
+
+  const incident = await Incident.findOne({ id: incidentId });
+  if (!incident) throw createError("Incident not found", 404);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const { allowed } = await _resolveCleanerAccessToIncident(incident.toObject(), actorIds);
+  if (!allowed) {
+    throw createError("You are not allowed to update this incident", 403);
+  }
+
+  const previousStatus = String(incident.status || "").toUpperCase();
+
+  const VALID_TRANSITIONS = {
+    PENDING: "PROCESSING",
+    PROCESSING: "COMPLETED",
+  };
+
+  if (VALID_TRANSITIONS[previousStatus] !== normalizedStatus) {
+    throw createError(
+      `Invalid status transition: ${previousStatus} → ${normalizedStatus}. Allowed: PENDING → PROCESSING, PROCESSING → COMPLETED`,
+      400
+    );
+  }
+
+  incident.status = normalizedStatus;
+  if (resolution_note !== undefined) {
+    incident.resolution_note = resolution_note;
+  }
+  if (normalizedStatus === "COMPLETED") {
+    incident.handled_by = resolveActorId(actor);
+  }
+
+  await incident.save();
+
+  return {
+    id: incident.id,
+    status: incident.status,
+    previous_status: previousStatus,
+    resolution_note: incident.resolution_note || null,
+    handled_by: incident.handled_by || null,
+    updated_at: incident.updated_at,
   };
 };

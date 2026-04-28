@@ -8,6 +8,7 @@ const CLEANING_TASK_STATUSES = [
   "DONE",
   "CANCELLED",
   "MISSED",
+  "REJECTED",
 ];
 
 const CLEANING_REQUEST_SOURCES = [

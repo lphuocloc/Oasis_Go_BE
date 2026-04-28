@@ -663,7 +663,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
       ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
       : { id: cleanerId }
   ).select("_id id").lean();
-  
+
   if (user) {
     if (user._id) actorIds.push(String(user._id));
     if (user.id) actorIds.push(String(user.id));
@@ -849,12 +849,12 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
   if (createdIncidents.length > 0) {
     const pod = await Pod.findOne({ id: cleaningTask.pod_id }).select("id code name").lean();
     const podCode = pod?.code || pod?.name || cleaningTask.pod_id || "Unknown";
-    
+
     // We can reuse the resolveManagersForPod logic from incidentService but it's not directly accessible here.
     // Instead we can just find all managers simply, or we import it. Since we are in bookingChecklistService, 
     // it's easier to just find all managers or a simple approach.
     const managerIds = await User.find({ role: "manager", isActive: true }).select("_id").lean();
-    
+
     for (const manager of managerIds) {
       await notificationService.sendToUser(String(manager._id), {
         title: "Có báo cáo hư hại từ Cleaner",
