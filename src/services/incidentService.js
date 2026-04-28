@@ -19,10 +19,14 @@ const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
 const debtService = require("./debtService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const LocationWarehouse = require("../models/LocationWarehouse");
+const InventoryStock = require("../models/InventoryStock");
+const InventoryActivityLog = require("../models/InventoryActivityLog");
+const PodItem = require("../models/PodItem");
 
 const INCIDENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
-const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "CHECKIN_REPORT", "CHECKOUT_REPORT"];
+const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST", "CHECKOUT_REPORT"];
 const INCIDENT_DETAIL_TYPES = ["ITEM", "SERVICE"];
 const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const ORDER_BOOKING_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
@@ -223,7 +227,7 @@ const resolveManagersForPod = async (podId) => {
     .lean();
 
   const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-  
+
   if (!assignmentStaffIds.length) {
     const allManagers = await User.find({ role: "manager", isActive: true })
       .select("_id")
@@ -1133,11 +1137,11 @@ exports.getOrderIncidents = async (orderId) => {
   const bookingIds = bookings.map(b => String(b.id));
 
   const incidents = await Incident.find({ booking_id: { $in: bookingIds } }).lean();
-  
+
   const results = [];
   for (const inc of incidents) {
     const totalAmount = await getIncidentDamageTotal(inc);
-    
+
     // Get item names from IncidentDetail
     const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
     const items = details.map(d => d.name_snapshot).filter(Boolean);
@@ -1158,7 +1162,7 @@ exports.createOrderDamageBill = async (orderId, managerActor) => {
 
   const bookingIds = bookings.map(b => String(b.id));
   const incidents = await Incident.find({ booking_id: { $in: bookingIds }, incident_type: "DAMAGE_REPORT" }).lean();
-  
+
   if (!incidents.length) {
     throw createError("No damage incidents found for this order", 400);
   }
@@ -1197,6 +1201,7 @@ exports.createOrderDamageBill = async (orderId, managerActor) => {
   }
 
   order.outstanding_damage_amount = totalDamageAmount;
+  order.damage_payment_status = "PENDING";
   await order.save();
 
   // Notify user
@@ -1219,6 +1224,99 @@ exports.createOrderDamageBill = async (orderId, managerActor) => {
   };
 };
 
+exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayload) => {
+  const incident = await Incident.findOne({ id: incidentId });
+  if (!incident) throw createError("Incident not found", 404);
+
+  if (incident.incident_type !== "REPLENISHMENT_REQUEST") {
+    throw createError("This incident is not a replenishment request", 400);
+  }
+  if (incident.status !== "PENDING" && incident.status !== "ASSIGNED") {
+    throw createError("Incident is already resolved or dismissed", 400);
+  }
+
+  // Identify Cleaner
+  const user = await User.findOne(
+    mongoose.Types.ObjectId.isValid(cleanerId)
+      ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
+      : { id: cleanerId }
+  ).select("_id id name").lean();
+
+  if (!user) throw createError("Cleaner not found", 404);
+
+  // Identify location based on pod
+  const pod = await Pod.findOne({ id: incident.pod_id }).select("cluster_id").lean();
+  if (!pod) throw createError("Pod not found", 404);
+
+  const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("location_id").lean();
+  if (!cluster || !cluster.location_id) throw createError("Location not found for this pod", 404);
+
+  const locationWarehouse = await LocationWarehouse.findOne({ location_id: cluster.location_id }).lean();
+  if (!locationWarehouse || !locationWarehouse.warehouse_id) {
+    throw createError("No warehouse configured for this location", 400);
+  }
+
+  const warehouseId = locationWarehouse.warehouse_id;
+
+  if (!Array.isArray(itemsPayload) || itemsPayload.length === 0) {
+    throw createError("items payload is required and must be an array", 400);
+  }
+
+  const itemQuantities = new Map();
+  for (const item of itemsPayload) {
+    const qty = parseInt(item.quantity, 10);
+    if (isNaN(qty) || qty <= 0) throw createError(`Invalid quantity for item ${item.item_id}`, 400);
+    const existing = itemQuantities.get(item.item_id) || 0;
+    itemQuantities.set(item.item_id, existing + qty);
+  }
+
+  const itemIds = Array.from(itemQuantities.keys());
+  const stocks = await InventoryStock.find({ warehouse_id: warehouseId, item_id: { $in: itemIds } });
+  const stockMap = new Map(stocks.map(s => [s.item_id, s]));
+
+  for (const [itemId, qty] of itemQuantities.entries()) {
+    const stock = stockMap.get(itemId);
+    if (!stock || stock.quantity_available < qty) {
+      throw createError(`Not enough stock in warehouse for item ${itemId}`, 400);
+    }
+  }
+
+  // Deduct stock and log
+  for (const [itemId, qty] of itemQuantities.entries()) {
+    const stock = stockMap.get(itemId);
+    stock.quantity_available -= qty;
+    await stock.save();
+
+    await InventoryActivityLog.create({
+      inventory_stock_id: stock.id,
+      staff_id: user.id || String(user._id),
+      actor_id: user.id || String(user._id),
+      incident_id: incident.id,
+      quantity: qty,
+      action_type: "CHECKOUT",
+      reason: "Bổ sung vật dụng thiếu/hỏng lúc checkin"
+    });
+
+    const podItem = await PodItem.findOne({ pod_id: incident.pod_id, item_id: itemId });
+    if (podItem) {
+      podItem.current_quantity = Math.min(podItem.current_quantity + qty, podItem.expected_quantity);
+      await podItem.save();
+    }
+  }
+
+  incident.status = "RESOLVED";
+  incident.handled_by = user.id || String(user._id);
+  incident.resolution_note = "Đã bổ sung vật dụng từ kho";
+  await incident.save();
+
+  return {
+    message: "Việc bổ sung hàng đã được giải quyết thành công.",
+    incident_id: incident.id,
+    warehouse_id: warehouseId,
+    items_processed: itemQuantities.size
+  };
+};
+
 // ─── Cleaner Incident APIs ────────────────────────────────────────
 
 /**
@@ -1230,18 +1328,18 @@ exports.createOrderDamageBill = async (orderId, managerActor) => {
  * Returns the associated CleaningTask if found.
  */
 const _resolveCleanerAccessToIncident = async (incident, actorIds) => {
-  // Own incident (CHECKOUT_REPORT reported by cleaner)
+  // Own incident (DAMAGE_REPORT reported by cleaner during checkout)
   if (actorIds.includes(String(incident.reported_by || ""))) {
     const task = incident.cleaning_task_id
       ? await CleaningTask.findOne({ id: incident.cleaning_task_id })
-          .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
-          .lean()
+        .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+        .lean()
       : null;
     return { allowed: true, cleaningTask: task };
   }
 
-  // CHECKIN_REPORT: find cleaning task for same booking assigned to this cleaner
-  if (incident.incident_type === "CHECKIN_REPORT" && incident.booking_id) {
+  // Guest reports (REPLENISHMENT_REQUEST) during current cleaning session
+  if (incident.incident_type === "REPLENISHMENT_REQUEST" && incident.booking_id) {
     const task = await CleaningTask.findOne({
       booking_id: incident.booking_id,
       cleaner_id: { $in: actorIds },
@@ -1249,7 +1347,9 @@ const _resolveCleanerAccessToIncident = async (incident, actorIds) => {
       .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
       .lean();
 
-    if (task) return { allowed: true, cleaningTask: task };
+    if (task) {
+      return { allowed: true, cleaningTask: task };
+    }
   }
 
   return { allowed: false, cleaningTask: null };
@@ -1277,8 +1377,8 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
       .lean(),
     incident.booking_id
       ? Booking.findOne({ id: incident.booking_id })
-          .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
-          .lean()
+        .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+        .lean()
       : null,
   ]);
 
@@ -1292,7 +1392,7 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
 };
 
 /**
- * API 2 (Cleaner): Get all CHECKIN_REPORT incidents for a cleaning task assigned to the cleaner.
+ * API 2 (Cleaner): Get all REPLENISHMENT_REQUEST incidents for a cleaning task assigned to the cleaner.
  */
 exports.getCheckinReportsByCleaner = async (cleaningTaskId, actor) => {
   if (!cleaningTaskId) throw createError("cleaning_task_id is required", 400);
@@ -1313,8 +1413,8 @@ exports.getCheckinReportsByCleaner = async (cleaningTaskId, actor) => {
 
   const booking = cleaningTask.booking_id
     ? await Booking.findOne({ id: cleaningTask.booking_id })
-        .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
-        .lean()
+      .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+      .lean()
     : null;
 
   if (!cleaningTask.booking_id) {
@@ -1323,7 +1423,7 @@ exports.getCheckinReportsByCleaner = async (cleaningTaskId, actor) => {
 
   const incidents = await Incident.find({
     booking_id: cleaningTask.booking_id,
-    incident_type: "CHECKIN_REPORT",
+    incident_type: "REPLENISHMENT_REQUEST",
   })
     .sort({ created_at: -1 })
     .lean();

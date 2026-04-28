@@ -301,6 +301,13 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       );
     }
 
+    if ((status === "DAMAGED" || status === "MISSING") && reportedQty <= 0) {
+      throw createError(
+        `Số lượng báo cáo cho vật dụng "${reusableItem.name}" phải lớn hơn 0 khi báo thiếu hoặc hỏng.`,
+        400
+      );
+    }
+
     const doc = {
       booking_id: booking.id,
       pod_id: booking.pod_id,
@@ -350,13 +357,13 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
-      incident_type: "CHECKIN_REPORT",
+      incident_type: "REPLENISHMENT_REQUEST",
       booking_id: doc.booking_id,
       reported_by: userId,
       description: descParts.join(" "),
       severity: "MEDIUM",
       status: "PENDING",
-      estimated_total_value: estimatedValue > 0 ? estimatedValue : null,
+      estimated_total_value: null,
     });
 
     // Link incident to checklist record
@@ -430,8 +437,8 @@ const _notifyCleanersAboutChecklistIssues = async (booking, incidents) => {
 
   for (const cleanerUserId of cleanerUserIds) {
     await notificationService.sendToUser(cleanerUserId, {
-      title: `Sự cố tại Pod ${podLabel}`,
-      message: `Khách báo cáo vấn đề: ${issueList}. Vui lòng kiểm tra ngay.`,
+      title: `Yêu cầu bổ sung đồ tại Pod ${podLabel}`,
+      message: `Khách báo cáo: ${issueList}. Vui lòng bổ sung ngay.`,
       type: "INCIDENT",
       event_code: "CHECKLIST_ISSUE_REPORTED",
       dedupe_key: `CHECKLIST_ISSUE_REPORTED:${booking.id}:${cleanerUserId}`,
@@ -656,7 +663,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
       ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
       : { id: cleanerId }
   ).select("_id id").lean();
-  
+
   if (user) {
     if (user._id) actorIds.push(String(user._id));
     if (user.id) actorIds.push(String(user.id));
@@ -800,7 +807,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
-      incident_type: "CHECKOUT_REPORT",
+      incident_type: "DAMAGE_REPORT",
       booking_id: doc.booking_id,
       cleaning_task_id: cleaningTaskId,
       reported_by: cleanerId,
@@ -842,12 +849,12 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
   if (createdIncidents.length > 0) {
     const pod = await Pod.findOne({ id: cleaningTask.pod_id }).select("id code name").lean();
     const podCode = pod?.code || pod?.name || cleaningTask.pod_id || "Unknown";
-    
+
     // We can reuse the resolveManagersForPod logic from incidentService but it's not directly accessible here.
     // Instead we can just find all managers simply, or we import it. Since we are in bookingChecklistService, 
     // it's easier to just find all managers or a simple approach.
     const managerIds = await User.find({ role: "manager", isActive: true }).select("_id").lean();
-    
+
     for (const manager of managerIds) {
       await notificationService.sendToUser(String(manager._id), {
         title: "Có báo cáo hư hại từ Cleaner",

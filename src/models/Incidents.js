@@ -18,7 +18,7 @@ const incidentSchema = new mongoose.Schema(
     incident_type: {
       type: String,
       enum: {
-        values: ["OPERATIONAL", "DAMAGE_REPORT", "CHECKIN_REPORT", "CHECKOUT_REPORT"],
+        values: ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST"],
         message: "{VALUE} is not a valid incident type",
       },
       default: "OPERATIONAL",

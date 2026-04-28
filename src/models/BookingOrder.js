@@ -42,6 +42,15 @@ const bookingOrderSchema = new mongoose.Schema(
       default: 0,
       min: [0, "Outstanding damage amount cannot be negative"],
     },
+    damage_payment_status: {
+      type: String,
+      enum: {
+        values: ["NO_INCIDENT", "PENDING", "PAID"],
+        message: "{VALUE} is not a valid damage payment status",
+      },
+      default: "NO_INCIDENT",
+      index: true,
+    },
     status: {
       type: String,
       enum: {
