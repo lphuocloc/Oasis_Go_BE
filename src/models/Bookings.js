@@ -111,6 +111,15 @@ const bookingSchema = new mongoose.Schema(
       required: [true, "Total price is required"],
       min: [0, "Total price cannot be negative"],
     },
+    is_checklist_completed: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    checklist_completed_at: {
+      type: Date,
+      default: null,
+    },
   },
   {
     timestamps: true,

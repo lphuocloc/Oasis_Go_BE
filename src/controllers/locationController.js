@@ -147,14 +147,14 @@ exports.createLocation = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Location created successfully",
+            message: "Tạo vị trí thành công!",
             data: location,
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error creating location",
+            message: error.message || "Lỗi tạo vị trí",
         });
     }
 };
@@ -180,14 +180,14 @@ exports.updateLocation = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Location updated successfully",
+            message: "Cập nhật vị trí thành công!",
             data: location,
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error updating location",
+            message: error.message || "Lỗi cập nhật vị trí",
         });
     }
 };
@@ -201,13 +201,13 @@ exports.deleteLocation = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: result.message,
+            message: "Xóa vị trí thành công!",
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error deleting location",
+            message: error.message || "Lỗi xóa vị trí",
         });
     }
 };

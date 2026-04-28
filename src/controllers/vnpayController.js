@@ -43,15 +43,61 @@ exports.createPayment = async (req, res) => {
   }
 };
 
+// @desc    Tạo URL thanh toán VNPay cho hóa đơn đền bù
+// @route   POST /api/vnpay/damage-bill/create-payment
+// @access  Public
+exports.createDamagePayment = async (req, res) => {
+  try {
+    const { bookingOrderId, orderInfo } = req.body;
+
+    if (!bookingOrderId || !orderInfo) {
+      return res.status(400).json({
+        success: false,
+        message: "Missing required fields: bookingOrderId, orderInfo"
+      });
+    }
+
+    const ipAddr = req.headers["x-forwarded-for"] ||
+      req.connection.remoteAddress ||
+      req.socket.remoteAddress ||
+      req.connection.socket.remoteAddress ||
+      "127.0.0.1";
+
+    const result = await paymentService.createDamagePayment({
+      bookingOrderId,
+      orderInfo,
+      ipAddr,
+    });
+
+    res.status(200).json({
+      success: true,
+      message: "Damage payment URL created successfully",
+      data: result,
+    });
+  } catch (error) {
+    console.error("Create damage payment error:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error creating damage payment",
+    });
+  }
+};
+
 // @desc    VNPay return URL handler
 // @route   GET /api/vnpay/return
 // @access  Public
 exports.vnpayReturn = async (req, res) => {
   try {
     const txnRef = String(req.query?.vnp_TxnRef || "");
-    const result = txnRef.startsWith("WALLET_TOPUP_")
-      ? await paymentService.handleWalletTopupVnpayReturn(req.query)
-      : await paymentService.handleVnpayReturn(req.query);
+    let result;
+    if (txnRef.startsWith("WALLET_TOPUP_")) {
+      result = await paymentService.handleWalletTopupVnpayReturn(req.query);
+    } else if (txnRef.startsWith("DAMAGE_PAY_")) {
+      result = await paymentService.handleDamageVnpayReturn(req.query);
+    } else {
+      result = await paymentService.handleVnpayReturn(req.query);
+    }
 
     res.status(200).json({
       success: true,
@@ -74,9 +120,14 @@ exports.vnpayReturn = async (req, res) => {
 exports.vnpayIpn = async (req, res) => {
   try {
     const txnRef = String(req.query?.vnp_TxnRef || "");
-    const result = txnRef.startsWith("WALLET_TOPUP_")
-      ? await paymentService.handleWalletTopupVnpayReturn(req.query)
-      : await paymentService.handleVnpayReturn(req.query);
+    let result;
+    if (txnRef.startsWith("WALLET_TOPUP_")) {
+      result = await paymentService.handleWalletTopupVnpayReturn(req.query);
+    } else if (txnRef.startsWith("DAMAGE_PAY_")) {
+      result = await paymentService.handleDamageVnpayReturn(req.query);
+    } else {
+      result = await paymentService.handleVnpayReturn(req.query);
+    }
 
     // IPN requires specific response format
     if (result.code === "00") {

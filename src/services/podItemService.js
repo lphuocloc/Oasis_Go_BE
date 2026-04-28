@@ -354,6 +354,90 @@ class PodItemService {
       items: enrichedItems,
     };
   }
+
+  async generateReusableItemsForCluster(clusterId) {
+    if (!clusterId) {
+      throw createError("cluster_id is required", 400);
+    }
+
+    const cluster = await PodCluster.findOne({ id: clusterId }).select("id name").lean();
+    if (!cluster) {
+      throw createError("Pod cluster not found", 404);
+    }
+
+    const pods = await Pod.find({ cluster_id: clusterId }).select("id name code").lean();
+    if (!pods.length) {
+      throw createError("No pods found in this pod cluster", 404);
+    }
+
+    const reusableItems = await Item.find({ item_type: "REUSABLE" }).select("id name").lean();
+    if (!reusableItems.length) {
+      throw createError("No REUSABLE items found in the system", 404);
+    }
+
+    // Quantity rules: "Gối nằm Memory Foam" and "Chăn mền nhẹ" get 2, others get 1
+    const QUANTITY_2_KEYWORDS = ["gối nằm memory foam", "chăn mền nhẹ"];
+    const getQuantityForItem = (itemName) => {
+      const normalized = String(itemName || "").trim().toLowerCase();
+      return QUANTITY_2_KEYWORDS.some((keyword) => normalized.includes(keyword)) ? 2 : 1;
+    };
+
+    const podIds = pods.map((pod) => pod.id);
+    const itemIds = reusableItems.map((item) => item.id);
+
+    const existingPodItems = await PodItem.find({
+      pod_id: { $in: podIds },
+      item_id: { $in: itemIds },
+    })
+      .select("pod_id item_id")
+      .lean();
+
+    const existingPairSet = new Set(
+      existingPodItems.map((entry) => `${entry.pod_id}::${entry.item_id}`)
+    );
+
+    const docsToInsert = [];
+    for (const pod of pods) {
+      for (const item of reusableItems) {
+        const pairKey = `${pod.id}::${item.id}`;
+        if (existingPairSet.has(pairKey)) continue;
+
+        const qty = getQuantityForItem(item.name);
+        docsToInsert.push({
+          pod_id: pod.id,
+          item_id: item.id,
+          expected_quantity: qty,
+          current_quantity: qty,
+        });
+      }
+    }
+
+    let created = [];
+    if (docsToInsert.length > 0) {
+      created = await PodItem.insertMany(docsToInsert, { ordered: false });
+    }
+
+    const itemSummary = reusableItems.map((item) => ({
+      item_id: item.id,
+      name: item.name,
+      quantity: getQuantityForItem(item.name),
+    }));
+
+    return {
+      cluster_id: clusterId,
+      cluster_name: cluster.name || null,
+      pod_count: pods.length,
+      reusable_item_count: reusableItems.length,
+      total_target_pairs: podIds.length * reusableItems.length,
+      created_count: created.length,
+      skipped_existing_count: existingPodItems.length,
+      items: itemSummary,
+      message:
+        created.length > 0
+          ? `Đã tạo ${created.length} pod-item cho ${pods.length} pod trong cluster`
+          : "Tất cả item REUSABLE đã tồn tại trên tất cả pod trong cluster",
+    };
+  }
 }
 
 module.exports = new PodItemService();

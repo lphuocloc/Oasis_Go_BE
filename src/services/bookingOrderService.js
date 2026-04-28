@@ -20,7 +20,7 @@ const CleaningTask = require("../models/CleaningTask");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
-const depositPolicyService = require("./depositPolicyService");
+
 const Notification = require("../models/Notification");
 
 const readEnvMinutes = (key, fallback, min = 0) => {
@@ -331,65 +331,7 @@ class BookingOrderService {
     }
   }
 
-  async _calculateVolumeBasedDeposit(podCount = 0) {
-    const pricingPolicy = await depositPolicyService.getPolicyForCalculation();
-    const tier1Limit = Number(pricingPolicy.tier_1_pod_limit || 3);
-    const tier2Limit = Number(pricingPolicy.tier_2_pod_limit || 6);
-    const tier1Price = Number(pricingPolicy.tier_1_price || 0);
-    const tier2Price = Number(pricingPolicy.tier_2_price || 0);
-    const tier3Price = Number(pricingPolicy.tier_3_price || 0);
 
-    const normalizedPodCount = Math.max(0, parseInt(podCount, 10) || 0);
-    const tier1Pods = Math.min(normalizedPodCount, tier1Limit);
-    const tier2Pods = Math.min(
-      Math.max(normalizedPodCount - tier1Limit, 0),
-      tier2Limit - tier1Limit,
-    );
-    const tier3Pods = Math.max(normalizedPodCount - tier2Limit, 0);
-
-    const tier1Amount = tier1Pods * tier1Price;
-    const tier2Amount = tier2Pods * tier2Price;
-    const tier3Amount = tier3Pods * tier3Price;
-
-    const depositTotal = tier1Amount + tier2Amount + tier3Amount;
-    const depositOriginalTotal = normalizedPodCount * tier1Price;
-    const depositDiscount = Math.max(0, depositOriginalTotal - depositTotal);
-
-    return {
-      pod_count: normalizedPodCount,
-      deposit_original_total: depositOriginalTotal,
-      deposit_discount: depositDiscount,
-      deposit_total: depositTotal,
-      tiers: {
-        tier_1: {
-          pod_count: tier1Pods,
-          amount_per_pod: tier1Price,
-          amount: tier1Amount,
-        },
-        tier_2: {
-          pod_count: tier2Pods,
-          amount_per_pod: tier2Price,
-          amount: tier2Amount,
-        },
-        tier_3: {
-          pod_count: tier3Pods,
-          amount_per_pod: tier3Price,
-          amount: tier3Amount,
-        },
-      },
-      policy: {
-        pricing_model: "VOLUME_BASED_DEPOSIT",
-        tier_1_pod_limit: tier1Limit,
-        tier_2_pod_limit: tier2Limit,
-        tier_1_price: tier1Price,
-        tier_2_price: tier2Price,
-        tier_3_price: tier3Price,
-        pricing_source: pricingPolicy.source || "DEFAULT",
-        partial_cancel_behavior: "KEEP_DEPOSIT_UNCHANGED",
-        settlement_behavior: "PENDING_INSPECTION",
-      },
-    };
-  }
 
   _normalizeIdList(input) {
     if (!input) return [];
@@ -628,8 +570,7 @@ class BookingOrderService {
       0,
       recalculatedBase - recalculatedDiscount,
     );
-    const payableTotalPrice =
-      Number(finalTotalPrice) + Number(order.deposit_total || 0);
+    const payableTotalPrice = Number(finalTotalPrice);
 
     order.total_base_price = Number(recalculatedBase.toFixed(2));
     order.total_discount = Number(recalculatedDiscount.toFixed(2));
@@ -644,7 +585,6 @@ class BookingOrderService {
       total_discount: order.total_discount,
       final_total_price: order.final_total_price,
       payable_total_price: order.payable_total_price,
-      deposit_total_unchanged: Number(order.deposit_total || 0),
       voucher_action: voucherAction,
       amount_source: amountResolution.amount_source,
     };
@@ -673,14 +613,11 @@ class BookingOrderService {
     userId,
     orderId,
     rentalRefundAmount = 0,
-    depositRefundAmount = 0,
     cancelledBookingIds = [],
     isFullCancel = false,
     transactionId = null,
   }) {
-    const rentalAmount = Number(rentalRefundAmount || 0);
-    const depositAmount = Number(depositRefundAmount || 0);
-    const totalAmount = Number((rentalAmount + depositAmount).toFixed(2));
+    const totalAmount = Number(Number(rentalRefundAmount || 0).toFixed(2));
 
     if (totalAmount <= 0) {
       return {
@@ -700,40 +637,22 @@ class BookingOrderService {
     await wallet.save({ session });
 
     const walletTransactionsToCreate = [];
-    let runningBefore = walletBalanceBefore;
 
-    if (rentalAmount > 0) {
-      const runningAfter = Number((runningBefore + rentalAmount).toFixed(2));
+    if (totalAmount > 0) {
       const bookingLabel =
         cancelledBookingIds.length > 0 ? cancelledBookingIds.join(", ") : "N/A";
       walletTransactionsToCreate.push({
         wallet_id: wallet.id,
-        amount: rentalAmount,
+        amount: totalAmount,
         type: "REFUND",
         transaction_id: transactionId,
         reference_id: orderId,
         description: isFullCancel
-          ? `Refund tien thue don ${orderId} cho bookings [${bookingLabel}]`
-          : `Refund tien thue Pod [${bookingLabel}] - Coc giu lai quyet toan sau`,
-        balance_before: runningBefore,
-        balance_after: runningAfter,
+          ? `Hoàn tiền đơn ${orderId} cho bookings [${bookingLabel}]`
+          : `Hoàn tiền Pod [${bookingLabel}]`,
+        balance_before: walletBalanceBefore,
+        balance_after: walletBalanceAfter,
       });
-      runningBefore = runningAfter;
-    }
-
-    if (depositAmount > 0) {
-      const runningAfter = Number((runningBefore + depositAmount).toFixed(2));
-      walletTransactionsToCreate.push({
-        wallet_id: wallet.id,
-        amount: depositAmount,
-        type: "REFUND",
-        transaction_id: transactionId,
-        reference_id: orderId,
-        description: `Hoan 100% tien coc don ${orderId} khi huy toan bo`,
-        balance_before: runningBefore,
-        balance_after: runningAfter,
-      });
-      runningBefore = runningAfter;
     }
 
     let createdWalletTransactions = [];
@@ -801,7 +720,6 @@ class BookingOrderService {
         order_id: normalizedOrderId,
         refund_amount: String(refund.amount || 0),
         rental_amount: String(refund.rental_amount || 0),
-        deposit_amount: String(refund.deposit_amount || 0),
         refunded_transaction_id: String(refund.refunded_transaction_id || ""),
         refunded_to_wallet_immediately: String(
           !!refund.refunded_to_wallet_immediately,
@@ -1048,11 +966,7 @@ class BookingOrderService {
         const finalTotalPrice = this._roundMoney(
           Math.max(0, totalBasePrice - discountAmount),
         );
-        const depositPricing =
-          await this._calculateVolumeBasedDeposit(selectedPodCount);
-        const payableTotalPrice = this._roundMoney(
-          finalTotalPrice + depositPricing.deposit_total,
-        );
+        const payableTotalPrice = this._roundMoney(finalTotalPrice);
 
         // Create booking order within transaction
         const bookingOrderArray = await BookingOrder.create(
@@ -1062,11 +976,7 @@ class BookingOrderService {
               total_base_price: totalBasePrice,
               total_discount: discountAmount,
               final_total_price: finalTotalPrice,
-              deposit_original_total: depositPricing.deposit_original_total,
-              deposit_discount: depositPricing.deposit_discount,
-              deposit_total: depositPricing.deposit_total,
               payable_total_price: payableTotalPrice,
-              deposit_settlement_status: "PENDING_INSPECTION",
               status: "PENDING",
             },
           ],
@@ -1188,11 +1098,7 @@ class BookingOrderService {
             total_base_price: bookingOrder.total_base_price,
             total_discount: bookingOrder.total_discount,
             final_total_price: bookingOrder.final_total_price,
-            deposit_original_total: bookingOrder.deposit_original_total,
-            deposit_discount: bookingOrder.deposit_discount,
-            deposit_total: bookingOrder.deposit_total,
             payable_total_price: bookingOrder.payable_total_price,
-            deposit_settlement_status: bookingOrder.deposit_settlement_status,
             status: bookingOrder.status,
             created_at: bookingOrder.createdAt,
           },
@@ -1234,12 +1140,7 @@ class BookingOrderService {
             total_base_price: totalBasePrice,
             total_discount: discountAmount,
             final_total_price: finalTotalPrice,
-            deposit_original_total: depositPricing.deposit_original_total,
-            deposit_discount: depositPricing.deposit_discount,
-            deposit_total: depositPricing.deposit_total,
             payable_total_price: payableTotalPrice,
-            deposit_pricing_tiers: depositPricing.tiers,
-            deposit_policy: depositPricing.policy,
           },
           applied_voucher: appliedVoucher
             ? {
@@ -1718,22 +1619,11 @@ class BookingOrderService {
           ? await PodCluster.findOne({ id: clusterIds[0] }).lean()
           : null;
 
-      //  deposit
 
-      const settlementNotification = await Notification.findOne({
-        user_id: order.user_id,
-        "data.order_id": orderId,
-        event_code: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
-      })
-        .sort({ createdAt: -1 })
-        .lean();
-
-      const settlement_details = settlementNotification?.data || null;
       return {
         order,
         bookings: bookingsWithPods,
         podcluster,
-        settlement_details,
       };
     } catch (error) {
       throw error;
@@ -2115,19 +2005,8 @@ class BookingOrderService {
         const rentalRefundAmount = canRefundBefore48h
           ? refundSummary.refundAmount
           : 0;
-        let depositRefundAmount = 0;
-        if (
-          allCancelled &&
-          canRefundBefore48h &&
-          Number(order.deposit_total || 0) > 0 &&
-          order.deposit_settlement_status === "PENDING_INSPECTION"
-        ) {
-          depositRefundAmount = Number(order.deposit_total || 0);
-          order.deposit_settlement_status = "REFUNDED";
-        }
-
         const totalRefundAmount = Number(
-          (rentalRefundAmount + depositRefundAmount).toFixed(2),
+          rentalRefundAmount.toFixed(2),
         );
         let refundTransaction = null;
         if (totalRefundAmount > 0) {
@@ -2161,7 +2040,6 @@ class BookingOrderService {
             userId: order.user_id,
             orderId,
             rentalRefundAmount,
-            depositRefundAmount,
             cancelledBookingIds: targetBookingIds,
             isFullCancel: allCancelled,
             transactionId: refundTransaction.id,
@@ -2179,7 +2057,6 @@ class BookingOrderService {
             applicable: totalRefundAmount > 0,
             amount: totalRefundAmount,
             rental_amount: rentalRefundAmount,
-            deposit_amount: depositRefundAmount,
             refundable_base_amount: refundSummary.refundableBaseAmount,
             refund_rate: refundSummary.refundRate,
             refund_amount_source: refundSummary.amount_source,
@@ -2308,7 +2185,7 @@ class BookingOrderService {
       orderIds.length > 0
         ? await BookingOrder.find({ id: { $in: orderIds } })
           .select(
-            "id user_id status final_total_price payable_total_price deposit_total deposit_settlement_status",
+            "id user_id status final_total_price payable_total_price",
           )
           .lean()
         : [];

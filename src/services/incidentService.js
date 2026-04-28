@@ -98,9 +98,11 @@ const roundMoney = (value) => {
 };
 
 const getIncidentDamageTotal = async (incident) => {
-  const estimated = Number(incident?.estimated_total_value);
-  if (Number.isFinite(estimated) && estimated >= 0) {
-    return roundMoney(estimated);
+  if (incident?.estimated_total_value !== null && incident?.estimated_total_value !== undefined) {
+    const estimated = Number(incident.estimated_total_value);
+    if (Number.isFinite(estimated) && estimated >= 0) {
+      return roundMoney(estimated);
+    }
   }
 
   const detailRows = await IncidentDetail.find({ incident_id: incident.id })
@@ -133,455 +135,9 @@ const getOrCreateWalletByUserId = async (userId, session = null) => {
   return wallet;
 };
 
-const resolveOrderById = async (orderId, session = null) => {
-  let query = BookingOrder.findOne({ id: String(orderId || "") })
-    .select("id user_id status deposit_total deposit_settlement_status outstanding_damage_amount deposit_settled_at");
-  if (session) query = query.session(session);
-  return query;
-};
 
-const settleOrderDepositAfterIncidentsInternal = async ({
-  orderId,
-  trigger = "SYSTEM",
-  session,
-} = {}) => {
-  const normalizedOrderId = String(orderId || "").trim();
-  const logPrefix = "[DepositSettlement][Incident]";
 
-  console.info(`${logPrefix} Start`, {
-    order_id: normalizedOrderId || null,
-    trigger,
-  });
 
-  if (!normalizedOrderId) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "MISSING_ORDER_ID",
-      trigger,
-    });
-    return { settled: false, reason: "MISSING_ORDER_ID" };
-  }
-
-  const order = await resolveOrderById(normalizedOrderId, session);
-  if (!order) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_NOT_FOUND",
-      order_id: normalizedOrderId,
-      trigger,
-    });
-    return { settled: false, reason: "ORDER_NOT_FOUND" };
-  }
-
-  console.info(`${logPrefix} OrderLoaded`, {
-    order_id: normalizedOrderId,
-    order_status: String(order.status || ""),
-    deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    deposit_total: Number(order.deposit_total || 0),
-  });
-
-  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || "").toUpperCase())) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_NOT_ELIGIBLE",
-      order_id: normalizedOrderId,
-      order_status: String(order.status || ""),
-    });
-    return { settled: false, reason: "ORDER_NOT_ELIGIBLE", order_id: normalizedOrderId };
-  }
-
-  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_ALREADY_SETTLED",
-      order_id: normalizedOrderId,
-      deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    });
-    return {
-      settled: false,
-      reason: "ORDER_ALREADY_SETTLED",
-      order_id: normalizedOrderId,
-      deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    };
-  }
-
-  const bookings = await Booking.find({ order_id: normalizedOrderId })
-    .select("id status")
-    .session(session)
-    .lean();
-
-  console.info(`${logPrefix} BookingsLoaded`, {
-    order_id: normalizedOrderId,
-    booking_count: bookings.length,
-  });
-
-  if (!bookings.length) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_BOOKINGS_NOT_FOUND",
-      order_id: normalizedOrderId,
-    });
-    return { settled: false, reason: "ORDER_BOOKINGS_NOT_FOUND", order_id: normalizedOrderId };
-  }
-
-  const bookingIds = bookings.map((booking) => String(booking.id || "")).filter(Boolean);
-
-  const hasNonTerminalBooking = bookings.some(
-    (booking) => !ORDER_BOOKING_TERMINAL_STATUSES.includes(String(booking.status || "").toUpperCase())
-  );
-  if (hasNonTerminalBooking) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_BOOKINGS_NOT_TERMINAL",
-      order_id: normalizedOrderId,
-      booking_statuses: bookings.map((booking) => String(booking.status || "").toUpperCase()),
-    });
-    return { settled: false, reason: "ORDER_BOOKINGS_NOT_TERMINAL", order_id: normalizedOrderId };
-  }
-
-  const unfinishedTask = await CleaningTask.findOne({
-    booking_id: { $in: bookingIds },
-    status: { $in: REFUND_BLOCKING_TASK_STATUSES },
-  })
-    .select("id booking_id status")
-    .session(session)
-    .lean();
-  if (unfinishedTask) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "CLEANING_NOT_COMPLETED",
-      order_id: normalizedOrderId,
-      task_id: String(unfinishedTask.id || ""),
-      task_status: String(unfinishedTask.status || ""),
-    });
-    return {
-      settled: false,
-      reason: "CLEANING_NOT_COMPLETED",
-      order_id: normalizedOrderId,
-      task_id: String(unfinishedTask.id || ""),
-    };
-  }
-
-  const pendingIncident = await Incident.findOne({
-    booking_id: { $in: bookingIds },
-    status: "PENDING",
-  })
-    .select("id")
-    .session(session)
-    .lean();
-  if (pendingIncident) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "PENDING_INCIDENT_EXISTS",
-      order_id: normalizedOrderId,
-      incident_id: String(pendingIncident.id || ""),
-    });
-    return {
-      settled: false,
-      reason: "PENDING_INCIDENT_EXISTS",
-      order_id: normalizedOrderId,
-      incident_id: String(pendingIncident.id || ""),
-    };
-  }
-
-  const resolvedIncidents = await Incident.find({
-    booking_id: { $in: bookingIds },
-    status: "RESOLVED",
-  })
-    .select("id booking_id status incident_type estimated_total_value")
-    .session(session)
-    .lean();
-
-  const resolvedIncidentIds = resolvedIncidents
-    .map((incident) => String(incident.id || ""))
-    .filter(Boolean);
-  const incidentDetailMap = await buildIncidentDetailMap(resolvedIncidentIds, session);
-
-  const incidentBreakdown = [];
-  let totalResolvedIncidentDamage = 0;
-  for (const incident of resolvedIncidents) {
-    const amount = await getIncidentDamageTotal(incident);
-    if (amount <= 0) continue;
-
-    const incidentDetails = (incidentDetailMap[String(incident.id || "")] || []).map((detail) => ({
-      type: String(detail.type || "").toUpperCase(),
-      item_id: detail.item_id ? String(detail.item_id) : null,
-      service_catalog_id: detail.service_catalog_id ? String(detail.service_catalog_id) : null,
-      name_snapshot: detail.name_snapshot || null,
-      quantity: Number(detail.quantity || 0),
-      unit_cost_snapshot: Number(detail.unit_cost_snapshot || 0),
-      total_cost: Number(detail.total_cost || 0),
-      note: detail.note || null,
-    }));
-
-    const damagedProducts = incidentDetails
-      .filter((detail) => detail.type === "ITEM")
-      .map((detail) => ({
-        item_id: detail.item_id,
-        name_snapshot: detail.name_snapshot,
-        quantity: detail.quantity,
-        unit_cost_snapshot: detail.unit_cost_snapshot,
-        total_cost: detail.total_cost,
-        note: detail.note,
-      }));
-
-    totalResolvedIncidentDamage += amount;
-    incidentBreakdown.push({
-      incident_id: String(incident.id || ""),
-      booking_id: String(incident.booking_id || ""),
-      amount,
-      status: String(incident.status || "").toUpperCase(),
-      incident_details: incidentDetails,
-      damaged_products: damagedProducts,
-    });
-  }
-
-  totalResolvedIncidentDamage = roundMoney(totalResolvedIncidentDamage);
-
-  const depositTotal = roundMoney(Number(order.deposit_total || 0));
-  const depositUsed = roundMoney(Math.min(depositTotal, totalResolvedIncidentDamage));
-  const refundedToWalletAmount = roundMoney(Math.max(0, depositTotal - depositUsed));
-
-  const damageAfterDeposit = roundMoney(Math.max(0, totalResolvedIncidentDamage - depositUsed));
-
-  let walletDebitAmount = 0;
-  let outstandingAmount = damageAfterDeposit;
-  let wallet = null;
-
-  console.info(`${logPrefix} AmountCalculated`, {
-    order_id: normalizedOrderId,
-    resolved_incident_count: resolvedIncidents.length,
-    resolved_damage_total: totalResolvedIncidentDamage,
-    deposit_total: depositTotal,
-    deposit_used: depositUsed,
-    refunded_to_wallet_amount: refundedToWalletAmount,
-    damage_after_deposit: damageAfterDeposit,
-  });
-
-  if (damageAfterDeposit > 0) {
-    wallet = await getOrCreateWalletByUserId(order.user_id, session);
-
-    const balanceBefore = roundMoney(Number(wallet.balance || 0));
-    walletDebitAmount = roundMoney(Math.min(balanceBefore, damageAfterDeposit));
-    const balanceAfter = roundMoney(balanceBefore - walletDebitAmount);
-    outstandingAmount = roundMoney(damageAfterDeposit - walletDebitAmount);
-
-    if (walletDebitAmount > 0) {
-      wallet.balance = balanceAfter;
-      await wallet.save({ session });
-
-      console.info(`${logPrefix} WalletDebited`, {
-        order_id: normalizedOrderId,
-        user_id: String(order.user_id || ""),
-        wallet_debit_amount: walletDebitAmount,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
-      });
-
-      const createdPenaltyTx = await Transaction.create(
-        [
-          {
-            order_id: normalizedOrderId,
-            amount: walletDebitAmount,
-            currency: "VND",
-            type: "PENALTY",
-            method: "WALLET",
-            status: "SUCCESS",
-            provider_reference: "DEPOSIT_SETTLEMENT_INCIDENT_PENALTY",
-          },
-        ],
-        { session }
-      );
-
-      await WalletTransaction.create(
-        [
-          {
-            wallet_id: wallet.id,
-            amount: walletDebitAmount,
-            type: "PAYMENT",
-            transaction_id: createdPenaltyTx[0].id,
-            reference_id: normalizedOrderId,
-            description: `Tru vi cho chi phi su co don ${normalizedOrderId}`,
-            balance_before: balanceBefore,
-            balance_after: balanceAfter,
-          },
-        ],
-        { session }
-      );
-    }
-  }
-
-  if (refundedToWalletAmount > 0) {
-    wallet = wallet || (await getOrCreateWalletByUserId(order.user_id, session));
-
-    const balanceBefore = roundMoney(Number(wallet.balance || 0));
-    const balanceAfter = roundMoney(balanceBefore + refundedToWalletAmount);
-    wallet.balance = balanceAfter;
-    await wallet.save({ session });
-
-    console.info(`${logPrefix} WalletRefunded`, {
-      order_id: normalizedOrderId,
-      user_id: String(order.user_id || ""),
-      refunded_to_wallet_amount: refundedToWalletAmount,
-      balance_before: balanceBefore,
-      balance_after: balanceAfter,
-    });
-
-    const createdRefundTx = await Transaction.create(
-      [
-        {
-          order_id: normalizedOrderId,
-          amount: refundedToWalletAmount,
-          currency: "VND",
-          type: "REFUND",
-          method: "WALLET",
-          status: "SUCCESS",
-          provider_reference: "DEPOSIT_SETTLEMENT_INCIDENT_REFUND",
-        },
-      ],
-      { session }
-    );
-
-    await WalletTransaction.create(
-      [
-        {
-          wallet_id: wallet.id,
-          amount: refundedToWalletAmount,
-          type: "REFUND",
-          transaction_id: createdRefundTx[0].id,
-          reference_id: normalizedOrderId,
-          description: `Hoan coc don ${normalizedOrderId} sau doi soat su co`,
-          balance_before: balanceBefore,
-          balance_after: balanceAfter,
-        },
-      ],
-      { session }
-    );
-  }
-
-  let settlementStatus = "REFUNDED";
-  if (depositUsed > 0) {
-    settlementStatus = depositUsed >= depositTotal ? "FORFEITED" : "PARTIALLY_FORFEITED";
-  }
-
-  const settledAt = new Date();
-  const snapshot = {
-    settled_at: settledAt,
-    trigger,
-    total_resolved_incident_damage: totalResolvedIncidentDamage,
-    deposit_used: depositUsed,
-    refunded_to_wallet_amount: refundedToWalletAmount,
-    wallet_debit_amount: walletDebitAmount,
-    outstanding_amount: outstandingAmount,
-    incident_breakdown: incidentBreakdown,
-  };
-
-  order.deposit_settlement_status = settlementStatus;
-  order.outstanding_damage_amount = outstandingAmount;
-  order.deposit_settled_at = settledAt;
-  order.deposit_settlement_snapshot = snapshot;
-  await order.save({ session });
-
-  console.info(`${logPrefix} OrderUpdated`, {
-    order_id: normalizedOrderId,
-    settlement_status: settlementStatus,
-    outstanding_amount: outstandingAmount,
-    settled_at: settledAt.toISOString(),
-  });
-
-  await debtService.recordOrderOutstandingDebt(
-    {
-      userId: order.user_id,
-      orderId: normalizedOrderId,
-      outstandingAmount,
-      incidentBreakdown,
-      trigger,
-      dueAt: settledAt,
-      settledAt,
-    },
-    session,
-  );
-
-  console.info(`${logPrefix} DebtSynced`, {
-    order_id: normalizedOrderId,
-    outstanding_amount: outstandingAmount,
-    incident_count: incidentBreakdown.length,
-  });
-
-  console.info(`${logPrefix} Done`, {
-    order_id: normalizedOrderId,
-    settlement_status: settlementStatus,
-  });
-
-  return {
-    settled: true,
-    order_id: normalizedOrderId,
-    summary: {
-      booking_order_id: normalizedOrderId,
-      deposit_total: depositTotal,
-      total_resolved_incident_damage: totalResolvedIncidentDamage,
-      deposit_deducted_value: depositUsed,
-      refunded_to_wallet_amount: refundedToWalletAmount,
-      wallet_debit_amount: walletDebitAmount,
-      outstanding_amount: outstandingAmount,
-      deposit_settlement_status: settlementStatus,
-      incident_breakdown: incidentBreakdown,
-    },
-  };
-};
-
-exports.settleOrderDepositAfterIncidents = async ({ orderId, trigger = "SYSTEM" } = {}) => {
-  let settlementResult = null;
-  const session = await mongoose.startSession();
-  const logPrefix = "[DepositSettlement][Incident]";
-
-  try {
-    console.info(`${logPrefix} TransactionStart`, {
-      order_id: String(orderId || "").trim() || null,
-      trigger,
-    });
-
-    await session.withTransaction(async () => {
-      settlementResult = await settleOrderDepositAfterIncidentsInternal({ orderId, trigger, session });
-    });
-
-    console.info(`${logPrefix} TransactionCommitted`, {
-      order_id: String(orderId || "").trim() || null,
-      settled: Boolean(settlementResult?.settled),
-      reason: settlementResult?.reason || null,
-    });
-  } catch (error) {
-    console.error(`${logPrefix} TransactionFailed`, {
-      order_id: String(orderId || "").trim() || null,
-      trigger,
-      error: error?.message || String(error),
-    });
-    throw error;
-  } finally {
-    await session.endSession();
-  }
-
-  if (settlementResult?.settled && settlementResult?.summary) {
-    const order = await resolveOrderById(orderId);
-    if (order?.user_id) {
-      const summary = settlementResult.summary;
-      await notificationService.sendToUser(order.user_id, {
-        title: "Đã xử lý xong khoản đặt cọc của bạn",
-        message: `Đơn ${summary.booking_order_id} đã đối soát cọc. Tổng tiền hư hại: ${Number(summary.total_resolved_incident_damage || 0).toLocaleString("vi-VN")} VND, hoàn: ${Number(summary.refunded_to_wallet_amount || 0).toLocaleString("vi-VN")} VND, trừ cọc: ${Number(summary.deposit_deducted_value || 0).toLocaleString("vi-VN")} VND, trừ ví: ${Number(summary.wallet_debit_amount || 0).toLocaleString("vi-VN")} VND, công nợ: ${Number(summary.outstanding_amount || 0).toLocaleString("vi-VN")} VND.`,
-        type: "PAYMENT",
-        event_code: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
-        dedupe_key: `PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED:${summary.booking_order_id}:${String(order.deposit_settled_at || "")}`,
-        data: {
-          type: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
-          order_id: summary.booking_order_id,
-          trigger,
-          deposit_total: String(summary.deposit_total || 0),
-          deposit_deducted_value: String(summary.deposit_deducted_value || 0),
-          refunded_to_wallet_amount: String(summary.refunded_to_wallet_amount || 0),
-          wallet_debit_amount: String(summary.wallet_debit_amount || 0),
-          outstanding_amount: String(summary.outstanding_amount || 0),
-          deposit_settlement_status: String(summary.deposit_settlement_status || ""),
-          total_resolved_incident_damage: String(summary.total_resolved_incident_damage || 0),
-          incident_breakdown: summary.incident_breakdown || [],
-        },
-      });
-    }
-  }
-
-  return settlementResult;
-};
 
 const parseIncidentDetailsPayload = ({ details }) => {
   let parsedDetails = details;
@@ -1447,14 +1003,10 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
 
   let damageBilling = {
     damage_total_value: 0,
-    user_deposit_value: 0,
-    deposit_deducted_value: 0,
     total_amount_value: 0,
     currency: "VND",
     booking_id: incident.booking_id || null,
     booking_order_id: null,
-    refunded_to_wallet_amount: 0,
-    refunded_transaction_id: null,
     settlement_applied: false,
     settlement_reason: null,
   };
@@ -1531,47 +1083,13 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
     });
 
     if (booking?.order_id) {
-      console.info(`${logPrefix} TriggerSettlement`, {
-        incident_id: String(incident.id || incidentId || ""),
-        order_id: String(booking.order_id),
-        trigger: `INCIDENT_${normalizedStatus}`,
-      });
-
-      const settlementResult = await exports.settleOrderDepositAfterIncidents({
-        orderId: booking.order_id,
-        trigger: `INCIDENT_${normalizedStatus}`,
-      });
-
-      console.info(`${logPrefix} SettlementResult`, {
-        incident_id: String(incident.id || incidentId || ""),
-        order_id: String(booking.order_id),
-        settled: Boolean(settlementResult?.settled),
-        reason: settlementResult?.reason || null,
-        has_summary: Boolean(settlementResult?.summary),
-      });
-
-      if (settlementResult?.summary) {
-        damageBilling.booking_order_id = settlementResult.summary.booking_order_id;
-        damageBilling.user_deposit_value = settlementResult.summary.deposit_total;
-        damageBilling.deposit_deducted_value = settlementResult.summary.deposit_deducted_value;
-        damageBilling.total_amount_value = settlementResult.summary.outstanding_amount;
-        damageBilling.refunded_to_wallet_amount = settlementResult.summary.refunded_to_wallet_amount;
-        damageBilling.settlement_applied = true;
-        damageBilling.settlement_reason = null;
-      } else {
-        damageBilling.booking_order_id = booking.order_id;
-        damageBilling.settlement_applied = false;
-        damageBilling.settlement_reason = settlementResult?.reason || "SETTLEMENT_NOT_APPLIED";
-      }
+      damageBilling.booking_order_id = booking.order_id;
     } else {
       console.warn(`${logPrefix} SkipSettlement`, {
         incident_id: String(incident.id || incidentId || ""),
         reason: "BOOKING_ORDER_NOT_FOUND",
         booking_id: String(incident.booking_id || ""),
       });
-
-      damageBilling.settlement_applied = false;
-      damageBilling.settlement_reason = "BOOKING_ORDER_NOT_FOUND";
     }
   } else {
     console.info(`${logPrefix} SkipSettlement`, {
@@ -1609,3 +1127,94 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   };
 };
 
+exports.getOrderIncidents = async (orderId) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id").lean();
+  if (!bookings.length) return [];
+  const bookingIds = bookings.map(b => String(b.id));
+
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds } }).lean();
+  
+  const results = [];
+  for (const inc of incidents) {
+    const totalAmount = await getIncidentDamageTotal(inc);
+    
+    // Get item names from IncidentDetail
+    const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+    const items = details.map(d => d.name_snapshot).filter(Boolean);
+
+    results.push({
+      ...inc,
+      total_amount_value: totalAmount,
+      items
+    });
+  }
+  return results;
+};
+
+exports.createOrderDamageBill = async (orderId, managerActor) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id user_id").lean();
+  if (!bookings.length) throw createError("Order not found or has no bookings", 404);
+  const userId = bookings[0].user_id;
+
+  const bookingIds = bookings.map(b => String(b.id));
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds }, incident_type: "DAMAGE_REPORT" }).lean();
+  
+  if (!incidents.length) {
+    throw createError("No damage incidents found for this order", 400);
+  }
+
+  // Validate all are RESOLVED or DISMISSED
+  const unresolved = incidents.filter(i => !["RESOLVED", "DISMISSED"].includes(i.status));
+  if (unresolved.length > 0) {
+    throw createError("Tất cả báo cáo sự cố (Damage Report) trong Order này phải được xử lý (RESOLVED hoặc DISMISSED) trước khi tạo hóa đơn.", 400);
+  }
+
+  const resolvedIncidents = incidents.filter(i => i.status === "RESOLVED");
+  if (resolvedIncidents.length === 0) {
+    throw createError("Không có sự cố nào cần đền bù (tất cả đều đã bị DISMISSED hoặc không có thiệt hại).", 400);
+  }
+
+  let totalDamageAmount = 0;
+  const incidentBreakdown = [];
+
+  for (const inc of resolvedIncidents) {
+    const amount = await getIncidentDamageTotal(inc);
+    if (amount > 0) {
+      totalDamageAmount += amount;
+      const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+      const items = details.map(d => d.name_snapshot).filter(Boolean);
+      incidentBreakdown.push({ incident_id: inc.id, amount, items });
+    }
+  }
+
+  if (totalDamageAmount <= 0) {
+    throw createError("Tổng thiệt hại bằng 0, không có hóa đơn nào được tạo.", 400);
+  }
+
+  const order = await BookingOrder.findOne({ id: orderId });
+  if (!order) {
+    throw createError("Không tìm thấy Order.", 404);
+  }
+
+  order.outstanding_damage_amount = totalDamageAmount;
+  await order.save();
+
+  // Notify user
+  await notificationService.sendToUser(userId, {
+    title: "Yêu cầu thanh toán phí đền bù hư hại",
+    message: `Đơn hàng ${orderId} có phát sinh phí đền bù hư hại là ${totalDamageAmount.toLocaleString("vi-VN")} VND. Vui lòng thanh toán tại quầy.`,
+    type: "INCIDENT",
+    event_code: "DAMAGE_BILL_CREATED",
+    dedupe_key: `DAMAGE_BILL_CREATED:ORDER:${orderId}`,
+    data: {
+      order_id: orderId,
+      outstanding_damage_amount: String(totalDamageAmount),
+    },
+  });
+
+  return {
+    order_id: orderId,
+    outstanding_damage_amount: totalDamageAmount,
+    incident_breakdown: incidentBreakdown
+  };
+};
