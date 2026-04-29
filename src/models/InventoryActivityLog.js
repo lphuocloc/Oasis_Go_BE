@@ -1,4 +1,4 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
 const normalizeTaskId = (value) => {
@@ -42,6 +42,12 @@ const inventoryActivityLogSchema = new mongoose.Schema(
       type: String,
       default: null,
       set: normalizeTaskId,
+    },
+    incident_id: {
+      type: String,
+      default: null,
+      ref: "Incident",
+      index: true,
     },
     quantity: {
       type: Number,

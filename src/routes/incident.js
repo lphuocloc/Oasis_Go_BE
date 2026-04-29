@@ -10,6 +10,10 @@ const {
   getIncidents,
   getIncidentById,
   updateIncidentStatus,
+  getCleanerIncidentDetail,
+  getCheckinReportsByCleaner,
+  updateCleanerIncidentStatus,
+  resolveReplenishment,
 } = require("../controllers/incidentController");
 
 /**
@@ -613,6 +617,120 @@ router.get(
  *       404:
  *         description: Incident not found
  */
+/**
+ * @swagger
+ * /api/incidents/cleaner/checkin-reports:
+ *   get:
+ *     summary: "[Cleaner] Get all CHECKIN_REPORT incidents for a cleaning task assigned to the cleaner"
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: cleaning_task_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The cleaning task ID assigned to the logged-in cleaner
+ *     responses:
+ *       200:
+ *         description: Checkin reports retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: object
+ *                   properties:
+ *                     cleaning_task:
+ *                       type: object
+ *                     incidents:
+ *                       type: array
+ *                       items:
+ *                         $ref: '#/components/schemas/Incident'
+ *       403:
+ *         description: Cleaning task not assigned to this cleaner
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.get(
+  "/cleaner/checkin-reports",
+  protect,
+  authorize("cleaner"),
+  getCheckinReportsByCleaner
+);
+
+/**
+ * @swagger
+ * /api/incidents/cleaner/{id}:
+ *   get:
+ *     summary: "[Cleaner] Get incident detail enriched with booking and cleaning task info"
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Incident detail retrieved successfully
+ *       403:
+ *         description: Not allowed to access this incident
+ *       404:
+ *         description: Incident not found
+ */
+router.get("/cleaner/:id", protect, authorize("cleaner"), getCleanerIncidentDetail);
+
+/**
+ * @swagger
+ * /api/incidents/cleaner/{id}/status:
+ *   patch:
+ *     summary: "[Cleaner] Update incident status (PENDING → PROCESSING → COMPLETED)"
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - status
+ *             properties:
+ *               status:
+ *                 type: string
+ *                 enum: [PROCESSING, COMPLETED]
+ *                 example: PROCESSING
+ *               resolution_note:
+ *                 type: string
+ *                 nullable: true
+ *     responses:
+ *       200:
+ *         description: Incident status updated successfully
+ *       400:
+ *         description: Invalid status transition
+ *       403:
+ *         description: Not allowed to update this incident
+ *       404:
+ *         description: Incident not found
+ */
+router.patch("/cleaner/:id/status", protect, authorize("cleaner"), updateCleanerIncidentStatus);
+
 router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, getIncidentById);
 
 /**
@@ -642,6 +760,51 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *         description: Incident not found
  */
 router.patch("/:id/status", protect, authorize("admin", "manager"), loadManagerScope, updateIncidentStatus);
+
+/**
+ * @swagger
+ * /api/incidents/{id}/resolve-replenishment:
+ *   patch:
+ *     summary: Resolve replenishment incident (Cleaner only)
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 items:
+ *                   type: object
+ *                   required:
+ *                     - item_id
+ *                     - quantity
+ *                   properties:
+ *                     item_id:
+ *                       type: string
+ *                     quantity:
+ *                       type: integer
+ *     responses:
+ *       200:
+ *         description: Replenishment resolved successfully
+ *       400:
+ *         description: Invalid input or no active shift/warehouse found
+ *       404:
+ *         description: Incident not found
+ */
+router.patch("/:id/resolve-replenishment", protect, authorize("cleaner"), resolveReplenishment);
 
 module.exports = router;
 

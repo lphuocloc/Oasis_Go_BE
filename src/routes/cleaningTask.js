@@ -11,6 +11,8 @@ const {
   updateCleaningTask,
   deleteCleaningTask,
   backfillCleaningTasks,
+  rejectCleaningTask,
+  reassignCleaningTask,
 } = require("../controllers/cleaningTaskController");
 const bookingChecklistController = require("../controllers/bookingChecklistController");
 
@@ -514,6 +516,93 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *         description: Cleaning task updated successfully
  */
 router.put("/:id", protect, authorize("admin", "manager", "cleaner"), loadManagerScope, updateCleaningTask);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{id}/reject:
+ *   post:
+ *     summary: Cleaner rejects an assigned cleaning task
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Allows a cleaner to reject a task that is currently ASSIGNED or ACCEPTED.
+ *       The task transitions to REJECTED status and managers at the location are notified.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - rejection_reason
+ *             properties:
+ *               rejection_reason:
+ *                 type: string
+ *                 description: Reason the cleaner is rejecting this task
+ *     responses:
+ *       200:
+ *         description: Task rejected successfully
+ *       400:
+ *         description: Missing rejection_reason or invalid status transition
+ *       403:
+ *         description: Not the assigned cleaner for this task
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.post("/:id/reject", protect, authorize("cleaner"), rejectCleaningTask);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{id}/reassign:
+ *   post:
+ *     summary: Manager reassigns a REJECTED or MISSED cleaning task
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Allows a manager or admin to reassign a REJECTED, MISSED, or ASSIGNED cleaning task
+ *       to a different cleaner. If `target_cleaner_id` is provided the task is manually assigned;
+ *       otherwise the system auto-picks the best available cleaner via load balancing,
+ *       excluding the cleaner who previously rejected the task.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               target_cleaner_id:
+ *                 type: string
+ *                 description: Specific cleaner to assign. Omit for auto load-balanced selection.
+ *               shift_assignment_id:
+ *                 type: string
+ *                 description: Optional shift assignment override (used with target_cleaner_id)
+ *     responses:
+ *       200:
+ *         description: Task reassigned successfully
+ *       400:
+ *         description: Invalid status or no available cleaners
+ *       403:
+ *         description: Out of management scope
+ *       404:
+ *         description: Cleaning task or target cleaner not found
+ */
+router.post("/:id/reassign", protect, authorize("admin", "manager"), loadManagerScope, reassignCleaningTask);
 
 /**
  * @swagger
