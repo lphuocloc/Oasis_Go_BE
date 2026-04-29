@@ -26,7 +26,7 @@ const PodItem = require("../models/PodItem");
 
 const INCIDENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
-const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST", "CHECKOUT_REPORT"];
+const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST"];
 const INCIDENT_DETAIL_TYPES = ["ITEM", "SERVICE"];
 const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const ORDER_BOOKING_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
@@ -530,7 +530,7 @@ exports.getIncidents = async (filters = {}, actor = null) => {
   if (filters.incident_type) {
     const incidentType = normalizeIncidentType(filters.incident_type);
     if (!INCIDENT_TYPES.includes(incidentType)) {
-      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT, CHECKIN_REPORT, CHECKOUT_REPORT", 400);
+      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT, REPLENISHMENT_REQUEST", 400);
     }
     query.incident_type = incidentType;
   }
@@ -899,6 +899,7 @@ exports.createDamageReport = async (
           incident_id: incident.id,
           pod_id: resolvedPodId,
           pod_code: podCode,
+          cleaning_task_id: taskContext ? taskContext.id : null,
           status: String(incident.status || "PENDING").toUpperCase(),
           incident_type: "DAMAGE_REPORT",
           estimated_total_value: incident.estimated_total_value,
@@ -913,6 +914,7 @@ exports.createDamageReport = async (
             incident_id: incident.id,
             pod_id: resolvedPodId,
             pod_code: podCode,
+            cleaning_task_id: taskContext ? taskContext.id : null,
             status: String(incident.status || "PENDING").toUpperCase(),
             incident_type: "DAMAGE_REPORT",
             estimated_total_value: incident.estimated_total_value,
@@ -1319,6 +1321,102 @@ exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayloa
 
 // ─── Cleaner Incident APIs ────────────────────────────────────────
 
+exports.getCleanerIncidents = async (actor, filters = {}) => {
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  // Condition 1: incidents reported by this cleaner
+  const ownIncidents = await Incident.find({ reported_by: { $in: actorIds } }).lean();
+
+  // Condition 2: incidents linked to a cleaning task assigned to this cleaner
+  const cleanerTasks = await CleaningTask.find({ cleaner_id: { $in: actorIds } })
+    .select("id")
+    .lean();
+  const cleanerTaskIds = cleanerTasks.map((t) => String(t.id));
+
+  let taskIncidents = [];
+  if (cleanerTaskIds.length > 0) {
+    taskIncidents = await Incident.find({ cleaning_task_id: { $in: cleanerTaskIds } }).lean();
+  }
+
+  // Merge and dedupe
+  const incidentMap = new Map();
+  [...ownIncidents, ...taskIncidents].forEach((inc) => {
+    incidentMap.set(String(inc.id), inc);
+  });
+
+  let incidents = Array.from(incidentMap.values()).sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+
+  // Optional filters
+  if (filters.status) {
+    const status = normalizeStatus(filters.status);
+    if (!INCIDENT_STATUSES.includes(status)) {
+      throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
+    }
+    incidents = incidents.filter((inc) => String(inc.status || "").toUpperCase() === status);
+  }
+  if (filters.incident_type) {
+    const incidentType = normalizeIncidentType(filters.incident_type);
+    if (!INCIDENT_TYPES.includes(incidentType)) {
+      throw createError(
+        `Invalid incident_type. Must be one of: ${INCIDENT_TYPES.join(", ")}`,
+        400
+      );
+    }
+    incidents = incidents.filter(
+      (inc) => String(inc.incident_type || "").toUpperCase() === incidentType
+    );
+  }
+
+  if (incidents.length === 0) return [];
+
+  const incidentIds = incidents.map((i) => i.id);
+
+  // Build photo and detail maps
+  const [photoMap, detailMap] = await Promise.all([
+    buildIncidentPhotoMap(incidentIds),
+    buildIncidentDetailMap(incidentIds),
+  ]);
+
+  // Batch-load cleaning tasks and bookings
+  const cleaningTaskIdSet = new Set(
+    incidents.map((i) => i.cleaning_task_id).filter(Boolean).map(String)
+  );
+  const bookingIdSet = new Set(
+    incidents.map((i) => i.booking_id).filter(Boolean).map(String)
+  );
+
+  const [tasks, bookings] = await Promise.all([
+    cleaningTaskIdSet.size > 0
+      ? CleaningTask.find({ id: { $in: Array.from(cleaningTaskIdSet) } })
+          .select(
+            "id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source"
+          )
+          .lean()
+      : Promise.resolve([]),
+    bookingIdSet.size > 0
+      ? Booking.find({ id: { $in: Array.from(bookingIdSet) } })
+          .select(
+            "id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state"
+          )
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const taskById = new Map(tasks.map((t) => [String(t.id), t]));
+  const bookingById = new Map(bookings.map((b) => [String(b.id), b]));
+
+  return incidents.map((inc) => ({
+    ...inc,
+    photo_urls: photoMap[inc.id] || [],
+    details: detailMap[inc.id] || [],
+    cleaning_task: inc.cleaning_task_id ? taskById.get(String(inc.cleaning_task_id)) || null : null,
+    booking: inc.booking_id ? bookingById.get(String(inc.booking_id)) || null : null,
+  }));
+};
+
 /**
  * Validate that the logged-in cleaner has access to a given incident.
  * Access is granted when:
@@ -1394,7 +1492,7 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
 /**
  * API 2 (Cleaner): Get all REPLENISHMENT_REQUEST incidents for a cleaning task assigned to the cleaner.
  */
-exports.getCheckinReportsByCleaner = async (cleaningTaskId, actor) => {
+exports.getReplenishmentRequestsByCleaner = async (cleaningTaskId, actor) => {
   if (!cleaningTaskId) throw createError("cleaning_task_id is required", 400);
 
   const actorIds = resolveActorIdentityIds(actor);

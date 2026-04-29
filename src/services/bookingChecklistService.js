@@ -145,7 +145,7 @@ const resolveBookingForChecklist = async (bookingId, userId) => {
 
 // ─── API 1: Get checklist items ──────────────────────────────────
 
-const getChecklistItems = async (bookingId, userId) => {
+const getReplenishmentRequestItems = async (bookingId, userId) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   if (!["IN_USE", "BOOKED"].includes(booking.status)) {
@@ -193,7 +193,7 @@ const getChecklistItems = async (bookingId, userId) => {
   // Check if already have existing checklist records
   const existingChecklist = await BookingChecklist.find({
     booking_id: booking.id,
-    type: "CHECKIN",
+    type: "REPLENISHMENT_REQUEST",
   })
     .select("item_id reported_status reported_quantity photo_url incident_id")
     .lean();
@@ -223,7 +223,7 @@ const getChecklistItems = async (bookingId, userId) => {
 
 // ─── API 2: Confirm checklist ────────────────────────────────────
 
-const confirmChecklist = async (bookingId, userId, itemsPayload) => {
+const confirmReplenishmentRequest = async (bookingId, userId, itemsPayload) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   if (booking.status !== "IN_USE") {
@@ -314,7 +314,7 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       item_id: itemId,
       item_name: reusableItem.name,
       unit_cost: reusableItem.unit_cost || 0,
-      type: "CHECKIN",
+      type: "REPLENISHMENT_REQUEST",
       expected_quantity: expectedQty,
       reported_status: status,
       reported_quantity: reportedQty,
@@ -363,7 +363,20 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       description: descParts.join(" "),
       severity: "MEDIUM",
       status: "PENDING",
-      estimated_total_value: null,
+      estimated_total_value: estimatedValue > 0 ? estimatedValue : null,
+    });
+
+    // Create IncidentDetail for traceability
+    await IncidentDetail.create({
+      incident_id: incident.id,
+      type: "ITEM",
+      item_id: doc.item_id,
+      service_catalog_id: null,
+      name_snapshot: doc.item_name,
+      unit_cost_snapshot: doc.unit_cost,
+      quantity: doc.reported_quantity,
+      total_cost: estimatedValue,
+      note: `Báo cáo bởi khách lúc check-in`,
     });
 
     // Link incident to checklist record
@@ -468,7 +481,7 @@ const _notifyCleanersAboutChecklistIssues = async (booking, incidents) => {
 
 // ─── API 3: Get checklist status ─────────────────────────────────
 
-const getChecklistStatus = async (bookingId, userId) => {
+const getReplenishmentRequestStatus = async (bookingId, userId) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   return {
@@ -503,7 +516,7 @@ const autoAcceptExpiredChecklists = async () => {
       // Check if already has checklist records (partial submit edge case)
       const existingCount = await BookingChecklist.countDocuments({
         booking_id: booking.id,
-        type: "CHECKIN",
+        type: "REPLENISHMENT_REQUEST",
       });
 
       if (existingCount > 0) {
@@ -548,7 +561,7 @@ const autoAcceptExpiredChecklists = async () => {
             pod_id: booking.pod_id,
             item_id: pi.item_id,
             item_name: item.name,
-            type: "CHECKIN",
+            type: "REPLENISHMENT_REQUEST",
             expected_quantity: pi.expected_quantity,
             reported_status: "MATCHED_BY_SYSTEM",
             reported_quantity: pi.expected_quantity,
@@ -653,7 +666,7 @@ const startAutoAcceptJob = (intervalMinutes = AUTO_ACCEPT_JOB_INTERVAL_MINUTES) 
 
 // ─── API 4: Confirm Checkout Checklist (Cleaner) ─────────────────
 
-const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload) => {
+const confirmDamageReport = async (cleaningTaskId, cleanerId, itemsPayload) => {
   const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId }).lean();
   if (!cleaningTask) throw createError("Cleaning task not found", 404);
 
@@ -689,7 +702,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
   // Check if checkout checklist is already completed
   const existingCheckout = await BookingChecklist.countDocuments({
     booking_id: bookingId,
-    type: "CHECKOUT"
+    type: "DAMAGE_REPORT"
   });
 
   if (existingCheckout > 0) {
@@ -758,13 +771,20 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
       );
     }
 
+    if ((status === "DAMAGED" || status === "MISSING") && reportedQty <= 0) {
+      throw createError(
+        `Số lượng báo cáo cho vật dụng "${reusableItem.name}" phải lớn hơn 0 khi báo thiếu hoặc hỏng.`,
+        400
+      );
+    }
+
     const doc = {
       booking_id: bookingId,
       pod_id: cleaningTask.pod_id,
       item_id: itemId,
       item_name: reusableItem.name,
       unit_cost: reusableItem.unit_cost || 0,
-      type: "CHECKOUT",
+      type: "DAMAGE_REPORT",
       expected_quantity: expectedQty,
       reported_status: status,
       reported_quantity: reportedQty,
@@ -827,7 +847,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
       unit_cost_snapshot: doc.unit_cost,
       quantity: doc.reported_quantity,
       total_cost: estimatedValue,
-      note: `Báo cáo qua Checkout Checklist`,
+      note: `Báo cáo bởi cleaner lúc check-out`,
     });
 
     // Link incident to checklist record
@@ -890,7 +910,7 @@ const confirmCheckoutChecklist = async (cleaningTaskId, cleanerId, itemsPayload)
 
 // ─── API 5: Get Checkout Checklist Items (Cleaner) ─────────────────
 
-const getCheckoutChecklistItems = async (cleaningTaskId, cleanerId) => {
+const getDamageReportItems = async (cleaningTaskId, cleanerId) => {
   const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId }).lean();
   if (!cleaningTask) throw createError("Cleaning task not found", 404);
 
@@ -951,7 +971,7 @@ const getCheckoutChecklistItems = async (cleaningTaskId, cleanerId) => {
   // Get user's checkin records so cleaner knows what was reported initially
   const checkinRecords = await BookingChecklist.find({
     booking_id: bookingId,
-    type: "CHECKIN",
+    type: "REPLENISHMENT_REQUEST",
   })
     .select("item_id reported_status reported_quantity")
     .lean();
@@ -977,11 +997,11 @@ const getCheckoutChecklistItems = async (cleaningTaskId, cleanerId) => {
 };
 
 module.exports = {
-  getChecklistItems,
-  confirmChecklist,
-  getChecklistStatus,
+  getReplenishmentRequestItems,
+  confirmReplenishmentRequest,
+  getReplenishmentRequestStatus,
   autoAcceptExpiredChecklists,
   startAutoAcceptJob,
-  confirmCheckoutChecklist,
-  getCheckoutChecklistItems,
+  confirmDamageReport,
+  getDamageReportItems,
 };

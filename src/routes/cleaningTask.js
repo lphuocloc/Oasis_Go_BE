@@ -626,9 +626,10 @@ router.delete("/:id", protect, authorize("admin"), deleteCleaningTask);
 
 /**
  * @swagger
- * /api/cleaning-tasks/{taskId}/checkout-checklist:
+ * /api/cleaning-tasks/{taskId}/damage-report:
  *   post:
- *     summary: Confirm checkout checklist (Cleaner)
+ *     summary: Confirm damage report at checkout (Cleaner)
+ *     description: Submit item inspection results at checkout. DAMAGED/MISSING items auto-create DAMAGE_REPORT incidents and notify managers.
  *     tags: [Cleaning Tasks]
  *     security:
  *       - bearerAuth: []
@@ -663,26 +664,27 @@ router.delete("/:id", protect, authorize("admin"), deleteCleaningTask);
  *                       type: number
  *     responses:
  *       200:
- *         description: Checkout checklist confirmed
+ *         description: Damage report confirmed
  *       400:
  *         description: Invalid payload or task status
  *       403:
  *         description: Not authorized for this task
  *       409:
- *         description: Checklist already completed
+ *         description: Damage report already completed
  */
 router.post(
-  "/:taskId/checkout-checklist",
+  "/:taskId/damage-report",
   protect,
   authorize("cleaner"),
-  bookingChecklistController.confirmCheckoutChecklist
+  bookingChecklistController.confirmDamageReport
 );
 
 /**
  * @swagger
- * /api/cleaning-tasks/{taskId}/checkout-checklist-items:
+ * /api/cleaning-tasks/{taskId}/damage-report-items:
  *   get:
- *     summary: Get checkout checklist items (Cleaner)
+ *     summary: Get damage report items for checkout (Cleaner)
+ *     description: Returns REUSABLE items for cleaner to inspect at checkout, enriched with the guest's replenishment request records.
  *     tags: [Cleaning Tasks]
  *     security:
  *       - bearerAuth: []
@@ -695,17 +697,17 @@ router.post(
  *         description: Cleaning task ID
  *     responses:
  *       200:
- *         description: Checkout checklist items retrieved
+ *         description: Damage report items retrieved
  *       403:
  *         description: Not authorized for this task
  *       404:
  *         description: Cleaning task not found
  */
 router.get(
-  "/:taskId/checkout-checklist-items",
+  "/:taskId/damage-report-items",
   protect,
   authorize("cleaner"),
-  bookingChecklistController.getCheckoutChecklistItems
+  bookingChecklistController.getDamageReportItems
 );
 
 module.exports = router;

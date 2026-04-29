@@ -513,10 +513,10 @@ const bookingChecklistController = require("../controllers/bookingChecklistContr
 
 /**
  * @swagger
- * /api/bookings/{id}/checklist-items:
+ * /api/bookings/{id}/replenishment-request-items:
  *   get:
- *     summary: Get checklist items for a booking
- *     description: Returns REUSABLE items that the guest should verify when entering their pod
+ *     summary: Get replenishment request items for a booking
+ *     description: Returns REUSABLE items that the guest should verify when entering their pod (REPLENISHMENT_REQUEST checklist)
  *     tags: [Bookings]
  *     security:
  *       - bearerAuth: []
@@ -529,20 +529,20 @@ const bookingChecklistController = require("../controllers/bookingChecklistContr
  *         description: Booking ID
  *     responses:
  *       200:
- *         description: Checklist items retrieved
+ *         description: Replenishment request items retrieved
  *       403:
  *         description: Not authorized for this booking
  *       404:
  *         description: Booking not found
  */
-router.get("/:id/checklist-items", protect, bookingChecklistController.getChecklistItems);
+router.get("/:id/replenishment-request-items", protect, bookingChecklistController.getReplenishmentRequestItems);
 
 /**
  * @swagger
- * /api/bookings/{id}/confirm-checklist:
+ * /api/bookings/{id}/confirm-replenishment-request:
  *   post:
- *     summary: Confirm checklist results
- *     description: Submit item verification results. DAMAGED/MISSING items auto-create incidents and notify cleaners.
+ *     summary: Confirm replenishment request (check-in item report)
+ *     description: Submit item verification results at check-in. DAMAGED/MISSING items auto-create REPLENISHMENT_REQUEST incidents and notify cleaners.
  *     tags: [Bookings]
  *     security:
  *       - bearerAuth: []
@@ -578,26 +578,26 @@ router.get("/:id/checklist-items", protect, bookingChecklistController.getCheckl
  *                       description: "Optional. Number of items reported. Defaults to expected_quantity if omitted."
  *     responses:
  *       200:
- *         description: Checklist confirmed
+ *         description: Replenishment request confirmed
  *       400:
  *         description: Invalid payload or booking status
  *       403:
  *         description: Not authorized for this booking
  *       409:
- *         description: Checklist already completed
+ *         description: Replenishment request already completed
  */
 router.post(
-  "/:id/confirm-checklist",
+  "/:id/confirm-replenishment-request",
   protect,
-  bookingChecklistController.confirmChecklist
+  bookingChecklistController.confirmReplenishmentRequest
 );
 
 /**
  * @swagger
- * /api/bookings/{id}/checklist-status:
+ * /api/bookings/{id}/replenishment-request-status:
  *   get:
- *     summary: Check if checklist is completed
- *     description: Returns is_checklist_completed flag. App uses this to decide whether to show the checklist overlay.
+ *     summary: Check if replenishment request (check-in checklist) is completed
+ *     description: Returns is_checklist_completed flag. App uses this to decide whether to show the replenishment request overlay.
  *     tags: [Bookings]
  *     security:
  *       - bearerAuth: []
@@ -610,13 +610,13 @@ router.post(
  *         description: Booking ID
  *     responses:
  *       200:
- *         description: Checklist status retrieved
+ *         description: Replenishment request status retrieved
  *       403:
  *         description: Not authorized for this booking
  *       404:
  *         description: Booking not found
  */
-router.get("/:id/checklist-status", protect, bookingChecklistController.getChecklistStatus);
+router.get("/:id/replenishment-request-status", protect, bookingChecklistController.getReplenishmentRequestStatus);
 
 
 module.exports = router;

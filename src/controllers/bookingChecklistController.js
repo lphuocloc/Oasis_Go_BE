@@ -26,10 +26,10 @@ const parseItemsPayload = (raw) => {
   return [];
 };
 
-exports.getChecklistItems = async (req, res) => {
+exports.getReplenishmentRequestItems = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const result = await bookingChecklistService.getChecklistItems(
+    const result = await bookingChecklistService.getReplenishmentRequestItems(
       req.params.id,
       String(userId)
     );
@@ -41,17 +41,17 @@ exports.getChecklistItems = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching checklist items",
+      message: error.message || "Error fetching replenishment request items",
     });
   }
 };
 
-exports.confirmChecklist = async (req, res) => {
+exports.confirmReplenishmentRequest = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
     const rawPayload = req.body?.items || req.body;
     const items = parseItemsPayload(rawPayload);
-    const result = await bookingChecklistService.confirmChecklist(
+    const result = await bookingChecklistService.confirmReplenishmentRequest(
       req.params.id,
       String(userId),
       items
@@ -66,15 +66,15 @@ exports.confirmChecklist = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error confirming checklist",
+      message: error.message || "Error confirming replenishment request",
     });
   }
 };
 
-exports.getChecklistStatus = async (req, res) => {
+exports.getReplenishmentRequestStatus = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const result = await bookingChecklistService.getChecklistStatus(
+    const result = await bookingChecklistService.getReplenishmentRequestStatus(
       req.params.id,
       String(userId)
     );
@@ -86,17 +86,17 @@ exports.getChecklistStatus = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching checklist status",
+      message: error.message || "Error fetching replenishment request status",
     });
   }
 };
 
-exports.confirmCheckoutChecklist = async (req, res) => {
+exports.confirmDamageReport = async (req, res) => {
   try {
     const cleanerId = req.user?.id || req.user?._id;
     const rawPayload = req.body?.items || req.body;
     const items = parseItemsPayload(rawPayload);
-    const result = await bookingChecklistService.confirmCheckoutChecklist(
+    const result = await bookingChecklistService.confirmDamageReport(
       req.params.taskId,
       String(cleanerId),
       items
@@ -111,15 +111,15 @@ exports.confirmCheckoutChecklist = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error confirming checkout checklist",
+      message: error.message || "Error confirming damage report",
     });
   }
 };
 
-exports.getCheckoutChecklistItems = async (req, res) => {
+exports.getDamageReportItems = async (req, res) => {
   try {
     const cleanerId = req.user?.id || req.user?._id;
-    const result = await bookingChecklistService.getCheckoutChecklistItems(
+    const result = await bookingChecklistService.getDamageReportItems(
       req.params.taskId,
       String(cleanerId)
     );
@@ -132,7 +132,7 @@ exports.getCheckoutChecklistItems = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching checkout checklist items",
+      message: error.message || "Error fetching damage report items",
     });
   }
 };

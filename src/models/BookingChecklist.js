@@ -38,10 +38,10 @@ const bookingChecklistSchema = new mongoose.Schema(
     type: {
       type: String,
       enum: {
-        values: ["CHECKIN", "CHECKOUT"],
+        values: ["REPLENISHMENT_REQUEST", "DAMAGE_REPORT"],
         message: "{VALUE} is not a valid checklist type",
       },
-      default: "CHECKIN",
+      default: "REPLENISHMENT_REQUEST",
       required: true,
     },
     expected_quantity: {
