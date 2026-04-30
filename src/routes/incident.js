@@ -11,7 +11,8 @@ const {
   getIncidentById,
   updateIncidentStatus,
   getCleanerIncidentDetail,
-  getCheckinReportsByCleaner,
+  getCleanerIncidents,
+  getReplenishmentRequestsByCleaner,
   updateCleanerIncidentStatus,
   resolveReplenishment,
 } = require("../controllers/incidentController");
@@ -619,9 +620,9 @@ router.get(
  */
 /**
  * @swagger
- * /api/incidents/cleaner/checkin-reports:
+ * /api/incidents/cleaner/replenishment-requests:
  *   get:
- *     summary: "[Cleaner] Get all CHECKIN_REPORT incidents for a cleaning task assigned to the cleaner"
+ *     summary: "[Cleaner] Get all REPLENISHMENT_REQUEST incidents for a cleaning task assigned to the cleaner"
  *     tags: [Incidents]
  *     security:
  *       - bearerAuth: []
@@ -634,7 +635,7 @@ router.get(
  *         description: The cleaning task ID assigned to the logged-in cleaner
  *     responses:
  *       200:
- *         description: Checkin reports retrieved successfully
+ *         description: Replenishment requests retrieved successfully
  *         content:
  *           application/json:
  *             schema:
@@ -658,11 +659,61 @@ router.get(
  *       404:
  *         description: Cleaning task not found
  */
+/**
+ * @swagger
+ * /api/incidents/cleaner/my-incidents:
+ *   get:
+ *     summary: "[Cleaner] Get all incidents of the logged-in cleaner"
+ *     description: Returns all incidents where the cleaner is the reporter OR their cleaning task is linked. Each incident is enriched with cleaning_task and booking info.
+ *     tags: [Incidents]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [PENDING, PROCESSING, COMPLETED, RESOLVED, DISMISSED]
+ *       - in: query
+ *         name: incident_type
+ *         schema:
+ *           type: string
+ *           enum: [OPERATIONAL, DAMAGE_REPORT, REPLENISHMENT_REQUEST]
+ *     responses:
+ *       200:
+ *         description: Incidents retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     allOf:
+ *                       - $ref: '#/components/schemas/Incident'
+ *                       - type: object
+ *                         properties:
+ *                           cleaning_task:
+ *                             type: object
+ *                             nullable: true
+ *                           booking:
+ *                             type: object
+ *                             nullable: true
+ *       401:
+ *         description: Unauthorized
+ */
+router.get("/cleaner/my-incidents", protect, authorize("cleaner"), getCleanerIncidents);
+
 router.get(
-  "/cleaner/checkin-reports",
+  "/cleaner/replenishment-requests",
   protect,
   authorize("cleaner"),
-  getCheckinReportsByCleaner
+  getReplenishmentRequestsByCleaner
 );
 
 /**

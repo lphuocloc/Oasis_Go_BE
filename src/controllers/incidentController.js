@@ -215,6 +215,22 @@ exports.resolveReplenishment = async (req, res) => {
 
 // ─── Cleaner Incident Controllers ─────────────────────────────────
 
+exports.getCleanerIncidents = async (req, res) => {
+  try {
+    const incidents = await incidentService.getCleanerIncidents(req.user, req.query);
+    res.status(200).json({
+      success: true,
+      count: incidents.length,
+      data: incidents,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Error fetching cleaner incidents",
+    });
+  }
+};
+
 exports.getCleanerIncidentDetail = async (req, res) => {
   try {
     const incident = await incidentService.getCleanerIncidentDetail(req.params.id, req.user);
@@ -227,10 +243,10 @@ exports.getCleanerIncidentDetail = async (req, res) => {
   }
 };
 
-exports.getCheckinReportsByCleaner = async (req, res) => {
+exports.getReplenishmentRequestsByCleaner = async (req, res) => {
   try {
     const { cleaning_task_id } = req.query;
-    const result = await incidentService.getCheckinReportsByCleaner(cleaning_task_id, req.user);
+    const result = await incidentService.getReplenishmentRequestsByCleaner(cleaning_task_id, req.user);
     res.status(200).json({
       success: true,
       count: result.incidents.length,
@@ -239,7 +255,7 @@ exports.getCheckinReportsByCleaner = async (req, res) => {
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Error fetching checkin reports",
+      message: error.message || "Error fetching replenishment requests",
     });
   }
 };
