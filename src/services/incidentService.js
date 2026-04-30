@@ -999,8 +999,9 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
     requested_status: normalizedStatus,
   });
 
-  if (previousStatus !== normalizedStatus && previousStatus !== "PENDING") {
-    throw createError("Only incidents in PENDING status can be reviewed", 400);
+  const MANAGER_REVIEWABLE_STATUSES = ["PENDING", "COMPLETED"];
+  if (previousStatus !== normalizedStatus && !MANAGER_REVIEWABLE_STATUSES.includes(previousStatus)) {
+    throw createError("Only incidents in PENDING or COMPLETED status can be reviewed", 400);
   }
 
   if (actorRole === "manager" && !["RESOLVED", "DISMISSED"].includes(normalizedStatus)) {
@@ -1233,7 +1234,7 @@ exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayloa
   if (incident.incident_type !== "REPLENISHMENT_REQUEST") {
     throw createError("This incident is not a replenishment request", 400);
   }
-  if (incident.status !== "PENDING" && incident.status !== "ASSIGNED") {
+  if (!["PENDING", "ASSIGNED", "PROCESSING"].includes(incident.status)) {
     throw createError("Incident is already resolved or dismissed", 400);
   }
 
@@ -1295,7 +1296,7 @@ exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayloa
       actor_id: user.id || String(user._id),
       incident_id: incident.id,
       quantity: qty,
-      action_type: "CHECKOUT",
+      action_type: "CONSUMED",
       reason: "Bổ sung vật dụng thiếu/hỏng lúc checkin"
     });
 
