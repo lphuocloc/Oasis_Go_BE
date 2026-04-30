@@ -11,9 +11,7 @@ const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Item = require("../models/Item");
 const DamageServiceCatalog = require("../models/DamageServiceCatalog");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
-const LocationShift = require("../models/LocationShift");
-const StaffShift = require("../models/StaffShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
@@ -199,50 +197,28 @@ const resolveManagersForPod = async (podId) => {
   const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("location_id").lean();
   if (!cluster || !cluster.location_id) return [];
 
-  const locationShifts = await LocationShift.find({ location_id: cluster.location_id }).select("id shift_id").lean();
-  if (!locationShifts.length) return [];
+  const rosters = await StaffWorkRoster.find({
+    location_id: cluster.location_id,
+    is_active: true
+  }).lean();
 
-  const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
-  const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
-    .select("id")
-    .lean()
-    .then((rows) => rows.map((row) => String(row.id)));
+  const rosterStaffIds = [...new Set(rosters.map(r => String(r.staff_id)))];
 
-  if (!managerShiftIds.length) return [];
-
-  const managerLocationShiftIds = locationShifts
-    .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
-    .map((entry) => String(entry.id));
-
-  if (!managerLocationShiftIds.length) return [];
-
-  const now = new Date();
-  const assignments = await StaffShiftAssignment.find({
-    location_shift_id: { $in: managerLocationShiftIds },
-    status: { $in: ["ASSIGNED", "CHECKED_IN"] },
-    start_date: { $lte: now },
-    end_date: { $gte: now },
-  })
-    .select("staff_id")
-    .lean();
-
-  const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-
-  if (!assignmentStaffIds.length) {
+  if (!rosterStaffIds.length) {
     const allManagers = await User.find({ role: "manager", isActive: true })
       .select("_id")
       .lean();
     return [...new Set(allManagers.map((m) => String(m._id || "")).filter(Boolean))];
   }
 
-  const assignmentObjectIds = assignmentStaffIds
+  const assignmentObjectIds = rosterStaffIds
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
   const managers = await User.find({
     role: "manager",
     isActive: true,
-    $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+    $or: [{ id: { $in: rosterStaffIds } }, { _id: { $in: assignmentObjectIds } }],
   })
     .select("_id")
     .lean();

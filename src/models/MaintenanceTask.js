@@ -21,12 +21,7 @@ const maintenanceTaskSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
-    shift_assignment_id: {
-      type: String,
-      default: null,
-      ref: "StaffShiftAssignment",
-      index: true,
-    },
+
     incident_id: {
       type: String,
       default: null,
@@ -55,6 +50,6 @@ const maintenanceTaskSchema = new mongoose.Schema(
 );
 
 maintenanceTaskSchema.index({ reported_by: 1, created_at: -1 });
-maintenanceTaskSchema.index({ shift_assignment_id: 1, created_at: -1 });
+
 
 module.exports = mongoose.model("MaintenanceTask", maintenanceTaskSchema);

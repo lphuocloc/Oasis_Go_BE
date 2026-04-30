@@ -26,7 +26,6 @@ const bookingAutoActivateGraceMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE
 bookingService.startAutoActivateCheckinJob(bookingAutoActivateJobIntervalMinutes, bookingAutoActivateGraceMinutes);
 
 const cleaningTaskService = require("./services/cleaningTaskService");
-const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
 const debtService = require("./services/debtService");
 if (
   String(
@@ -60,15 +59,6 @@ if (
   );
 }
 
-if (
-  String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() ===
-  "true"
-) {
-  staffShiftAssignmentService.startShiftReminderJob(
-    Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30),
-  );
-}
 
 if (
   String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true"
@@ -117,7 +107,7 @@ const maintenanceTaskRouter = require("./routes/maintenanceTask");
 const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
 const staffWorkRosterRouter = require("./routes/staffWorkRoster");
-const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
+const shiftHandoverRouter = require("./routes/shiftHandover");
 const staffAttendanceLogRouter = require("./routes/staffAttendanceLog");
 const usersRouter = require("./routes/users");
 const incidentRouter = require("./routes/incident");
@@ -217,7 +207,7 @@ app.use("/api/maintenance-tasks", maintenanceTaskRouter);
 app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
 app.use("/api/staff-work-rosters", staffWorkRosterRouter);
-app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
+app.use("/api/shift-handovers", shiftHandoverRouter);
 app.use("/api/staff-attendance-logs", staffAttendanceLogRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/incidents", incidentRouter);
@@ -252,5 +242,16 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === "development" ? err : {},
   });
 });
+
+// Background Tasks (Cronjobs)
+const staffAttendanceLogService = require("./services/staffAttendanceLogService");
+// Run once on startup after 10 seconds
+setTimeout(() => {
+  staffAttendanceLogService.autoCheckoutGhostSessions();
+}, 10 * 1000);
+// Run every 1 hour
+setInterval(() => {
+  staffAttendanceLogService.autoCheckoutGhostSessions();
+}, 60 * 60 * 1000);
 
 module.exports = app;

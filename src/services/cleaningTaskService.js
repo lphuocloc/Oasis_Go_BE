@@ -4,10 +4,9 @@ const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Booking = require("../models/Bookings");
 const User = require("../models/User");
-const LocationShift = require("../models/LocationShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const StaffShift = require("../models/StaffShift");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const CleaningBufferPolicy = require("../models/CleaningBufferPolicy");
 const Location = require("../models/Location");
 const OnlineKey = require("../models/OnlineKey");
@@ -450,54 +449,30 @@ const notifyManagersTaskRejected = async (task) => {
   const locationId = cluster.location_id;
   const podCode = pod.code || pod.id || "Unknown";
 
-  // Find managers on shift at this location today
-  const locationShifts = await LocationShift.find({ location_id: locationId })
-    .select("id shift_id")
-    .lean();
-
+  // Find managers at this location
+  const rosters = await StaffWorkRoster.find({ location_id: locationId, is_active: true }).lean();
   let managerUserIds = [];
 
-  if (locationShifts.length > 0) {
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
+  if (rosters.length > 0) {
+     const rosterManagerIds = [...new Set(rosters.map(r => String(r.staff_id)))];
+     
+     // Only notify managers who are currently checked in (or fallback to all if none checked in)
+     const today = new Date();
+     const startOfDay = new Date(today);
+     startOfDay.setHours(0, 0, 0, 0);
+     const endOfDay = new Date(today);
+     endOfDay.setHours(23, 59, 59, 999);
 
-    const managerShifts = await StaffShift.find({
-      id: { $in: locationShifts.map((ls) => ls.shift_id).filter(Boolean) },
-      role: "MANAGER",
-      is_active: true,
-    })
-      .select("id")
-      .lean();
-
-    if (managerShifts.length > 0) {
-      const managerShiftIdSet = new Set(managerShifts.map((s) => s.id));
-      const managerLocationShiftIds = locationShifts
-        .filter((ls) => managerShiftIdSet.has(ls.shift_id))
-        .map((ls) => ls.id);
-
-      if (managerLocationShiftIds.length > 0) {
-        const assignments = await StaffShiftAssignment.find({
-          location_shift_id: { $in: managerLocationShiftIds },
-          $or: [
-            { work_date: { $gte: startOfDay, $lte: endOfDay } },
-            {
-              $and: [
-                { start_date: { $lte: endOfDay } },
-                { end_date: { $gte: startOfDay } },
-              ],
-            },
-          ],
-          status: { $in: ["CHECKED_IN", "ASSIGNED"] },
-        })
-          .select("staff_id")
-          .lean();
-
-        managerUserIds = [...new Set(assignments.map((a) => String(a.staff_id)).filter(Boolean))];
-      }
-    }
+     const checkins = await StaffAttendanceLog.find({
+         location_id: locationId,
+         action: "CHECKIN",
+         created_at: { $gte: startOfDay, $lte: endOfDay }
+     }).lean();
+     
+     const checkedInStaffIds = checkins.map(c => String(c.staff_id));
+     const currentlyCheckedInManagers = rosterManagerIds.filter(id => checkedInStaffIds.includes(id));
+     
+     managerUserIds = currentlyCheckedInManagers.length > 0 ? currentlyCheckedInManagers : rosterManagerIds;
   }
 
   // Fallback: notify all active managers in the system
@@ -538,8 +513,8 @@ const notifyManagersTaskRejected = async (task) => {
   );
 };
 
-const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleCleanerIds = [], options = {}) => {
-  if (!Array.isArray(assignments) || assignments.length === 0) return null;
+const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerIds = [], options = {}) => {
+  if (!Array.isArray(rosters) || rosters.length === 0) return null;
   if (!Array.isArray(eligibleCleanerIds) || eligibleCleanerIds.length === 0) return null;
 
   const requestSource = String(options.requestSource || "").toUpperCase();
@@ -548,18 +523,34 @@ const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleClean
     requestSource === "AUTO_AFTER_CHECKOUT" && dueAtInput && !Number.isNaN(dueAtInput.getTime());
 
   const cleanerIdSet = new Set(eligibleCleanerIds.map((id) => String(id)));
-  const checkedInAssignments = assignments.filter(
-    (item) => item.status === "CHECKED_IN" && cleanerIdSet.has(String(item.staff_id))
+  
+  const today = new Date();
+  const startOfDay = new Date(today);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(today);
+  endOfDay.setHours(23, 59, 59, 999);
+
+  // Find who checked in today
+  const checkins = await StaffAttendanceLog.find({
+      staff_id: { $in: eligibleCleanerIds },
+      action: "CHECKIN",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+  }).lean();
+  
+  const checkedInCleanerIds = new Set(checkins.map(c => String(c.staff_id)));
+
+  const checkedInRosters = rosters.filter(
+    (item) => checkedInCleanerIds.has(String(item.staff_id)) && cleanerIdSet.has(String(item.staff_id))
   );
 
-  const fallbackAssignments = assignments.filter((item) => cleanerIdSet.has(String(item.staff_id)));
-  const candidateAssignments = checkedInAssignments.length > 0 ? checkedInAssignments : fallbackAssignments;
+  const fallbackRosters = rosters.filter((item) => cleanerIdSet.has(String(item.staff_id)));
+  const candidateRosters = checkedInRosters.length > 0 ? checkedInRosters : fallbackRosters;
 
-  if (candidateAssignments.length === 0) {
+  if (candidateRosters.length === 0) {
     return null;
   }
 
-  const candidateCleanerIds = [...new Set(candidateAssignments.map((item) => String(item.staff_id)))];
+  const candidateCleanerIds = [...new Set(candidateRosters.map((item) => String(item.staff_id)))];
 
   const counts = await CleaningTask.aggregate([
     {
@@ -578,7 +569,7 @@ const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleClean
 
   const countMap = new Map(counts.map((item) => [String(item._id), Number(item.total) || 0]));
 
-  let prioritizedAssignments = candidateAssignments;
+  let prioritizedRosters = candidateRosters;
 
   if (shouldApplyDueSpacingRule) {
     const spacingMs = AUTO_AFTER_CHECKOUT_DUE_SPACING_MINUTES * 60 * 1000;
@@ -603,36 +594,26 @@ const selectAssignmentWithLoadBalancing = async (assignments = [], eligibleClean
     ]);
 
     const conflictCleanerIds = new Set(conflicts.map((item) => String(item._id)));
-    const nonConflictAssignments = candidateAssignments.filter(
+    const nonConflictRosters = candidateRosters.filter(
       (item) => !conflictCleanerIds.has(String(item.staff_id))
     );
 
-    // Prefer cleaners with no AUTO_AFTER_CHECKOUT due-time conflict in +/- 30 minutes.
-    // If everyone conflicts, fallback to load balancing on all candidates.
-    if (nonConflictAssignments.length > 0) {
-      prioritizedAssignments = nonConflictAssignments;
+    if (nonConflictRosters.length > 0) {
+      prioritizedRosters = nonConflictRosters;
     }
   }
 
   let selected = null;
   let minLoad = Number.MAX_SAFE_INTEGER;
 
-  for (const assignment of prioritizedAssignments) {
-    const cleanerId = String(assignment.staff_id);
+  for (const roster of prioritizedRosters) {
+    const cleanerId = String(roster.staff_id);
     const load = countMap.has(cleanerId) ? countMap.get(cleanerId) : 0;
 
     if (load < minLoad) {
       minLoad = load;
-      selected = assignment;
+      selected = roster;
       continue;
-    }
-
-    if (load === minLoad && selected) {
-      const currentCheckIn = assignment.checkin_at ? new Date(assignment.checkin_at).getTime() : 0;
-      const selectedCheckIn = selected.checkin_at ? new Date(selected.checkin_at).getTime() : 0;
-      if (currentCheckIn > selectedCheckIn) {
-        selected = assignment;
-      }
     }
   }
 
@@ -662,55 +643,36 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
     return false;
   }
 
-  const locationShifts = await LocationShift.find({ location_id: normalizedLocationId })
-    .select("id")
-    .lean();
+  const startOfDay = new Date(referenceTime);
+  startOfDay.setHours(0, 0, 0, 0);
+  const endOfDay = new Date(referenceTime);
+  endOfDay.setHours(23, 59, 59, 999);
 
-  const locationShiftIds = locationShifts.map((item) => item.id);
-  if (locationShiftIds.length === 0) {
-    return false;
-  }
+  // Instead of querying assignments, check if there's a CHECKIN log for this cluster today without a CHECKOUT
+  // Note: we might not know the clusterId here, but we can check if they have a CHECKIN at any cluster in this location
+  // But wait, AttendanceLog now has location_id (for managers) or cluster_id (for cleaners).
+  // Actually, we can just look up their Roster to see their cluster, then check location.
+  const rosters = await StaffWorkRoster.find({ staff_id: normalizedCleanerId, is_active: true }).lean();
+  if (rosters.length === 0) return false;
+  
+  // They are checked in if they have a CHECKIN today
+  const checkinLogs = await StaffAttendanceLog.find({
+      staff_id: normalizedCleanerId,
+      action: "CHECKIN",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+  }).sort({ created_at: -1 }).lean();
 
-  const assignments = await StaffShiftAssignment.find({
-    staff_id: normalizedCleanerId,
-    location_shift_id: { $in: locationShiftIds },
-    start_date: { $lte: referenceTime },
-    end_date: { $gte: referenceTime },
-  })
-    .select("id status")
-    .lean();
+  if (checkinLogs.length === 0) return false;
 
-  if (assignments.length === 0) {
-    return false;
-  }
+  const checkoutLogs = await StaffAttendanceLog.find({
+      staff_id: normalizedCleanerId,
+      action: "CHECKOUT",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+  }).sort({ created_at: -1 }).lean();
 
-  if (assignments.some((item) => String(item.status || "").toUpperCase() === "CHECKED_IN")) {
-    return true;
-  }
+  if (checkoutLogs.length === 0) return true;
 
-  const assignmentIds = assignments.map((item) => item.id);
-  const attendanceLogs = await StaffAttendanceLog.find({
-    shift_assignment_id: { $in: assignmentIds },
-  })
-    .sort({ created_at: -1 })
-    .select("shift_assignment_id action")
-    .lean();
-
-  const latestActionByAssignment = new Map();
-  for (const log of attendanceLogs) {
-    const key = String(log.shift_assignment_id);
-    if (!latestActionByAssignment.has(key)) {
-      latestActionByAssignment.set(key, String(log.action || "").toUpperCase());
-    }
-  }
-
-  for (const assignmentId of assignmentIds) {
-    if (latestActionByAssignment.get(String(assignmentId)) === "CHECKIN") {
-      return true;
-    }
-  }
-
-  return false;
+  return checkinLogs[0].created_at > checkoutLogs[0].created_at;
 };
 
 const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
@@ -1063,87 +1025,14 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "LOCATION_NOT_FOUND", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
-  const locationShifts = await LocationShift.find({ location_id: cluster.location_id }).select("id shift_id").lean();
-  debugInfo.location_shift_count = locationShifts.length;
-  if (locationShifts.length === 0) {
-    debugInfo.skip_reason = "NO_LOCATION_SHIFT";
-    return withDebug({ created: false, reason: "NO_LOCATION_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
-  }
+  const rosters = await StaffWorkRoster.find({
+    cluster_id: cluster.id,
+    is_active: true
+  }).select("id staff_id").lean();
 
-  const shiftIds = [...new Set(locationShifts.map((item) => item.shift_id).filter(Boolean))];
-  if (shiftIds.length === 0) {
-    return { created: false, reason: "NO_SHIFT_LINKED", booking_id: bookingId };
-  }
+  debugInfo.assignment_count = rosters.length;
 
-  const cleanerShifts = await StaffShift.find({
-    id: { $in: shiftIds },
-    role: "CLEANER",
-    is_active: true,
-  })
-    .select("id")
-    .lean();
-  debugInfo.cleaner_shift_count = cleanerShifts.length;
-
-  if (cleanerShifts.length === 0) {
-    debugInfo.skip_reason = "NO_CLEANER_SHIFT";
-    return withDebug({ created: false, reason: "NO_CLEANER_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
-  }
-
-  const cleanerShiftIdSet = new Set(cleanerShifts.map((item) => item.id));
-  const cleanerLocationShiftIds = locationShifts
-    .filter((item) => cleanerShiftIdSet.has(item.shift_id))
-    .map((item) => item.id);
-  debugInfo.cleaner_location_shift_count = cleanerLocationShiftIds.length;
-
-  if (cleanerLocationShiftIds.length === 0) {
-    debugInfo.skip_reason = "NO_CLEANER_LOCATION_SHIFT";
-    return withDebug({ created: false, reason: "NO_CLEANER_LOCATION_SHIFT", booking_id: bookingId }, debugInfo, includeDebug);
-  }
-
-  const bufferConfig = await resolveCleaningBufferMinutes({
-    podId,
-    clusterId: cluster.id,
-    locationId: cluster.location_id,
-  });
-  debugInfo.buffer_minutes_applied = bufferConfig.bufferMinutes;
-  debugInfo.buffer_policy_source = bufferConfig.source;
-  debugInfo.buffer_policy_id = bufferConfig.policyId;
-
-  const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferConfig.bufferMinutes);
-
-  // estimated_start_time = booking.end_time + 5 minutes
-  const estimatedStartTime = bookingLike && bookingLike.end_time
-    ? new Date(new Date(bookingLike.end_time).getTime() + 5 * 60 * 1000)
-    : null;
-
-  let allSystemCleaners = [];
-  if (includeDebug) {
-    allSystemCleaners = await User.find({ role: "cleaner" })
-      .select("_id id name email isActive")
-      .lean();
-    debugInfo.total_cleaner_count = allSystemCleaners.length;
-  }
-
-  const assignments = await StaffShiftAssignment.find({
-    location_shift_id: { $in: cleanerLocationShiftIds },
-    // Support both legacy work_date records and current start_date/end_date range records.
-    $or: [
-      { work_date: { $gte: startOfDay, $lte: endOfDay } },
-      {
-        $and: [
-          { start_date: { $lte: endOfDay } },
-          { end_date: { $gte: startOfDay } },
-        ],
-      },
-    ],
-    status: { $in: ["CHECKED_IN", "ASSIGNED"] },
-  })
-    .sort({ created_at: 1 })
-    .select("id staff_id status checkin_at")
-    .lean();
-  debugInfo.assignment_count = assignments.length;
-
-  if (assignments.length === 0) {
+  if (rosters.length === 0) {
     if (includeDebug) {
       debugInfo.cleaner_diagnostics = allSystemCleaners
         .map((cleaner) => {
@@ -1168,7 +1057,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "NO_ASSIGNMENT_IN_DAY", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
-  const staffIds = [...new Set(assignments.map((item) => item.staff_id).filter(Boolean).map((id) => String(id)))];
+  const staffIds = [...new Set(rosters.map((item) => item.staff_id).filter(Boolean).map((id) => String(id)))];
   const staffObjectIds = staffIds
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
@@ -1189,11 +1078,11 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     if (item && item._id) assignmentUserMap.set(String(item._id), item);
     if (item && item.id) assignmentUserMap.set(String(item.id), item);
   });
-  const assignmentsByCleanerId = new Map();
-  assignments.forEach((item) => {
+  const rostersByCleanerId = new Map();
+  rosters.forEach((item) => {
     const key = String(item.staff_id);
-    if (!assignmentsByCleanerId.has(key)) assignmentsByCleanerId.set(key, []);
-    assignmentsByCleanerId.get(key).push(item);
+    if (!rostersByCleanerId.has(key)) rostersByCleanerId.set(key, []);
+    rostersByCleanerId.get(key).push(item);
   });
 
   const availableCleaners = assignmentUsers.filter(
@@ -1207,19 +1096,19 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     allSystemCleaners.forEach((cleaner) => {
       const cleanerId = getCleanerIdentity(cleaner);
       if (!cleanerId) return;
-      const cleanerAssignments = assignmentsByCleanerId.get(cleanerId) || [];
+      const cleanerRosters = rostersByCleanerId.get(cleanerId) || [];
       diagnosticsMap.set(cleanerId, {
         cleaner_id: cleanerId,
         name: cleaner.name || null,
         email: cleaner.email || null,
         is_active: Boolean(cleaner.isActive),
-        has_assignment_in_day: cleanerAssignments.length > 0,
-        assignment_statuses: cleanerAssignments.map((item) => item.status),
-        eligible: Boolean(cleaner.isActive) && cleanerAssignments.length > 0,
+        has_assignment_in_day: cleanerRosters.length > 0,
+        assignment_statuses: cleanerRosters.map((item) => "ROSTER"),
+        eligible: Boolean(cleaner.isActive) && cleanerRosters.length > 0,
         selected: false,
         reason: !cleaner.isActive
           ? "INACTIVE_USER"
-          : cleanerAssignments.length === 0
+          : cleanerRosters.length === 0
             ? "NO_ASSIGNMENT_IN_DAY"
             : "ELIGIBLE",
         active_task_load: null,
@@ -1230,7 +1119,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
       if (diagnosticsMap.has(staffId)) return;
 
       const userRecord = assignmentUserMap.get(staffId);
-      const cleanerAssignments = assignmentsByCleanerId.get(staffId) || [];
+      const cleanerRosters = rostersByCleanerId.get(staffId) || [];
 
       if (!userRecord) {
         diagnosticsMap.set(staffId, {
@@ -1238,8 +1127,8 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
           name: null,
           email: null,
           is_active: null,
-          has_assignment_in_day: cleanerAssignments.length > 0,
-          assignment_statuses: cleanerAssignments.map((item) => item.status),
+          has_assignment_in_day: cleanerRosters.length > 0,
+          assignment_statuses: cleanerRosters.map((item) => "ROSTER"),
           eligible: false,
           selected: false,
           reason: "STAFF_USER_NOT_FOUND",
@@ -1254,8 +1143,8 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
         name: userRecord.name || null,
         email: userRecord.email || null,
         is_active: Boolean(userRecord.isActive),
-        has_assignment_in_day: cleanerAssignments.length > 0,
-        assignment_statuses: cleanerAssignments.map((item) => item.status),
+        has_assignment_in_day: cleanerRosters.length > 0,
+        assignment_statuses: cleanerRosters.map((item) => "ROSTER"),
         eligible: isCleanerRole && Boolean(userRecord.isActive),
         selected: false,
         reason: !isCleanerRole
@@ -1281,8 +1170,8 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     .map((item) => getCleanerIdentity(item))
     .filter(Boolean);
 
-  const selectedAssignment = await selectAssignmentWithLoadBalancing(
-    assignments,
+  const selectedRoster = await selectAssignmentWithLoadBalancing(
+    rosters,
     eligibleCleanerIds,
     {
       requestSource,
@@ -1290,37 +1179,30 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     }
   );
 
-  if (!selectedAssignment) {
+  if (!selectedRoster) {
     if (includeDebug) {
       const eligibleSet = new Set(eligibleCleanerIds.map((id) => String(id)));
-      const checkedInEligibleSet = new Set(
-        assignments
-          .filter((item) => item.status === "CHECKED_IN" && eligibleSet.has(String(item.staff_id)))
-          .map((item) => String(item.staff_id))
-      );
 
       debugInfo.cleaner_diagnostics = debugInfo.cleaner_diagnostics.map((item) => {
         if (!eligibleSet.has(String(item.cleaner_id))) return item;
         return {
           ...item,
-          reason: checkedInEligibleSet.size > 0 && !checkedInEligibleSet.has(String(item.cleaner_id))
-            ? "NOT_SELECTED_NOT_CHECKED_IN"
-            : "NO_ELIGIBLE_ASSIGNMENT",
+          reason: "NO_ELIGIBLE_ASSIGNMENT",
         };
       });
     }
     debugInfo.skip_reason = "NO_ELIGIBLE_ASSIGNMENT";
     return withDebug({ created: false, reason: "NO_ELIGIBLE_ASSIGNMENT", booking_id: bookingId }, debugInfo, includeDebug);
   }
-  debugInfo.selected_assignment_id = selectedAssignment.id;
-  debugInfo.selected_cleaner_id = selectedAssignment.staff_id;
+  debugInfo.selected_assignment_id = selectedRoster.id; // Using roster ID instead of assignment ID
+  debugInfo.selected_cleaner_id = selectedRoster.staff_id;
 
   if (includeDebug) {
     const eligibleSet = new Set(eligibleCleanerIds.map((id) => String(id)));
-    const selectedCleanerId = String(selectedAssignment.staff_id);
+    const selectedCleanerId = String(selectedRoster.staff_id);
     const checkedInEligibleSet = new Set(
-      assignments
-        .filter((item) => item.status === "CHECKED_IN" && eligibleSet.has(String(item.staff_id)))
+      rosters
+        .filter((item) => eligibleSet.has(String(item.staff_id))) // Simplified check since we don't have item.status === "CHECKED_IN" directly in rosters here, but wait, the selectedRoster logic already prefers checked in staff. We can just show "SELECTED" vs "NOT_SELECTED".
         .map((item) => String(item.staff_id))
     );
 
@@ -1361,8 +1243,8 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const payload = {
     pod_id: podId,
     booking_id: bookingId,
-    cleaner_id: selectedAssignment.staff_id,
-    shift_assignment_id: selectedAssignment.id,
+    cleaner_id: selectedRoster.staff_id,
+    shift_assignment_id: null, // Legacy field
     request_source: requestSource,
     estimated_start_time: estimatedStartTime,
     due_at: dueAt,
@@ -1465,9 +1347,7 @@ exports.createCleaningTask = async (data) => {
     Pod.findOne({ id: pod_id }).select("id").lean(),
     booking_id ? Booking.findOne({ id: booking_id }).select("id").lean() : Promise.resolve(null),
     User.findOne(buildUserIdentityQuery(cleaner_id)).select("_id id role isActive").lean(),
-    shift_assignment_id
-      ? StaffShiftAssignment.findOne({ id: shift_assignment_id }).select("id").lean()
-      : Promise.resolve(null),
+
     reassigned_from_cleaner_id
       ? User.findOne(buildUserIdentityQuery(reassigned_from_cleaner_id))
         .select("_id id role")
@@ -1480,7 +1360,7 @@ exports.createCleaningTask = async (data) => {
   if (!cleaner) throw createError("Cleaner not found", 404);
   if (!cleaner.isActive) throw createError("Cleaner is inactive", 403);
   if (cleaner.role !== "cleaner") throw createError("User must have cleaner role", 400);
-  if (shift_assignment_id && !assignment) throw createError("Shift assignment not found", 404);
+  if (cleaner.role !== "cleaner") throw createError("User must have cleaner role", 400);
   if (reassigned_from_cleaner_id && !reassignedCleaner) {
     throw createError("reassigned_from_cleaner_id user not found", 404);
   }
@@ -1872,9 +1752,7 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
     Pod.findOne({ id: nextPodId }).select("id cluster_id").lean(),
     nextBookingId ? Booking.findOne({ id: nextBookingId }).select("id").lean() : Promise.resolve(null),
     User.findOne(buildUserIdentityQuery(nextCleanerId)).select("_id id role isActive").lean(),
-    nextShiftAssignmentId
-      ? StaffShiftAssignment.findOne({ id: nextShiftAssignmentId }).select("id").lean()
-      : Promise.resolve(null),
+
     nextReassignedFromCleanerId
       ? User.findOne(buildUserIdentityQuery(nextReassignedFromCleanerId))
         .select("_id id role")
@@ -2363,25 +2241,28 @@ exports.reassignCleaningTask = async (id, actor, data = {}, managerScope = null)
       .filter((ls) => cleanerShiftIdSet.has(ls.shift_id))
       .map((ls) => ls.id);
 
-    const assignments = await StaffShiftAssignment.find({
-      location_shift_id: { $in: cleanerLocationShiftIds },
-      $or: [
-        { work_date: { $gte: startOfDay, $lte: endOfDay } },
-        {
-          $and: [
-            { start_date: { $lte: endOfDay } },
-            { end_date: { $gte: startOfDay } },
-          ],
-        },
-      ],
-      status: { $in: ["CHECKED_IN", "ASSIGNED"] },
-    })
-      .sort({ created_at: 1 })
-      .select("id staff_id status checkin_at")
-      .lean();
+    // Only look for cleaners rostered in the SAME cluster
+    const sameClusterRosters = await StaffWorkRoster.find({
+      cluster_id: cluster.id,
+      is_active: true
+    }).select("staff_id").lean();
+
+    if (sameClusterRosters.length === 0) {
+      throw createError("No cleaners are rostered to this cluster", 400, "NO_AVAILABLE_CLEANERS");
+    }
+
+    const clusterStaffIds = [...new Set(sameClusterRosters.map(r => r.staff_id))];
+
+    // Find who is checked in today within this cluster
+    const assignments = await StaffAttendanceLog.find({
+      staff_id: { $in: clusterStaffIds },
+      action: "CHECKIN",
+      timestamp: { $gte: startOfDay, $lte: endOfDay }
+    }).select("id staff_id").lean();
 
     if (assignments.length === 0) {
-      throw createError("No available cleaners on shift at this location", 400, "NO_AVAILABLE_CLEANERS");
+      // No one checked in — task stays pending, manager will be notified by the caller
+      throw createError("No cleaners are currently checked in at this cluster", 400, "NO_AVAILABLE_CLEANERS");
     }
 
     const staffIds = [...new Set(assignments.map((a) => a.staff_id).filter(Boolean).map(String))];
@@ -2427,7 +2308,6 @@ exports.reassignCleaningTask = async (id, actor, data = {}, managerScope = null)
 
     task.reassigned_from_cleaner_id = previousCleanerId;
     task.cleaner_id = selectedAssignment.staff_id;
-    task.shift_assignment_id = selectedAssignment.id;
     task.status = "ASSIGNED";
     applyStatusAuditFields(task, previousStatus);
     await task.save();

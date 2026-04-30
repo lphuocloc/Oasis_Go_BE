@@ -1,4 +1,4 @@
-﻿const express = require("express");
+const express = require("express");
 const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const {
@@ -82,10 +82,6 @@ const {
  *               maintenance_task_id:
  *                 type: string
  *                 nullable: true
- *               shift_assignment_id:
- *                 type: string
- *                 nullable: true
- *                 description: Used for ownership/permission guard only, not persisted
  *               action_type:
  *                 type: string
  *                 enum: [CHECKOUT, RETURN, CONSUMED, WASTE, INITIAL, ADJUSTMENT]
@@ -119,10 +115,6 @@ const {
  *           nullable: true
  *           description: Defaults to the authenticated user; managers can override when needed
  *           example: user_001
- *         shift_assignment_id:
- *           type: string
- *           nullable: true
- *           description: Used for ownership/permission guard only, not persisted to inventory_activity_logs
  *         cleaning_task_id:
  *           type: string
  *           nullable: true

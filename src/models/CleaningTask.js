@@ -44,12 +44,7 @@ const cleaningTaskSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
-    shift_assignment_id: {
-      type: String,
-      default: null,
-      ref: "StaffShiftAssignment",
-      index: true,
-    },
+
     request_source: {
       type: String,
       default: "USER_REQUEST",
@@ -122,9 +117,7 @@ const cleaningTaskSchema = new mongoose.Schema(
 );
 
 cleaningTaskSchema.index({ cleaner_id: 1, created_at: -1 });
-cleaningTaskSchema.index({ shift_assignment_id: 1, created_at: -1 });
 cleaningTaskSchema.index({ cleaner_id: 1, status: 1, due_at: 1 });
-cleaningTaskSchema.index({ shift_assignment_id: 1, status: 1 });
 cleaningTaskSchema.index({ pod_id: 1, created_at: -1 });
 cleaningTaskSchema.index({ booking_id: 1, created_at: -1 });
 
