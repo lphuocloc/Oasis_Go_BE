@@ -26,10 +26,10 @@ const parseItemsPayload = (raw) => {
   return [];
 };
 
-exports.getReplenishmentRequestItems = async (req, res) => {
+exports.getChecklistItems = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const result = await bookingChecklistService.getReplenishmentRequestItems(
+    const result = await bookingChecklistService.getChecklistItems(
       req.params.id,
       String(userId)
     );
@@ -41,17 +41,17 @@ exports.getReplenishmentRequestItems = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching replenishment request items",
+      message: error.message || "Error fetching checklist items",
     });
   }
 };
 
-exports.confirmReplenishmentRequest = async (req, res) => {
+exports.confirmChecklist = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
     const rawPayload = req.body?.items || req.body;
     const items = parseItemsPayload(rawPayload);
-    const result = await bookingChecklistService.confirmReplenishmentRequest(
+    const result = await bookingChecklistService.confirmChecklist(
       req.params.id,
       String(userId),
       items
@@ -66,15 +66,15 @@ exports.confirmReplenishmentRequest = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error confirming replenishment request",
+      message: error.message || "Error confirming checklist",
     });
   }
 };
 
-exports.getReplenishmentRequestStatus = async (req, res) => {
+exports.getChecklistStatus = async (req, res) => {
   try {
     const userId = req.user?.id || req.user?._id;
-    const result = await bookingChecklistService.getReplenishmentRequestStatus(
+    const result = await bookingChecklistService.getChecklistStatus(
       req.params.id,
       String(userId)
     );
@@ -86,7 +86,7 @@ exports.getReplenishmentRequestStatus = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error fetching replenishment request status",
+      message: error.message || "Error fetching checklist status",
     });
   }
 };

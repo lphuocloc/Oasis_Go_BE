@@ -103,7 +103,7 @@ const resolveBookingForChecklist = async (bookingId, userId) => {
 
 // ─── API 1: Get checklist items ──────────────────────────────────
 
-const getReplenishmentRequestItems = async (bookingId, userId) => {
+const getChecklistItems = async (bookingId, userId) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   if (!["IN_USE", "BOOKED"].includes(booking.status)) {
@@ -181,7 +181,7 @@ const getReplenishmentRequestItems = async (bookingId, userId) => {
 
 // ─── API 2: Confirm checklist ────────────────────────────────────
 
-const confirmReplenishmentRequest = async (bookingId, userId, itemsPayload) => {
+const confirmChecklist = async (bookingId, userId, itemsPayload) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   if (booking.status !== "IN_USE") {
@@ -439,7 +439,7 @@ const _notifyCleanersAboutChecklistIssues = async (booking, incidents) => {
 
 // ─── API 3: Get checklist status ─────────────────────────────────
 
-const getReplenishmentRequestStatus = async (bookingId, userId) => {
+const getChecklistStatus = async (bookingId, userId) => {
   const booking = await resolveBookingForChecklist(bookingId, userId);
 
   return {
@@ -955,9 +955,9 @@ const getDamageReportItems = async (cleaningTaskId, cleanerId) => {
 };
 
 module.exports = {
-  getReplenishmentRequestItems,
-  confirmReplenishmentRequest,
-  getReplenishmentRequestStatus,
+  getChecklistItems,
+  confirmChecklist,
+  getChecklistStatus,
   autoAcceptExpiredChecklists,
   startAutoAcceptJob,
   confirmDamageReport,
