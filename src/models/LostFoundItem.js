@@ -1,7 +1,15 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
-const LOST_FOUND_STATUSES = ["FOUND", "CLAIMED", "DISPOSED", "RETURNED_TO_USER"];
+const LOST_FOUND_STATUSES = ["FOUND", "IN_STORAGE", "CLAIM_PENDING", "RETURNED", "DISPOSED"];
+
+/**
+ * Tạo serial number 9 chữ số ngẫu nhiên để định danh vật lý của đồ vật.
+ * Dùng để phân biệt 2 đồ vật cùng loại, ví dụ: 2 chiếc ví giống nhau.
+ */
+const generateSerialNumber = () => {
+  return String(Math.floor(100000000 + Math.random() * 900000000));
+};
 
 const lostFoundItemSchema = new mongoose.Schema(
   {
@@ -29,6 +37,7 @@ const lostFoundItemSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
+    // Kho tại location — tham chiếu tới LocationWarehouse → Warehouse
     warehouse_id: {
       type: String,
       default: null,
@@ -45,9 +54,12 @@ const lostFoundItemSchema = new mongoose.Schema(
       default: null,
       trim: true,
     },
-    photo_url: {
+    // Số serial 9 chữ số — tự động tạo bởi hệ thống, không do user nhập
+    serial_number: {
       type: String,
-      default: null,
+      default: generateSerialNumber,
+      index: true,
+      match: [/^\d{9}$/, "serial_number phải là chuỗi 9 chữ số"],
     },
     found_at: {
       type: Date,
@@ -71,6 +83,15 @@ const lostFoundItemSchema = new mongoose.Schema(
       index: true,
     },
     claimed_at: {
+      type: Date,
+      default: null,
+    },
+    // OTP bàn giao — Manager tạo, gửi cho User qua Notification
+    handover_otp: {
+      type: String,
+      default: null,
+    },
+    handover_otp_expires_at: {
       type: Date,
       default: null,
     },

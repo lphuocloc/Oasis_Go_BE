@@ -23,6 +23,7 @@ module.exports = {
   DamageServiceCatalog: require("./DamageServiceCatalog"),
   LostFoundItem: require("./LostFoundItem"),
   LostFoundMedia: require("./LostFoundMedia"),
+  LostItemRequest: require("./LostItemRequest"),
   Transaction: require("./Transaction"),
   TimeSlot: require("./TimeSlot"),
   Item: require("./Item"),
