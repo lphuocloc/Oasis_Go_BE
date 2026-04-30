@@ -1,9 +1,11 @@
 const mongoose = require("mongoose");
 const LocationShift = require("../models/LocationShift");
 const StaffShift = require("../models/StaffShift");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
+const StaffAttendanceLog = require("../models/StaffAttendanceLog");
 const Location = require("../models/Location");
 const User = require("../models/User");
+const PodCluster = require("../models/PodCluster");
 
 class LocationShiftService {
   async createLocationShift(data) {
@@ -81,58 +83,58 @@ class LocationShiftService {
     }
 
     const locationShiftMap = new Map(filteredLocationShifts.map((x) => [x.id, x]));
-    const locationShiftIds = filteredLocationShifts.map((x) => x.id);
+    const clusters = await PodCluster.find({ location_id: locationId }).select("id").lean();
+    const clusterIds = clusters.map(c => c.id);
 
-    const includeAssigned =
-      filters.include_assigned === true ||
-      String(filters.include_assigned).toLowerCase() === "true";
+    // Get all active rosters for this location (managers) or its clusters (cleaners)
+    const rosters = await StaffWorkRoster.find({
+      $or: [
+        { location_id: locationId },
+        { cluster_id: { $in: clusterIds } }
+      ],
+      is_active: true
+    }).lean();
 
-    const assignmentQuery = {
-      location_shift_id: { $in: locationShiftIds },
-    };
-
-    if (includeAssigned) {
-      assignmentQuery.$or = [
-        {
-          status: "CHECKED_IN",
-        },
-        {
-          status: "ASSIGNED",
-        },
-      ];
-    } else {
-      assignmentQuery.status = "CHECKED_IN";
-    }
-
-    if (filters.target_date) {
-      const targetDateText = String(filters.target_date).trim();
-      const date = new Date(`${targetDateText}T00:00:00.000Z`);
-      if (Number.isNaN(date.getTime())) {
-        const error = new Error("target_date must be a valid date (YYYY-MM-DD)");
-        error.statusCode = 400;
-        throw error;
-      }
-
-      const startOfDay = new Date(date);
-      startOfDay.setUTCHours(0, 0, 0, 0);
-
-      const endOfDay = new Date(date);
-      endOfDay.setUTCHours(23, 59, 59, 999);
-
-      assignmentQuery.start_date = { $lte: endOfDay };
-      assignmentQuery.end_date = { $gte: startOfDay };
-    }
-
-    const assignments = await StaffShiftAssignment.find(assignmentQuery)
-      .sort({ checkin_at: -1, created_at: -1 })
-      .lean();
-
-    if (assignments.length === 0) {
+    if (rosters.length === 0) {
       return { location, count: 0, data: [] };
     }
 
-    const staffIds = [...new Set(assignments.map((x) => x.staff_id).filter(Boolean))];
-    const objectIdStaffIds = staffIds
+    const rosterStaffIds = [...new Set(rosters.map(r => String(r.staff_id)))];
+    
+    // Find checking status for today
+    const now = filters.target_date ? new Date(`${String(filters.target_date).trim()}T12:00:00.000Z`) : new Date();
+    const startOfDay = new Date(now);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(now);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const checkinLogs = await StaffAttendanceLog.find({
+      staff_id: { $in: rosterStaffIds },
+      action: "CHECKIN",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+    }).sort({ created_at: -1 }).lean();
+
+    const checkoutLogs = await StaffAttendanceLog.find({
+      staff_id: { $in: rosterStaffIds },
+      action: "CHECKOUT",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+    }).sort({ created_at: -1 }).lean();
+
+    const latestCheckinMap = new Map();
+    checkinLogs.forEach(log => {
+      if (!latestCheckinMap.has(String(log.staff_id))) {
+        latestCheckinMap.set(String(log.staff_id), log);
+      }
+    });
+
+    const latestCheckoutMap = new Map();
+    checkoutLogs.forEach(log => {
+      if (!latestCheckoutMap.has(String(log.staff_id))) {
+        latestCheckoutMap.set(String(log.staff_id), log);
+      }
+    });
+
+    const objectIdStaffIds = rosterStaffIds
       .filter((id) => mongoose.Types.ObjectId.isValid(id))
       .map((id) => new mongoose.Types.ObjectId(id));
 
@@ -140,7 +142,7 @@ class LocationShiftService {
     if (objectIdStaffIds.length > 0) {
       userOrConditions.push({ _id: { $in: objectIdStaffIds } });
     }
-    userOrConditions.push({ id: { $in: staffIds } });
+    userOrConditions.push({ id: { $in: rosterStaffIds } });
 
     const users = await User.find({ $or: userOrConditions })
       .select("_id id name email phone role")
@@ -154,23 +156,43 @@ class LocationShiftService {
       }
     });
 
-    const data = assignments.map((assignment) => {
-      const locationShift = locationShiftMap.get(assignment.location_shift_id) || null;
-      const shift = locationShift ? shiftMap.get(locationShift.shift_id) || null : null;
-      const staff = userMap.get(String(assignment.staff_id)) || null;
+    let data = rosters.map(roster => {
+      const staffId = String(roster.staff_id);
+      const staff = userMap.get(staffId) || null;
+      const shift = shiftMap.get(roster.shift_id) || null;
+      
+      const checkin = latestCheckinMap.get(staffId);
+      const checkout = latestCheckoutMap.get(staffId);
+      
+      let status = "ASSIGNED"; // ROSTER equivalent
+      if (checkin) {
+        if (!checkout || checkout.created_at < checkin.created_at) {
+          status = "CHECKED_IN";
+        }
+      }
 
       return {
-        assignment_id: assignment.id,
-        start_date: assignment.start_date,
-        end_date: assignment.end_date,
-        status: assignment.status,
-        checkin_at: assignment.checkin_at,
-        checkout_at: assignment.checkout_at,
+        assignment_id: roster.id,
+        start_date: null,
+        end_date: null,
+        status,
+        checkin_at: checkin ? checkin.created_at : null,
+        checkout_at: checkout ? checkout.created_at : null,
         staff,
         shift,
-        location_shift: locationShift,
+        location_shift: null,
       };
     });
+
+    const includeAssigned = filters.include_assigned === true || String(filters.include_assigned).toLowerCase() === "true";
+    
+    if (!includeAssigned) {
+      data = data.filter(d => d.status === "CHECKED_IN");
+    }
+
+    if (roleFilter) {
+      data = data.filter(d => d.shift && String(d.shift.role).toUpperCase() === roleFilter);
+    }
 
     return {
       location,

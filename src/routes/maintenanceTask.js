@@ -28,10 +28,7 @@ const {
  *         name: reported_by
  *         schema:
  *           type: string
- *       - in: query
- *         name: shift_assignment_id
- *         schema:
- *           type: string
+
  *       - in: query
  *         name: pod_id
  *         schema:

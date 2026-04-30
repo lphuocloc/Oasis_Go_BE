@@ -10,9 +10,7 @@ const PodCluster = require("../models/PodCluster");
 const CleaningTask = require("../models/CleaningTask");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
-const LocationShift = require("../models/LocationShift");
-const StaffShift = require("../models/StaffShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 
@@ -35,58 +33,18 @@ const resolveCleanersForPod = async (podId) => {
   if (!podId) return [];
 
   const pod = await Pod.findOne({ id: podId }).select("cluster_id").lean();
-  if (!pod) return [];
+  if (!pod || !pod.cluster_id) return [];
 
-  const cluster = await PodCluster.findOne({ id: pod.cluster_id })
-    .select("location_id")
-    .lean();
-  if (!cluster || !cluster.location_id) return [];
+  const rosters = await StaffWorkRoster.find({
+    cluster_id: pod.cluster_id,
+    is_active: true
+  }).select("staff_id").lean();
 
-  const locationShifts = await LocationShift.find({
-    location_id: cluster.location_id,
-  })
-    .select("id shift_id")
-    .lean();
-  if (!locationShifts.length) return [];
-
-  const shiftIds = [
-    ...new Set(
-      locationShifts
-        .map((entry) => String(entry.shift_id || ""))
-        .filter(Boolean)
-    ),
-  ];
-
-  const cleanerShiftIds = await StaffShift.find({
-    id: { $in: shiftIds },
-    role: "CLEANER",
-    is_active: true,
-  })
-    .select("id")
-    .lean()
-    .then((rows) => rows.map((row) => String(row.id)));
-
-  if (!cleanerShiftIds.length) return [];
-
-  const cleanerLocationShiftIds = locationShifts
-    .filter((entry) => cleanerShiftIds.includes(String(entry.shift_id)))
-    .map((entry) => String(entry.id));
-
-  if (!cleanerLocationShiftIds.length) return [];
-
-  const now = new Date();
-  const assignments = await StaffShiftAssignment.find({
-    location_shift_id: { $in: cleanerLocationShiftIds },
-    status: { $in: ["ASSIGNED", "CHECKED_IN"] },
-    start_date: { $lte: now },
-    end_date: { $gte: now },
-  })
-    .select("staff_id")
-    .lean();
+  if (!rosters.length) return [];
 
   const staffIds = [
     ...new Set(
-      assignments.map((a) => String(a.staff_id || "")).filter(Boolean)
+      rosters.map((a) => String(a.staff_id || "")).filter(Boolean)
     ),
   ];
 

@@ -9,15 +9,6 @@ const staffShiftSchema = new mongoose.Schema(
 			unique: true,
 			required: true,
 		},
-		role: {
-			type: String,
-			required: [true, "Role is required"],
-			enum: {
-				values: ["CLEANER", "MANAGER"],
-				message: "{VALUE} is not a valid role",
-			},
-			index: true,
-		},
 		shift_name: {
 			type: String,
 			required: [true, "Shift name is required"],
@@ -47,6 +38,6 @@ const staffShiftSchema = new mongoose.Schema(
 	}
 );
 
-staffShiftSchema.index({ role: 1, shift_name: 1 }, { unique: true });
+staffShiftSchema.index({ shift_name: 1 }, { unique: true });
 
 module.exports = mongoose.model("StaffShift", staffShiftSchema);

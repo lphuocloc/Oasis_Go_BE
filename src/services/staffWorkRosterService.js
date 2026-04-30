@@ -4,16 +4,7 @@ const User = require("../models/User");
 const LocationShift = require("../models/LocationShift");
 
 class StaffWorkRosterService {
-  normalizeDayOfWeek(dayOfWeek) {
-    const parsed = Number(dayOfWeek);
-    if (!Number.isInteger(parsed) || parsed < 0 || parsed > 6) {
-      const error = new Error("day_of_week must be an integer from 0 to 6");
-      error.statusCode = 400;
-      throw error;
-    }
 
-    return parsed;
-  }
 
   async findUserById(staffId) {
     const userQuery = { $or: [{ id: staffId }] };
@@ -24,10 +15,14 @@ class StaffWorkRosterService {
     return User.findOne(userQuery).select("_id id role name email");
   }
 
-  async ensureRosterDependencies({ staff_id, location_shift_id }) {
-    const [staff, locationShift] = await Promise.all([
+  async ensureRosterDependencies({ staff_id, shift_id, location_id, cluster_id }) {
+    const StaffShift = require("../models/StaffShift");
+    const Location = require("../models/Location");
+    const PodCluster = require("../models/PodCluster");
+
+    const [staff, shift] = await Promise.all([
       this.findUserById(staff_id),
-      LocationShift.findOne({ id: location_shift_id }).select("id location_id shift_id").lean(),
+      StaffShift.findOne({ id: shift_id }).lean(),
     ]);
 
     if (!staff) {
@@ -36,73 +31,90 @@ class StaffWorkRosterService {
       throw error;
     }
 
-    if (!["manager", "cleaner"].includes(String(staff.role || "").toLowerCase())) {
+    const role = String(staff.role || "").toLowerCase();
+    if (!["manager", "cleaner"].includes(role)) {
       const error = new Error("Selected user must have role manager or cleaner");
       error.statusCode = 400;
       throw error;
     }
 
-    if (!locationShift) {
-      const error = new Error("Location shift not found");
+    if (!shift) {
+      const error = new Error("Shift not found");
       error.statusCode = 404;
       throw error;
     }
 
-    return { staff, locationShift };
+    if (role === "manager" && !location_id) {
+        const error = new Error("Manager must be assigned to a location");
+        error.statusCode = 400;
+        throw error;
+    }
+    
+    if (role === "cleaner" && !cluster_id) {
+        const error = new Error("Cleaner must be assigned to a cluster");
+        error.statusCode = 400;
+        throw error;
+    }
+
+    if (location_id) {
+        const location = await Location.findOne({ id: location_id }).lean();
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+    }
+
+    if (cluster_id) {
+        const cluster = await PodCluster.findOne({ id: cluster_id }).lean();
+        if (!cluster) {
+            const error = new Error("Cluster not found");
+            error.statusCode = 404;
+            throw error;
+        }
+    }
+
+    return { staff, shift };
   }
 
   async createRoster(data) {
-    const { staff_id, location_shift_id } = data;
+    const { staff_id, shift_id, location_id, cluster_id } = data;
 
-    let days = [];
-    if (Array.isArray(data.days_of_week)) {
-      days = data.days_of_week;
-    } else if (data.day_of_week !== undefined) {
-      days = [data.day_of_week];
-    }
-
-    if (!staff_id || !location_shift_id || days.length === 0) {
-      const error = new Error(
-        "staff_id, location_shift_id and day_of_week (or days_of_week array) are required"
-      );
+    if (!staff_id || !shift_id) {
+      const error = new Error("staff_id and shift_id are required");
       error.statusCode = 400;
       throw error;
     }
 
-    const normalizedDays = days.map((d) => this.normalizeDayOfWeek(d));
-    const uniqueDays = [...new Set(normalizedDays)];
+    await this.ensureRosterDependencies({ staff_id, shift_id, location_id, cluster_id });
 
-    await this.ensureRosterDependencies({ staff_id, location_shift_id });
-
-    // Check availability to avoid ugly duplicate insert errors
-    const existing = await StaffWorkRoster.find({
+    // Ensure staff doesn't already have an active roster for this shift
+    const existing = await StaffWorkRoster.findOne({
       staff_id,
-      location_shift_id,
-      day_of_week: { $in: uniqueDays },
+      shift_id,
+      location_id: location_id || null,
+      cluster_id: cluster_id || null
     });
-    const existingDays = new Set(existing.map((e) => e.day_of_week));
-    const newDays = uniqueDays.filter((d) => !existingDays.has(d));
 
-    if (newDays.length === 0) {
-      const duplicateError = new Error("Roster already exists for this staff, location shift, and day_of_week(s)");
+    if (existing) {
+      const duplicateError = new Error("Roster already exists for this staff at this location/cluster for this shift");
       duplicateError.statusCode = 409;
       throw duplicateError;
     }
 
     try {
       const is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
-      const docs = newDays.map((d) => ({
+      const roster = await StaffWorkRoster.create({
         staff_id,
-        location_shift_id,
-        day_of_week: d,
+        shift_id,
+        location_id: location_id || null,
+        cluster_id: cluster_id || null,
         is_active,
-      }));
-
-      const created = await StaffWorkRoster.insertMany(docs);
-      return uniqueDays.length === 1 && days.length === 1 ? created[0] : created;
+      });
+      return roster;
     } catch (error) {
       if (error && error.code === 11000) {
-        const duplicateError = new Error("Roster already exists for this staff, location shift, and day_of_week");
+        const duplicateError = new Error("Roster already exists for this staff");
         duplicateError.statusCode = 409;
         throw duplicateError;
       }
@@ -138,22 +150,21 @@ class StaffWorkRosterService {
       query.staff_id = filters.staff_id;
     }
 
-    if (filters.location_shift_id) {
-      query.location_shift_id = filters.location_shift_id;
+    if (filters.shift_id) {
+      query.shift_id = filters.shift_id;
     }
-    if (filters.location_shift_ids) {
-      query.location_shift_id = { $in: filters.location_shift_ids.split(",") };
+    if (filters.location_id) {
+      query.location_id = filters.location_id;
     }
-
-    if (filters.day_of_week !== undefined) {
-      query.day_of_week = this.normalizeDayOfWeek(filters.day_of_week);
+    if (filters.cluster_id) {
+      query.cluster_id = filters.cluster_id;
     }
 
     if (filters.is_active !== undefined) {
       query.is_active = String(filters.is_active).toLowerCase() === "true";
     }
 
-    return StaffWorkRoster.find(query).sort({ staff_id: 1, day_of_week: 1, created_at: -1 });
+    return StaffWorkRoster.find(query).sort({ staff_id: 1, created_at: -1 });
   }
 
   async getRosterById(id) {
@@ -171,20 +182,21 @@ class StaffWorkRosterService {
     const roster = await this.getRosterById(id);
 
     const nextStaffId = data.staff_id !== undefined ? data.staff_id : roster.staff_id;
-    const nextLocationShiftId =
-      data.location_shift_id !== undefined ? data.location_shift_id : roster.location_shift_id;
+    const nextShiftId = data.shift_id !== undefined ? data.shift_id : roster.shift_id;
+    const nextLocationId = data.location_id !== undefined ? data.location_id : roster.location_id;
+    const nextClusterId = data.cluster_id !== undefined ? data.cluster_id : roster.cluster_id;
 
-    if (data.staff_id !== undefined || data.location_shift_id !== undefined) {
+    if (data.staff_id !== undefined || data.shift_id !== undefined || data.location_id !== undefined || data.cluster_id !== undefined) {
       await this.ensureRosterDependencies({
         staff_id: nextStaffId,
-        location_shift_id: nextLocationShiftId,
+        shift_id: nextShiftId,
+        location_id: nextLocationId,
+        cluster_id: nextClusterId
       });
       roster.staff_id = nextStaffId;
-      roster.location_shift_id = nextLocationShiftId;
-    }
-
-    if (data.day_of_week !== undefined) {
-      roster.day_of_week = this.normalizeDayOfWeek(data.day_of_week);
+      roster.shift_id = nextShiftId;
+      roster.location_id = nextLocationId || null;
+      roster.cluster_id = nextClusterId || null;
     }
 
     if (data.is_active !== undefined) {
@@ -195,7 +207,7 @@ class StaffWorkRosterService {
       await roster.save();
     } catch (error) {
       if (error && error.code === 11000) {
-        const duplicateError = new Error("Roster already exists for this staff, location shift and day_of_week");
+        const duplicateError = new Error("Roster already exists for this staff");
         duplicateError.statusCode = 409;
         throw duplicateError;
       }

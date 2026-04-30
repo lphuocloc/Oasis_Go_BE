@@ -34,10 +34,7 @@ const bookingChecklistController = require("../controllers/bookingChecklistContr
  *         name: cleaner_id
  *         schema:
  *           type: string
- *       - in: query
- *         name: shift_assignment_id
- *         schema:
- *           type: string
+
  *       - in: query
  *         name: pod_id
  *         schema:
@@ -134,10 +131,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: shift_assignment_id
- *         schema:
- *           type: string
+
  *       - in: query
  *         name: pod_id
  *         schema:
@@ -426,9 +420,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *               cleaner_id:
  *                 type: string
  *                 description: Cleaner ID
- *               shift_assignment_id:
- *                 type: string
- *                 description: Optional shift assignment ID
+
  *               request_source:
  *                 type: string
  *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
@@ -482,8 +474,7 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *                 type: string
  *               cleaner_id:
  *                 type: string
- *               shift_assignment_id:
- *                 type: string
+
  *               request_source:
  *                 type: string
  *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
@@ -589,9 +580,7 @@ router.post("/:id/reject", protect, authorize("cleaner"), rejectCleaningTask);
  *               target_cleaner_id:
  *                 type: string
  *                 description: Specific cleaner to assign. Omit for auto load-balanced selection.
- *               shift_assignment_id:
- *                 type: string
- *                 description: Optional shift assignment override (used with target_cleaner_id)
+
  *     responses:
  *       200:
  *         description: Task reassigned successfully

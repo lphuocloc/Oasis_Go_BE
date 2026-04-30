@@ -40,12 +40,7 @@ router.get(
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: shift_assignment_id
- *         required: true
- *         schema:
- *           type: string
- *         description: Shift assignment ID
+
  *       - in: query
  *         name: date
  *         required: false
@@ -100,14 +95,12 @@ router.get(
  *           schema:
  *             type: object
  *             properties:
- *               shift_assignment_id:
- *                 type: string
+
  *               date:
  *                 type: string
  *                 format: date
  *                 description: Optional selected card date (YYYY-MM-DD)
- *             required:
- *               - shift_assignment_id
+
  */
 router.post(
   "/checkin",
@@ -137,8 +130,7 @@ router.post(
  *                 type: string
  *                 format: date
  *                 description: Optional selected card date (YYYY-MM-DD)
- *             required:
- *               - shift_assignment_id
+
  */
 router.post(
   "/checkout",

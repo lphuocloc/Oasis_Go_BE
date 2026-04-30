@@ -7,7 +7,7 @@ const getMyAttendanceLogs = async (req, res) => {
       action: req.query.action,
       from_date: req.query.from_date,
       to_date: req.query.to_date,
-      shift_assignment_id: req.query.shift_assignment_id,
+      shift_id: req.query.shift_id,
       page: req.query.page,
       limit: req.query.limit,
     });
@@ -27,21 +27,21 @@ const getMyAttendanceLogs = async (req, res) => {
 
 const getMyAssignmentAttendanceStatus = async (req, res) => {
   try {
-    const result = await staffAttendanceLogService.getMyAssignmentAttendanceStatus({
+    // Legacy support, now we use getMyTodayAttendanceStatus
+    const result = await staffAttendanceLogService.getMyTodayAttendanceStatus({
       user: req.user,
-      shift_assignment_id: req.query.shift_assignment_id,
       date: req.query.date,
     });
 
     res.status(200).json({
       success: true,
-      message: "My assignment attendance status retrieved successfully",
+      message: "My attendance status retrieved successfully",
       data: result,
     });
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Failed to retrieve assignment attendance status",
+      message: error.message || "Failed to retrieve attendance status",
     });
   }
 };
@@ -117,8 +117,6 @@ const getAttendanceLogById = async (req, res) => {
 const checkinWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkinWork({
-      shift_assignment_id: req.body.shift_assignment_id,
-      date: req.body.date,
       user: req.user,
     });
 
@@ -138,8 +136,6 @@ const checkinWork = async (req, res) => {
 const checkoutWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkoutWork({
-      shift_assignment_id: req.body.shift_assignment_id,
-      date: req.body.date,
       user: req.user,
     });
 

@@ -45,7 +45,7 @@ const supportRequestSchema = new mongoose.Schema(
       type: String,
       default: null,
       enum: {
-        values: ["LOW", "MEDIUM", "HIGH", "CRITICAL", null],
+        values: ["LOW", "MEDIUM", "HIGH", "CRITICAL"],
         message: "{VALUE} is not a valid severity",
       },
       index: true,

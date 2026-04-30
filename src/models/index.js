@@ -34,7 +34,7 @@ module.exports = {
   StaffShift: require("./StaffShift"),
   LocationShift: require("./LocationShift"),
   StaffWorkRoster: require("./StaffWorkRoster"),
-  StaffShiftAssignment: require("./StaffShiftAssignment"),
+  ShiftHandoverLog: require("./ShiftHandoverLog"),
   StaffAttendanceLog: require("./StaffAttendanceLog"),
   CleaningTask: require("./CleaningTask"),
   CleaningMedia: require("./CleaningMedia"),

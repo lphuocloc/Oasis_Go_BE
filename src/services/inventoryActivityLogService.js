@@ -1,9 +1,8 @@
-﻿const mongoose = require("mongoose");
+const mongoose = require("mongoose");
 const InventoryActivityLog = require("../models/InventoryActivityLog");
 const InventoryStock = require("../models/InventoryStock");
 const CleaningTask = require("../models/CleaningTask");
 const MaintenanceTask = require("../models/MaintenanceTask");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const LocationShift = require("../models/LocationShift");
 const LocationWarehouse = require("../models/LocationWarehouse");
 const PodItem = require("../models/PodItem");
@@ -54,11 +53,7 @@ const normalizeTaskId = (value) => {
   return normalized.length > 0 ? normalized : null;
 };
 
-const normalizeShiftAssignmentId = (value) => {
-  if (value === undefined || value === null) return null;
-  const normalized = String(value).trim();
-  return normalized.length > 0 ? normalized : null;
-};
+// REMOVED shiftAssignmentId
 
 const normalizeCleanerId = (value) => {
   if (value === undefined || value === null) return null;
@@ -200,18 +195,9 @@ const validateTaskReference = async (taskId, Model, message) => {
   }
 };
 
-const validateShiftAssignmentReference = async (shiftAssignmentId) => {
-  if (!shiftAssignmentId) return;
+// REMOVED validateShiftAssignmentReference
 
-  const exists = await StaffShiftAssignment.findOne({ id: shiftAssignmentId })
-    .select("id")
-    .lean();
-  if (!exists) {
-    throw createError("Shift assignment not found", 404);
-  }
-};
-
-const validateCleanerOwnership = async ({ actor, staffId, shiftAssignmentId, cleaningTaskId, maintenanceTaskId }) => {
+const validateCleanerOwnership = async ({ actor, staffId, cleaningTaskId, maintenanceTaskId }) => {
   const actorRole = String(actor?.role || "").toLowerCase();
   if (actorRole !== "cleaner") {
     return;
@@ -230,26 +216,11 @@ const validateCleanerOwnership = async ({ actor, staffId, shiftAssignmentId, cle
     throw createError("Cleaner is not allowed to use maintenance_task_id", 403);
   }
 
-  const [assignment, cleaningTask] = await Promise.all([
-    shiftAssignmentId
-      ? StaffShiftAssignment.findOne({ id: shiftAssignmentId })
-        .select("id staff_id")
+  const cleaningTask = cleaningTaskId
+      ? await CleaningTask.findOne({ id: cleaningTaskId })
+        .select("id cleaner_id")
         .lean()
-      : Promise.resolve(null),
-    cleaningTaskId
-      ? CleaningTask.findOne({ id: cleaningTaskId })
-        .select("id cleaner_id shift_assignment_id")
-        .lean()
-      : Promise.resolve(null),
-  ]);
-
-  if (shiftAssignmentId && !assignment) {
-    throw createError("Shift assignment not found", 404);
-  }
-
-  if (assignment && String(assignment.staff_id || "") !== actorId) {
-    throw createError("You are not owner of this shift_assignment_id", 403);
-  }
+      : null;
 
   if (cleaningTaskId && !cleaningTask) {
     throw createError("Cleaning task not found", 404);
@@ -257,15 +228,6 @@ const validateCleanerOwnership = async ({ actor, staffId, shiftAssignmentId, cle
 
   if (cleaningTask && String(cleaningTask.cleaner_id || "") !== actorId) {
     throw createError("You are not owner of this cleaning_task_id", 403);
-  }
-
-  if (
-    shiftAssignmentId
-    && cleaningTask
-    && cleaningTask.shift_assignment_id
-    && String(cleaningTask.shift_assignment_id) !== String(shiftAssignmentId)
-  ) {
-    throw createError("cleaning_task_id does not belong to shift_assignment_id", 400);
   }
 };
 
@@ -349,7 +311,6 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
   }
 
   const normalizedActionType = normalizeActionType(action_type);
-  const normalizedShiftAssignmentId = normalizeShiftAssignmentId(shift_assignment_id);
   const normalizedCleaningTaskId = normalizeTaskId(cleaning_task_id);
   const normalizedMaintenanceTaskId = normalizeTaskId(maintenance_task_id);
   const normalizedReason = reason === undefined || reason === null ? null : String(reason).trim();
@@ -368,7 +329,6 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
   const [stock, staff] = await Promise.all([
     InventoryStock.findOne({ id: inventory_stock_id }).select("id quantity_available item_id warehouse_id").lean(),
     findStaffUser(resolvedParticipants.staff_id),
-    validateShiftAssignmentReference(normalizedShiftAssignmentId),
     validateTaskReference(normalizedCleaningTaskId, CleaningTask, "Cleaning task not found"),
     validateTaskReference(normalizedMaintenanceTaskId, MaintenanceTask, "Maintenance task not found"),
   ]);
@@ -380,7 +340,6 @@ exports.createInventoryActivityLog = async (data, actor = null) => {
   await validateCleanerOwnership({
     actor: effectiveActor,
     staffId: resolvedParticipants.staff_id,
-    shiftAssignmentId: normalizedShiftAssignmentId,
     cleaningTaskId: normalizedCleaningTaskId,
     maintenanceTaskId: normalizedMaintenanceTaskId,
   });
@@ -506,7 +465,6 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
       }
 
       const normalizedActionType = normalizeActionType(entry.action_type || "CHECKOUT");
-      const normalizedShiftAssignmentId = normalizeShiftAssignmentId(entry.shift_assignment_id);
       const normalizedCleaningTaskId = normalizeTaskId(entry.cleaning_task_id);
       const normalizedMaintenanceTaskId = normalizeTaskId(entry.maintenance_task_id);
       const normalizedQuantity = normalizeQuantityByActionType(normalizedActionType, entry.quantity);
@@ -528,7 +486,6 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
       }
 
       await Promise.all([
-        validateShiftAssignmentReference(normalizedShiftAssignmentId),
         validateTaskReference(normalizedCleaningTaskId, CleaningTask, `${logLabel}: Cleaning task not found`),
         validateTaskReference(normalizedMaintenanceTaskId, MaintenanceTask, `${logLabel}: Maintenance task not found`),
       ]);
@@ -536,7 +493,6 @@ exports.createInventoryActivityLogsBulk = async (data, actor = null) => {
       await validateCleanerOwnership({
         actor: effectiveActor,
         staffId: resolvedParticipants.staff_id,
-        shiftAssignmentId: normalizedShiftAssignmentId,
         cleaningTaskId: normalizedCleaningTaskId,
         maintenanceTaskId: normalizedMaintenanceTaskId,
       });
@@ -669,8 +625,6 @@ exports.updateInventoryActivityLog = async (id, data, actor = null) => {
     data.quantity !== undefined
       ? normalizeQuantityByActionType(nextActionType, data.quantity)
       : log.quantity;
-  const nextShiftAssignmentId =
-    data.shift_assignment_id !== undefined ? normalizeShiftAssignmentId(data.shift_assignment_id) : null;
   const nextCleaningTaskId =
     data.cleaning_task_id !== undefined ? normalizeTaskId(data.cleaning_task_id) : normalizeTaskId(log.cleaning_task_id);
   const nextMaintenanceTaskId =
@@ -699,7 +653,6 @@ exports.updateInventoryActivityLog = async (id, data, actor = null) => {
   const [nextStock, nextStaff] = await Promise.all([
     InventoryStock.findOne({ id: nextInventoryStockId }).select("id quantity_available").lean(),
     findStaffUser(resolvedParticipants.staff_id),
-    validateShiftAssignmentReference(nextShiftAssignmentId),
     validateTaskReference(nextCleaningTaskId, CleaningTask, "Cleaning task not found"),
     validateTaskReference(nextMaintenanceTaskId, MaintenanceTask, "Maintenance task not found"),
   ]);
@@ -711,7 +664,6 @@ exports.updateInventoryActivityLog = async (id, data, actor = null) => {
   await validateCleanerOwnership({
     actor: effectiveActor,
     staffId: resolvedParticipants.staff_id,
-    shiftAssignmentId: nextShiftAssignmentId,
     cleaningTaskId: nextCleaningTaskId,
     maintenanceTaskId: nextMaintenanceTaskId,
   });
@@ -1126,16 +1078,15 @@ exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => 
     ? ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "DONE"]
     : ["ASSIGNED", "ACCEPTED", "IN_PROGRESS"];
 
-  const assignments = await StaffShiftAssignment.find({
+  const assignments = await StaffWorkRoster.find({
     staff_id: normalizedCleanerId,
-    start_date: { $lte: dayEnd },
-    end_date: { $gte: dayStart },
+    is_active: true
   })
-    .select("id location_shift_id start_date end_date")
+    .select("id location_id")
     .lean();
 
   if (assignments.length === 0) {
-    throw createError("Cleaner is not scheduled to work in selected date", 400);
+    throw createError("Cleaner does not have an active roster", 400);
   }
 
   const assignmentIds = assignments.map((assignment) => String(assignment.id || "")).filter(Boolean);
@@ -1148,7 +1099,7 @@ exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => 
       { due_at: { $gte: dayStart, $lte: dayEnd } },
     ],
   })
-    .select("id pod_id status shift_assignment_id")
+    .select("id pod_id status")
     .lean();
 
   if (tasks.length === 0) {
@@ -1171,13 +1122,7 @@ exports.estimateByCleanerDay = async (cleanerId, actor = null, options = {}) => 
     };
   }
 
-  const locationShiftIds = [...new Set(assignments.map((item) => String(item.location_shift_id || "")).filter(Boolean))];
-  const locationShifts = locationShiftIds.length > 0
-    ? await LocationShift.find({ id: { $in: locationShiftIds } })
-      .select("id location_id")
-      .lean()
-    : [];
-  const locationIds = [...new Set(locationShifts.map((item) => String(item.location_id || "")).filter(Boolean))];
+  const locationIds = [...new Set(assignments.map((item) => String(item.location_id || "")).filter(Boolean))];
 
   const podIds = [...new Set(tasks.map((task) => String(task.pod_id || "")).filter(Boolean))];
   if (podIds.length === 0) {
