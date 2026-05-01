@@ -314,33 +314,72 @@ class StaffAttendanceLogService {
 
   async getMyTodayAttendanceStatus({ user, date }) {
     const requesterIds = this.resolveRequesterIds(user);
-    const workDate = this.resolveWorkDate(date);
-    const start = new Date(workDate);
+    const now = date ? new Date(date) : new Date();
+    const start = toStartOfDayInAppTz(now);
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    // CRITICAL FIX: Only look at logs from the last 24 hours to determine CURRENT status.
+    // We don't want "zombie" sessions from days ago to affect the UI.
+    const lookbackLimit = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     const logs = await StaffAttendanceLog.find({
       staff_id: { $in: requesterIds },
-      $or: [
-        { work_date: workDate },
-        { work_date: { $exists: false }, created_at: { $gte: start, $lte: end } },
-      ],
-    })
-      .sort({ created_at: 1 })
-      .select("id shift_id action created_at work_date")
-      .lean();
+      created_at: { $gte: lookbackLimit, $lte: end }
+    }).sort({ created_at: 1 }).lean();
 
-    const checkinLogs = logs.filter((item) => item.action === "CHECKIN");
-    const checkoutLogs = logs.filter((item) => item.action === "CHECKOUT");
+    // Group logs by work_date + shift_id to find the "current" active session
+    const sessions = {};
+    for (const log of logs) {
+      const key = `${log.work_date?.toISOString() || 'no-date'}_${log.shift_id}`;
+      if (!sessions[key]) sessions[key] = [];
+      sessions[key].push(log);
+    }
+
+    // CRITICAL: We only care about the ABSOLUTE LATEST session in the last 24h.
+    // If it's finished, it's finished. Don't look for old unfinished ones.
+    const sessionKeys = Object.keys(sessions).sort().reverse(); 
+    const bestKey = sessionKeys[0]; 
+
+    const relevantLogs = sessions[bestKey] || [];
+
+    const checkinLogs = relevantLogs.filter((item) => item.action === "CHECKIN");
+    const checkoutLogs = relevantLogs.filter((item) => item.action === "CHECKOUT");
+    const shiftIds = [...new Set(relevantLogs.map((item) => String(item.shift_id)))];
+
+    let hasHandover = false;
+    if (user.role === "manager" && shiftIds.length > 0) {
+      const handover = await ShiftHandoverLog.findOne({
+        manager_id: { $in: requesterIds },
+        shift_id: { $in: shiftIds },
+        created_at: { $gte: lookbackLimit }
+      }).lean();
+      hasHandover = !!handover;
+    }
+
+    // NEW: Check if there's any shift available for check-in RIGHT NOW
+    let canCheckin = false;
+    const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
+    for (const roster of rosters) {
+      const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
+      if (!shift) continue;
+      try {
+        this.resolveShiftWindow(shift, now);
+        canCheckin = true;
+        break;
+      } catch (e) { /* Not in window */ }
+    }
 
     return {
       date: start.toISOString().slice(0, 10),
       checked_in_today: checkinLogs.length > 0,
       checked_out_today: checkoutLogs.length > 0,
+      can_checkin: canCheckin,
       checkin_count: checkinLogs.length,
       checkout_count: checkoutLogs.length,
       latest_checkin_at: checkinLogs.length > 0 ? checkinLogs[checkinLogs.length - 1].created_at : null,
       latest_checkout_at: checkoutLogs.length > 0 ? checkoutLogs[checkoutLogs.length - 1].created_at : null,
-      shift_ids: [...new Set(logs.map((item) => String(item.shift_id)))],
+      shift_ids: shiftIds,
+      has_handover: hasHandover,
     };
   }
 
@@ -534,6 +573,14 @@ class StaffAttendanceLogService {
 
     const shiftWindow = this.resolveShiftWindow(shift, now);
     const workDate = shiftWindow.workDate;
+    const shiftEnd = shiftWindow.shiftEnd;
+
+    // 3. Enforce checkout ONLY after shift end (user request)
+    if (now < shiftEnd) {
+      const error = new Error(`Ban chi co the tan ca sau khi ca truc ket thuc (${shift.end_time})`);
+      error.statusCode = 400;
+      throw error;
+    }
 
     const existingCheckinLog = await StaffAttendanceLog.findOne({
       staff_id: { $in: requesterIds },
