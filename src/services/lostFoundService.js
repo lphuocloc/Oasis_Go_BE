@@ -1,6 +1,7 @@
 const LostFoundItem = require("../models/LostFoundItem");
 const LostFoundMedia = require("../models/LostFoundMedia");
 const LostItemRequest = require("../models/LostItemRequest");
+const CleaningTask = require("../models/CleaningTask");
 const Booking = require("../models/Bookings");
 const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
@@ -34,6 +35,22 @@ const parsePositiveInt = (value, fallback) => {
   const parsed = Number.parseInt(value, 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
+};
+
+/**
+ * Lấy cleaning_task_ids từ booking_id của các LostFoundItem.
+ */
+const buildCleaningTaskMap = async (bookingIds = []) => {
+  const ids = bookingIds.filter(Boolean);
+  if (!ids.length) return {};
+  const tasks = await CleaningTask.find({ booking_id: { $in: ids } })
+    .select("booking_id id")
+    .lean();
+  return tasks.reduce((map, t) => {
+    if (!map[t.booking_id]) map[t.booking_id] = [];
+    map[t.booking_id].push(t.id);
+    return map;
+  }, {});
 };
 
 /**
@@ -91,13 +108,14 @@ const resolveWarehouseForPod = async (podId) => {
 
 // ─── View mappers ─────────────────────────────────────────────────
 
-const toLostFoundItemView = (item, mediaUrls = []) => {
+const toLostFoundItemView = (item, mediaUrls = [], cleaningTaskIds = []) => {
   const doc = typeof item.toObject === "function" ? item.toObject() : item;
   return {
     ...doc,
     // Ẩn OTP khỏi response thông thường
     handover_otp: undefined,
     photo_urls: mediaUrls,
+    cleaning_task_ids: cleaningTaskIds,
   };
 };
 
@@ -431,9 +449,13 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
   if (!shouldPaginate) {
     const items = await LostFoundItem.find(query).sort({ created_at: -1 }).lean();
     const itemIds = items.map((i) => i.id);
-    const mediaMap = await buildMediaMap(itemIds);
+    const bookingIds = items.map((i) => i.booking_id);
+    const [mediaMap, cleaningTaskMap] = await Promise.all([
+      buildMediaMap(itemIds),
+      buildCleaningTaskMap(bookingIds),
+    ]);
     return {
-      items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [])),
+      items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
       pagination: null,
     };
   }
@@ -448,10 +470,14 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
   ]);
 
   const itemIds = items.map((i) => i.id);
-  const mediaMap = await buildMediaMap(itemIds);
+  const bookingIds = items.map((i) => i.booking_id);
+  const [mediaMap, cleaningTaskMap] = await Promise.all([
+    buildMediaMap(itemIds),
+    buildCleaningTaskMap(bookingIds),
+  ]);
 
   return {
-    items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [])),
+    items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
     pagination: {
       current_page: page,
       total_pages: total > 0 ? Math.ceil(total / limit) : 0,
@@ -468,12 +494,17 @@ exports.getLostFoundItemById = async (itemId, actor = null) => {
   const item = await LostFoundItem.findOne({ id: itemId }).lean();
   if (!item) throw createError("Lost & Found item not found", 404);
 
-  const mediaUrls = await LostFoundMedia.find({ lost_found_item_id: itemId })
-    .select("media_url")
-    .lean()
-    .then((r) => r.map((m) => m.media_url));
+  const [mediaUrls, cleaningTaskIds] = await Promise.all([
+    LostFoundMedia.find({ lost_found_item_id: itemId })
+      .select("media_url")
+      .lean()
+      .then((r) => r.map((m) => m.media_url)),
+    item.booking_id
+      ? CleaningTask.find({ booking_id: item.booking_id }).select("id").lean().then((r) => r.map((t) => t.id))
+      : Promise.resolve([]),
+  ]);
 
-  return toLostFoundItemView(item, mediaUrls);
+  return toLostFoundItemView(item, mediaUrls, cleaningTaskIds);
 };
 
 /**

@@ -273,6 +273,9 @@ exports.updateCleanerIncidentStatus = async (req, res) => {
       data: result,
     });
   } catch (error) {
+    if (!error.statusCode) {
+      console.error("[updateCleanerIncidentStatus] Unexpected error:", error);
+    }
     res.status(error.statusCode || 500).json({
       success: false,
       message: error.message || "Error updating incident status",
