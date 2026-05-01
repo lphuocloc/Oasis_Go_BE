@@ -56,15 +56,7 @@ class StaffWorkRosterService {
         throw error;
     }
 
-    if (location_id) {
-        const location = await Location.findOne({ id: location_id }).lean();
-        if (!location) {
-            const error = new Error("Location not found");
-            error.statusCode = 404;
-            throw error;
-        }
-    }
-
+    let resolvedLocationId = location_id;
     if (cluster_id) {
         const cluster = await PodCluster.findOne({ id: cluster_id }).lean();
         if (!cluster) {
@@ -72,13 +64,26 @@ class StaffWorkRosterService {
             error.statusCode = 404;
             throw error;
         }
+        // Auto-resolve location_id from cluster if not provided
+        if (!resolvedLocationId) {
+            resolvedLocationId = cluster.location_id;
+        }
     }
 
-    return { staff, shift };
+    if (resolvedLocationId) {
+        const location = await Location.findOne({ id: resolvedLocationId }).lean();
+        if (!location) {
+            const error = new Error("Location not found");
+            error.statusCode = 404;
+            throw error;
+        }
+    }
+
+    return { staff, shift, resolvedLocationId };
   }
 
   async createRoster(data) {
-    const { staff_id, shift_id, location_id, cluster_id } = data;
+    const { staff_id, shift_id, location_id, cluster_id, is_temporary, work_date } = data;
 
     if (!staff_id || !shift_id) {
       const error = new Error("staff_id and shift_id are required");
@@ -86,13 +91,17 @@ class StaffWorkRosterService {
       throw error;
     }
 
-    await this.ensureRosterDependencies({ staff_id, shift_id, location_id, cluster_id });
+    const { staff, shift, resolvedLocationId } = await this.ensureRosterDependencies({ staff_id, shift_id, location_id, cluster_id });
 
     // Ensure staff doesn't already have an active roster for this shift
+    // For temporary rosters, we don't strictly prevent duplicates if one is permanent and one is temporary,
+    // but the unique index requires us to be careful. However, since they have same staff, shift, loc, cluster,
+    // the unique index will block it. If the manager is temporarily assigning them to a DIFFERENT cluster,
+    // the unique index won't trigger. 
     const existing = await StaffWorkRoster.findOne({
       staff_id,
       shift_id,
-      location_id: location_id || null,
+      location_id: resolvedLocationId || null,
       cluster_id: cluster_id || null
     });
 
@@ -104,12 +113,17 @@ class StaffWorkRosterService {
 
     try {
       const is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
+      const isTemporary = Boolean(is_temporary);
+      const workDate = work_date ? new Date(work_date) : null;
+      
       const roster = await StaffWorkRoster.create({
         staff_id,
         shift_id,
-        location_id: location_id || null,
+        location_id: resolvedLocationId || null,
         cluster_id: cluster_id || null,
         is_active,
+        is_temporary: isTemporary,
+        work_date: workDate,
       });
       return roster;
     } catch (error) {
@@ -122,26 +136,36 @@ class StaffWorkRosterService {
     }
   }
 
-  async getAllRosters(filters = {}, actor = null) {
+  async getAllRosters(filters = {}, actor = null, scopeLocationIds = []) {
     const query = {};
     const userRole = String(actor?.role || "").toLowerCase();
     const userId = actor?.id || actor?._id;
 
     // Authorization logic:
     // - admin: view all rosters
-    // - manager: view their own roster + all cleaner rosters
+    // - manager: view their own roster + all cleaner rosters + any roster in their location scope
     // - cleaner: view only their own roster
     if (userRole === "cleaner" && userId) {
       query.staff_id = userId;
     } else if (userRole === "manager" && userId) {
-      // Manager: their own roster OR any cleaner's roster
+      // Manager: their own roster OR any cleaner's roster OR any roster in their locations
       const cleaners = await User.find({ role: "cleaner" }).select("id _id").lean();
       const cleanerIds = cleaners.map(c => c.id || String(c._id));
       
-      query.$or = [
-        { staff_id: userId },
-        { staff_id: { $in: cleanerIds } }
-      ];
+      const scopeIds = scopeLocationIds || [];
+      
+      if (scopeIds.length > 0) {
+        query.$or = [
+          { staff_id: userId },
+          { staff_id: { $in: cleanerIds } },
+          { location_id: { $in: scopeIds } }
+        ];
+      } else {
+        query.$or = [
+          { staff_id: userId },
+          { staff_id: { $in: cleanerIds } }
+        ];
+      }
     }
     // admin/else: no staff_id filter, can see all after applying other filters
 
@@ -221,6 +245,30 @@ class StaffWorkRosterService {
     const roster = await this.getRosterById(id);
     await StaffWorkRoster.deleteOne({ id });
     return roster;
+  }
+
+  async autoDeactivateExpiredTemporaryRosters() {
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
+      const result = await StaffWorkRoster.updateMany(
+        {
+          is_temporary: true,
+          is_active: true,
+          work_date: { $lt: today, $ne: null }
+        },
+        {
+          $set: { is_active: false }
+        }
+      );
+
+      if (result.modifiedCount > 0) {
+        console.log(`[StaffWorkRosterService] Auto-deactivated ${result.modifiedCount} expired temporary rosters.`);
+      }
+    } catch (error) {
+      console.error("[StaffWorkRosterService] Error auto-deactivating temporary rosters:", error);
+    }
   }
 }
 

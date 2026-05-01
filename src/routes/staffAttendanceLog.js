@@ -27,7 +27,7 @@ const router = express.Router();
 router.get(
   "/me",
   authMiddleware.protect,
-  authMiddleware.authorize("cleaner"),
+  authMiddleware.authorize("cleaner", "manager"),
   staffAttendanceLogController.getMyAttendanceLogs
 );
 
@@ -52,7 +52,7 @@ router.get(
 router.get(
   "/me/status",
   authMiddleware.protect,
-  authMiddleware.authorize("cleaner"),
+  authMiddleware.authorize("cleaner", "manager"),
   staffAttendanceLogController.getMyAssignmentAttendanceStatus
 );
 
@@ -76,7 +76,7 @@ router.get(
 router.get(
   "/me/today-status",
   authMiddleware.protect,
-  authMiddleware.authorize("cleaner"),
+  authMiddleware.authorize("cleaner", "manager"),
   staffAttendanceLogController.getMyTodayAttendanceStatus
 );
 
@@ -105,7 +105,7 @@ router.get(
 router.post(
   "/checkin",
   authMiddleware.protect,
-  authMiddleware.authorize("cleaner"),
+  authMiddleware.authorize("cleaner", "manager"),
   staffAttendanceLogController.checkinWork
 );
 
@@ -135,7 +135,7 @@ router.post(
 router.post(
   "/checkout",
   authMiddleware.protect,
-  authMiddleware.authorize("cleaner"),
+  authMiddleware.authorize("cleaner", "manager"),
   staffAttendanceLogController.checkoutWork
 );
 

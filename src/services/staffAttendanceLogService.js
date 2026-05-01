@@ -71,8 +71,10 @@ const getAppTzOffsetMs = (date) => {
 };
 
 const toStartOfDayInAppTz = (date) => {
-  const offsetMs = getAppTzOffsetMs(date);
-  const localMs = date.getTime() + offsetMs;
+  const d = new Date(date);
+  d.setMilliseconds(0);
+  const offsetMs = getAppTzOffsetMs(d);
+  const localMs = d.getTime() + offsetMs;
   const localMidnightMs = localMs - (localMs % (24 * 60 * 60 * 1000));
   return new Date(localMidnightMs - offsetMs);
 };
@@ -128,9 +130,7 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    const workDate = new Date(base);
-    workDate.setHours(0, 0, 0, 0);
-    return workDate;
+    return toStartOfDayInAppTz(base);
   }
 
   resolveShiftWindow(shift, now = new Date()) {
@@ -297,14 +297,12 @@ class StaffAttendanceLogService {
     const requesterIds = this.resolveRequesterIds(user);
     const workDate = this.resolveWorkDate(date);
     const start = new Date(workDate);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(workDate);
-    end.setHours(23, 59, 59, 999);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
 
     const logs = await StaffAttendanceLog.find({
       staff_id: { $in: requesterIds },
       $or: [
-        { work_date: workDate },
+        { work_date: { $gte: start, $lte: end } },
         { work_date: { $exists: false }, created_at: { $gte: start, $lte: end } },
       ],
     })
