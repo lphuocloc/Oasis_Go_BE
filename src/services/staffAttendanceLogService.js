@@ -78,7 +78,24 @@ const toStartOfDayInAppTz = (date) => {
     month: "2-digit",
     day: "2-digit",
   }).format(d);
-  return new Date(`${dateStr}T00:00:00.000Z`);
+  
+  // Format as YYYY-MM-DDT00:00:00 in Local Time, then convert to Date
+  // To get exactly 00:00:00 in Asia/Ho_Chi_Minh:
+  const naiveIso = `${dateStr}T00:00:00`;
+  const localDate = new Date(naiveIso); 
+  
+  // If we want it represented as local midnight (which is 17:00 UTC previous day):
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric",
+    hour12: false,
+  });
+  
+  const parts = Object.fromEntries(fmt.formatToParts(localDate).map(p => [p.type, p.value]));
+  const offsetMs = Date.UTC(parts.year, parts.month-1, parts.day, parts.hour==='24'?0:parts.hour, parts.minute, parts.second) - localDate.getTime();
+  
+  return new Date(localDate.getTime() - offsetMs);
 };
 
 const withTimeInAppTz = (baseDate, parts) => {
