@@ -33,6 +33,8 @@ const getMyAssignmentAttendanceStatus = async (req, res) => {
       date: req.query.date,
     });
 
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
     res.status(200).json({
       success: true,
       message: "My attendance status retrieved successfully",
@@ -53,6 +55,9 @@ const getMyTodayAttendanceStatus = async (req, res) => {
       date: req.query.date,
     });
 
+    // Prevent browser from caching this real-time status response
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
     res.status(200).json({
       success: true,
       message: "My daily attendance status retrieved successfully",

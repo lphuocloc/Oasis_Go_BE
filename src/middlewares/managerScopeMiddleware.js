@@ -29,9 +29,10 @@ const loadManagerScope = async (req, res, next) => {
     const rosters = await StaffWorkRoster.find({
         staff_id: { $in: staffIds },
         is_active: true
-    }).select("location_id").lean();
+    }).select("location_id shift_id").lean();
 
     const parentLocationIds = uniqueStrings(rosters.map((item) => item.location_id));
+    const shiftIds = uniqueStrings(rosters.map((item) => item.shift_id));
 
     if (parentLocationIds.length === 0) {
       req.managerScope = null;
@@ -64,6 +65,7 @@ const loadManagerScope = async (req, res, next) => {
       locationIds,
       clusterIds,
       podIds,
+      shiftIds,
     };
     req.managerScopeBypassed = false;
 

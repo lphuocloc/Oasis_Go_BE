@@ -1025,10 +1025,32 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "LOCATION_NOT_FOUND", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
-  const rosters = await StaffWorkRoster.find({
+  const rawRosters = await StaffWorkRoster.find({
     cluster_id: cluster.id,
     is_active: true
-  }).select("id staff_id").lean();
+  }).select("id staff_id is_temporary work_date cluster_id").lean();
+
+  const rawStaffIds = [...new Set(rawRosters.map((item) => item.staff_id).filter(Boolean).map((id) => String(id)))];
+  
+  // Find all active temporary rosters for today for these cleaners
+  const temporaryRostersToday = await StaffWorkRoster.find({
+    staff_id: { $in: rawStaffIds },
+    is_temporary: true,
+    is_active: true,
+    work_date: { $gte: startOfDay, $lte: endOfDay }
+  }).select("id staff_id cluster_id").lean();
+
+  const rosters = rawRosters.filter(roster => {
+    // If this roster is the temporary roster for today, keep it
+    if (roster.is_temporary) return true;
+    
+    // If it's a permanent roster, but the cleaner is temporarily reassigned ELSEWHERE today, exclude it
+    const reassignedElsewhere = temporaryRostersToday.some(tr => 
+       String(tr.staff_id) === String(roster.staff_id) && 
+       String(tr.cluster_id) !== String(cluster.id)
+    );
+    return !reassignedElsewhere;
+  });
 
   debugInfo.assignment_count = rosters.length;
 

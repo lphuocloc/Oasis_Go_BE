@@ -38,6 +38,16 @@ const staffWorkRosterSchema = new mongoose.Schema(
       default: true,
       index: true,
     },
+    is_temporary: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    work_date: {
+      type: Date,
+      default: null,
+      index: true,
+    },
   },
   {
     timestamps: { createdAt: "created_at", updatedAt: false },
