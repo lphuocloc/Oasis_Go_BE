@@ -530,14 +530,40 @@ const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerId
   const endOfDay = new Date(today);
   endOfDay.setHours(23, 59, 59, 999);
 
-  // Find who checked in today
-  const checkins = await StaffAttendanceLog.find({
+  // Find who is currently checked in (has CHECKIN today with no later CHECKOUT)
+  const [checkins, checkouts] = await Promise.all([
+    StaffAttendanceLog.find({
       staff_id: { $in: eligibleCleanerIds },
       action: "CHECKIN",
       created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).lean();
-  
-  const checkedInCleanerIds = new Set(checkins.map(c => String(c.staff_id)));
+    }).sort({ created_at: -1 }).lean(),
+    StaffAttendanceLog.find({
+      staff_id: { $in: eligibleCleanerIds },
+      action: "CHECKOUT",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+    }).sort({ created_at: -1 }).lean(),
+  ]);
+
+  const latestCheckinMap = new Map();
+  checkins.forEach(log => {
+    const id = String(log.staff_id);
+    if (!latestCheckinMap.has(id)) latestCheckinMap.set(id, new Date(log.created_at));
+  });
+  const latestCheckoutMap = new Map();
+  checkouts.forEach(log => {
+    const id = String(log.staff_id);
+    if (!latestCheckoutMap.has(id)) latestCheckoutMap.set(id, new Date(log.created_at));
+  });
+
+  // A cleaner is "currently checked in" if they have a CHECKIN and no CHECKOUT, or CHECKIN is more recent than CHECKOUT
+  const checkedInCleanerIds = new Set(
+    eligibleCleanerIds.filter(id => {
+      const checkin = latestCheckinMap.get(String(id));
+      if (!checkin) return false;
+      const checkout = latestCheckoutMap.get(String(id));
+      return !checkout || checkin > checkout;
+    })
+  );
 
   const checkedInRosters = rosters.filter(
     (item) => checkedInCleanerIds.has(String(item.staff_id)) && cleanerIdSet.has(String(item.staff_id))
@@ -648,31 +674,39 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
   const endOfDay = new Date(referenceTime);
   endOfDay.setHours(23, 59, 59, 999);
 
-  // Instead of querying assignments, check if there's a CHECKIN log for this cluster today without a CHECKOUT
-  // Note: we might not know the clusterId here, but we can check if they have a CHECKIN at any cluster in this location
-  // But wait, AttendanceLog now has location_id (for managers) or cluster_id (for cleaners).
-  // Actually, we can just look up their Roster to see their cluster, then check location.
-  const rosters = await StaffWorkRoster.find({ staff_id: normalizedCleanerId, is_active: true }).lean();
+  // Roster check: the cleaner must have an active roster for a cluster in this specific location
+  const clustersAtLocation = await PodCluster.find({ location_id: normalizedLocationId }).select("id").lean();
+  const clusterIds = clustersAtLocation.map(c => String(c.id));
+
+  if (clusterIds.length === 0) return false;
+
+  const rosters = await StaffWorkRoster.find({
+    staff_id: normalizedCleanerId,
+    cluster_id: { $in: clusterIds },
+    is_active: true
+  }).lean();
   if (rosters.length === 0) return false;
-  
-  // They are checked in if they have a CHECKIN today
-  const checkinLogs = await StaffAttendanceLog.find({
+
+  // Attendance check: the cleaner must be currently checked in (has CHECKIN with no later CHECKOUT today)
+  const [checkinLogs, checkoutLogs] = await Promise.all([
+    StaffAttendanceLog.find({
       staff_id: normalizedCleanerId,
       action: "CHECKIN",
       created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ created_at: -1 }).lean();
-
-  if (checkinLogs.length === 0) return false;
-
-  const checkoutLogs = await StaffAttendanceLog.find({
+    }).sort({ created_at: -1 }).lean(),
+    StaffAttendanceLog.find({
       staff_id: normalizedCleanerId,
       action: "CHECKOUT",
       created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ created_at: -1 }).lean();
+    }).sort({ created_at: -1 }).lean(),
+  ]);
 
-  if (checkoutLogs.length === 0) return true;
+  if (checkinLogs.length === 0) return false;
 
-  return checkinLogs[0].created_at > checkoutLogs[0].created_at;
+  const latestCheckin = new Date(checkinLogs[0].created_at);
+  const latestCheckout = checkoutLogs.length > 0 ? new Date(checkoutLogs[0].created_at) : null;
+
+  return !latestCheckout || latestCheckin > latestCheckout;
 };
 
 const getInitialAutoAssignStatus = (bookingLike, trigger = "") => {
@@ -1025,6 +1059,16 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
     return withDebug({ created: false, reason: "LOCATION_NOT_FOUND", booking_id: bookingId }, debugInfo, includeDebug);
   }
 
+  const { bufferMinutes, source: bufferSource, policyId: bufferPolicyId } =
+    await resolveCleaningBufferMinutes({ podId, clusterId: cluster.id, locationId: cluster.location_id });
+
+  debugInfo.buffer_minutes_applied = bufferMinutes;
+  debugInfo.buffer_policy_source = bufferSource;
+  debugInfo.buffer_policy_id = bufferPolicyId;
+
+  const dueAt = getDueTimeWithMinutes(bookingLike, taskReferenceTime, bufferMinutes);
+  const estimatedStartTime = taskReferenceTime ? new Date(taskReferenceTime) : null;
+
   const rawRosters = await StaffWorkRoster.find({
     cluster_id: cluster.id,
     is_active: true
@@ -1056,24 +1100,8 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
 
   if (rosters.length === 0) {
     if (includeDebug) {
-      debugInfo.cleaner_diagnostics = allSystemCleaners
-        .map((cleaner) => {
-          const cleanerIdentity = getCleanerIdentity(cleaner);
-          if (!cleanerIdentity) return null;
-          return {
-            cleaner_id: cleanerIdentity,
-            name: cleaner.name || null,
-            email: cleaner.email || null,
-            is_active: Boolean(cleaner.isActive),
-            has_assignment_in_day: false,
-            assignment_statuses: [],
-            eligible: false,
-            selected: false,
-            reason: cleaner.isActive ? "NO_ASSIGNMENT_IN_DAY" : "INACTIVE_USER",
-            active_task_load: null,
-          };
-        })
-        .filter(Boolean);
+      // No rosters found for this cluster — no cleaner diagnostics available at this stage
+      debugInfo.cleaner_diagnostics = [];
     }
     debugInfo.skip_reason = "NO_ASSIGNMENT_IN_DAY";
     return withDebug({ created: false, reason: "NO_ASSIGNMENT_IN_DAY", booking_id: bookingId }, debugInfo, includeDebug);
@@ -1115,7 +1143,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   if (includeDebug) {
     const diagnosticsMap = new Map();
 
-    allSystemCleaners.forEach((cleaner) => {
+    assignmentUsers.forEach((cleaner) => {
       const cleanerId = getCleanerIdentity(cleaner);
       if (!cleanerId) return;
       const cleanerRosters = rostersByCleanerId.get(cleanerId) || [];
