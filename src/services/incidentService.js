@@ -1385,13 +1385,50 @@ exports.getCleanerIncidents = async (actor, filters = {}) => {
   const taskById = new Map(tasks.map((t) => [String(t.id), t]));
   const bookingById = new Map(bookings.map((b) => [String(b.id), b]));
 
-  return incidents.map((inc) => ({
-    ...inc,
-    photo_urls: photoMap[inc.id] || [],
-    details: detailMap[inc.id] || [],
-    cleaning_task: inc.cleaning_task_id ? taskById.get(String(inc.cleaning_task_id)) || null : null,
-    booking: inc.booking_id ? bookingById.get(String(inc.booking_id)) || null : null,
-  }));
+  // Batch-load users (reporter + handler) and pods
+  const userIdSet = new Set();
+  const podIdSet = new Set();
+  incidents.forEach((inc) => {
+    if (inc.reported_by) userIdSet.add(String(inc.reported_by));
+    if (inc.handled_by) userIdSet.add(String(inc.handled_by));
+    if (inc.pod_id) podIdSet.add(String(inc.pod_id));
+  });
+
+  const [users, pods] = await Promise.all([
+    userIdSet.size > 0
+      ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
+          .select("id _id name")
+          .lean()
+      : Promise.resolve([]),
+    podIdSet.size > 0
+      ? Pod.find({ id: { $in: Array.from(podIdSet) } })
+          .select("id name")
+          .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const userById = new Map();
+  users.forEach((u) => {
+    if (u.id) userById.set(String(u.id), u);
+    if (u._id) userById.set(String(u._id), u);
+  });
+  const podById = new Map(pods.map((p) => [String(p.id), p]));
+
+  return incidents.map((inc) => {
+    const reporter = inc.reported_by ? userById.get(String(inc.reported_by)) : null;
+    const handler = inc.handled_by ? userById.get(String(inc.handled_by)) : null;
+    const pod = inc.pod_id ? podById.get(String(inc.pod_id)) : null;
+    return {
+      ...inc,
+      photo_urls: photoMap[inc.id] || [],
+      details: detailMap[inc.id] || [],
+      cleaning_task: inc.cleaning_task_id ? taskById.get(String(inc.cleaning_task_id)) || null : null,
+      booking: inc.booking_id ? bookingById.get(String(inc.booking_id)) || null : null,
+      reporter_name: reporter?.name || null,
+      handled_by_name: handler?.name || null,
+      pod_name: pod?.name || null,
+    };
+  });
 };
 
 /**
@@ -1445,7 +1482,11 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
     throw createError("You are not allowed to access this incident", 403);
   }
 
-  const [photos, details, booking] = await Promise.all([
+  const userIdSet = new Set();
+  if (incident.reported_by) userIdSet.add(String(incident.reported_by));
+  if (incident.handled_by) userIdSet.add(String(incident.handled_by));
+
+  const [photos, details, booking, users, pod] = await Promise.all([
     IncidentMedia.find({ incident_id: incidentId }).select("media_url file_type -_id").lean(),
     IncidentDetail.find({ incident_id: incidentId })
       .select("type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
@@ -1455,7 +1496,24 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
         .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
         .lean()
       : null,
+    userIdSet.size > 0
+      ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
+          .select("id _id name")
+          .lean()
+      : Promise.resolve([]),
+    incident.pod_id
+      ? Pod.findOne({ id: incident.pod_id }).select("id name").lean()
+      : null,
   ]);
+
+  const userById = new Map();
+  users.forEach((u) => {
+    if (u.id) userById.set(String(u.id), u);
+    if (u._id) userById.set(String(u._id), u);
+  });
+
+  const reporter = incident.reported_by ? userById.get(String(incident.reported_by)) : null;
+  const handler = incident.handled_by ? userById.get(String(incident.handled_by)) : null;
 
   return {
     ...incident,
@@ -1463,6 +1521,9 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
     details,
     booking: booking || null,
     cleaning_task: cleaningTask || null,
+    reporter_name: reporter?.name || null,
+    handled_by_name: handler?.name || null,
+    pod_name: pod?.name || null,
   };
 };
 
