@@ -11,8 +11,8 @@ const router = express.Router();
  *   post:
  *     summary: Create a staff roster
  *     description: >
- *       Assign a staff member to work a specific shift at a specific location on a specific day of week.
- *       This defines the recurring weekly pattern (e.g., staff works MORNING shift at Location A every Monday).
+ *       Assign a staff member to work a specific shift at a specific location or cluster.
+ *       Can be a permanent recurring assignment or a temporary one for a specific date.
  *     tags: [Staff Roster]
  *     security:
  *       - bearerAuth: []
@@ -26,32 +26,29 @@ const router = express.Router();
  *               staff_id:
  *                 type: string
  *                 description: Staff member ID
- *                 example: "123e4567-e89b-12d3-a456-426614174000"
- *               location_shift_id:
+ *               shift_id:
  *                 type: string
- *                 description: Location Shift ID (links location + shift template)
- *                 example: "123e4567-e89b-12d3-a456-426614174001"
- *               day_of_week:
- *                 type: integer
- *                 minimum: 0
- *                 maximum: 6
- *                 description: Day of week (0=Sunday, 1=Monday, ...6=Saturday)
- *                 example: 1
- *               days_of_week:
- *                 type: array
- *                 items:
- *                   type: integer
- *                 description: Array of day integers (0 to 6) avoiding creating same roster layout multiple times.
- *                 example: [1, 2, 3, 4, 5]
+ *                 description: Staff Shift ID
+ *               location_id:
+ *                 type: string
+ *                 description: Location ID
+ *               cluster_id:
+ *                 type: string
+ *                 description: Pod Cluster ID (if cleaner)
  *               is_active:
  *                 type: boolean
- *                 description: Whether this roster entry is active
  *                 default: true
- *                 example: true
+ *               is_temporary:
+ *                 type: boolean
+ *                 description: If true, the roster is only valid for a specific date
+ *                 default: false
+ *               work_date:
+ *                 type: string
+ *                 format: date
+ *                 description: Required if is_temporary is true (YYYY-MM-DD)
  *             required:
  *               - staff_id
- *               - location_shift_id
- *               - day_of_week
+ *               - shift_id
  *     responses:
  *       201:
  *         description: Roster created successfully
@@ -66,20 +63,6 @@ const router = express.Router();
  *                   type: string
  *                 data:
  *                   type: object
- *                   properties:
- *                     id:
- *                       type: string
- *                     staff_id:
- *                       type: string
- *                     location_shift_id:
- *                       type: string
- *                     day_of_week:
- *                       type: integer
- *                     is_active:
- *                       type: boolean
- *                     created_at:
- *                       type: string
- *                       format: date-time
  */
 router.post(
 	"/",
@@ -103,22 +86,22 @@ router.post(
  *         name: staff_id
  *         schema:
  *           type: string
- *         description: Filter by staff ID
  *       - in: query
- *         name: location_shift_id
+ *         name: shift_id
  *         schema:
  *           type: string
- *         description: Filter by location shift ID
  *       - in: query
- *         name: day_of_week
+ *         name: location_id
  *         schema:
- *           type: integer
- *         description: Filter by day of week (0-6)
+ *           type: string
+ *       - in: query
+ *         name: cluster_id
+ *         schema:
+ *           type: string
  *       - in: query
  *         name: is_active
  *         schema:
  *           type: boolean
- *         description: Filter by active status
  *     responses:
  *       200:
  *         description: List of rosters retrieved successfully
@@ -162,6 +145,15 @@ router.get(
  *     responses:
  *       200:
  *         description: Roster retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
  *       404:
  *         description: Roster not found
  */
@@ -197,15 +189,28 @@ router.get(
  *             properties:
  *               staff_id:
  *                 type: string
- *               location_shift_id:
+ *               shift_id:
  *                 type: string
- *               day_of_week:
- *                 type: integer
+ *               location_id:
+ *                 type: string
+ *               cluster_id:
+ *                 type: string
  *               is_active:
  *                 type: boolean
  *     responses:
  *       200:
  *         description: Roster updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
  *       404:
  *         description: Roster not found
  */
