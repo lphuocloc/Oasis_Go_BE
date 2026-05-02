@@ -300,6 +300,13 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
     created.map((c) => [String(c.item_id), c])
   );
 
+  // Find existing cleaning task for this booking
+  const latestCleaningTask = await CleaningTask.findOne({ booking_id: booking.id })
+    .sort({ created_at: -1 })
+    .select("id")
+    .lean();
+  const cleaningTaskId = latestCleaningTask ? latestCleaningTask.id : null;
+
   // Create incidents for DAMAGED/MISSING items
   const createdIncidents = [];
   for (const { doc } of incidentItems) {
@@ -317,6 +324,7 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       pod_id: doc.pod_id,
       incident_type: "REPLENISHMENT_REQUEST",
       booking_id: doc.booking_id,
+      cleaning_task_id: cleaningTaskId,
       reported_by: userId,
       description: descParts.join(" "),
       severity: "MEDIUM",
