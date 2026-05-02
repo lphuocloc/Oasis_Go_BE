@@ -355,14 +355,13 @@ exports.generateHandoverOTP = async (itemId, actor) => {
 
   // Gửi OTP qua Notification cho User (Sửa tham số và dùng notifyUser để gửi thật)
   try {
-    await notificationService.notifyUser(item.claimed_by_user_id, {
+    await notificationService.sendToUser(item.claimed_by_user_id, {
       title: "Mã xác nhận nhận đồ thất lạc",
       message: `Mã OTP để nhận lại "${item.item_name}" của bạn là: ${otp}. Mã hết hạn sau 15 phút.`,
       type: "LOST_FOUND_OTP",
-      event_code: "LOST_FOUND_HANDOVER",
       data: {
-        item_id: item.id,
-        otp: otp
+        reference_id: item.id,
+        reference_type: "LostFoundItem",
       }
     });
   } catch (notifErr) {

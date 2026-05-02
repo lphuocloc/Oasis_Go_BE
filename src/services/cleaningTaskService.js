@@ -454,25 +454,25 @@ const notifyManagersTaskRejected = async (task) => {
   let managerUserIds = [];
 
   if (rosters.length > 0) {
-     const rosterManagerIds = [...new Set(rosters.map(r => String(r.staff_id)))];
-     
-     // Only notify managers who are currently checked in (or fallback to all if none checked in)
-     const today = new Date();
-     const startOfDay = new Date(today);
-     startOfDay.setHours(0, 0, 0, 0);
-     const endOfDay = new Date(today);
-     endOfDay.setHours(23, 59, 59, 999);
+    const rosterManagerIds = [...new Set(rosters.map(r => String(r.staff_id)))];
 
-     const checkins = await StaffAttendanceLog.find({
-         location_id: locationId,
-         action: "CHECKIN",
-         created_at: { $gte: startOfDay, $lte: endOfDay }
-     }).lean();
-     
-     const checkedInStaffIds = checkins.map(c => String(c.staff_id));
-     const currentlyCheckedInManagers = rosterManagerIds.filter(id => checkedInStaffIds.includes(id));
-     
-     managerUserIds = currentlyCheckedInManagers.length > 0 ? currentlyCheckedInManagers : rosterManagerIds;
+    // Only notify managers who are currently checked in (or fallback to all if none checked in)
+    const today = new Date();
+    const startOfDay = new Date(today);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(today);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const checkins = await StaffAttendanceLog.find({
+      location_id: locationId,
+      action: "CHECKIN",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+    }).lean();
+
+    const checkedInStaffIds = checkins.map(c => String(c.staff_id));
+    const currentlyCheckedInManagers = rosterManagerIds.filter(id => checkedInStaffIds.includes(id));
+
+    managerUserIds = currentlyCheckedInManagers.length > 0 ? currentlyCheckedInManagers : rosterManagerIds;
   }
 
   // Fallback: notify all active managers in the system
@@ -523,12 +523,13 @@ const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerId
     requestSource === "AUTO_AFTER_CHECKOUT" && dueAtInput && !Number.isNaN(dueAtInput.getTime());
 
   const cleanerIdSet = new Set(eligibleCleanerIds.map((id) => String(id)));
-  
+
   const today = new Date();
   const startOfDay = new Date(today);
   startOfDay.setHours(0, 0, 0, 0);
   const endOfDay = new Date(today);
   endOfDay.setHours(23, 59, 59, 999);
+
 
   // Find who is currently checked in (has CHECKIN today with no later CHECKOUT)
   const [checkins, checkouts] = await Promise.all([
@@ -687,7 +688,6 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
   }).lean();
   if (rosters.length === 0) return false;
 
-  // Attendance check: the cleaner must be currently checked in (has CHECKIN with no later CHECKOUT today)
   const [checkinLogs, checkoutLogs] = await Promise.all([
     StaffAttendanceLog.find({
       staff_id: normalizedCleanerId,
@@ -1075,7 +1075,7 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   }).select("id staff_id is_temporary work_date cluster_id").lean();
 
   const rawStaffIds = [...new Set(rawRosters.map((item) => item.staff_id).filter(Boolean).map((id) => String(id)))];
-  
+
   // Find all active temporary rosters for today for these cleaners
   const temporaryRostersToday = await StaffWorkRoster.find({
     staff_id: { $in: rawStaffIds },
@@ -1087,11 +1087,11 @@ exports.autoAssignTaskForBooking = async (bookingLike, options = {}) => {
   const rosters = rawRosters.filter(roster => {
     // If this roster is the temporary roster for today, keep it
     if (roster.is_temporary) return true;
-    
+
     // If it's a permanent roster, but the cleaner is temporarily reassigned ELSEWHERE today, exclude it
-    const reassignedElsewhere = temporaryRostersToday.some(tr => 
-       String(tr.staff_id) === String(roster.staff_id) && 
-       String(tr.cluster_id) !== String(cluster.id)
+    const reassignedElsewhere = temporaryRostersToday.some(tr =>
+      String(tr.staff_id) === String(roster.staff_id) &&
+      String(tr.cluster_id) !== String(cluster.id)
     );
     return !reassignedElsewhere;
   });
