@@ -318,7 +318,8 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
     }
     descParts.push(`(Số lượng tiêu chuẩn của phòng: ${doc.expected_quantity})`);
 
-    const estimatedValue = doc.unit_cost * doc.reported_quantity;
+    // Không tính tiền cho khách hiện tại khi họ báo thiếu/hỏng lúc check-in
+    const estimatedValue = 0;
 
     const incident = await Incident.create({
       pod_id: doc.pod_id,
@@ -329,7 +330,7 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       description: descParts.join(" "),
       severity: "MEDIUM",
       status: "PENDING",
-      estimated_total_value: estimatedValue > 0 ? estimatedValue : null,
+      estimated_total_value: null,
     });
 
     // Create IncidentDetail for traceability
@@ -341,7 +342,7 @@ const confirmChecklist = async (bookingId, userId, itemsPayload) => {
       name_snapshot: doc.item_name,
       unit_cost_snapshot: doc.unit_cost,
       quantity: doc.reported_quantity,
-      total_cost: estimatedValue,
+      total_cost: 0,
       note: `Báo cáo bởi khách lúc check-in`,
     });
 
