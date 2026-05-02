@@ -182,10 +182,28 @@ const deleteRoster = async (req, res) => {
   }
 };
 
+const getMyRosters = async (req, res) => {
+  try {
+    const userId = req.user.id || String(req.user._id);
+    const rosters = await staffWorkRosterService.getMyRostersWithFullInfo(userId);
+    res.status(200).json({
+      success: true,
+      count: rosters.length,
+      data: rosters,
+    });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Failed to retrieve your rosters",
+    });
+  }
+};
+
 module.exports = {
   createRoster,
   getAllRosters,
   getRosterById,
   updateRoster,
   deleteRoster,
+  getMyRosters,
 };

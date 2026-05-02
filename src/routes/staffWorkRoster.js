@@ -146,6 +146,115 @@ router.get(
 
 /**
  * @swagger
+ * /api/staff-work-rosters/me:
+ *   get:
+ *     summary: Get my rosters with full details (cleaner only)
+ *     description: >
+ *       Returns all roster entries assigned to the authenticated cleaner,
+ *       each enriched with full shift info (name, start/end time),
+ *       location info (name, address, type) and cluster info (name, description).
+ *     tags: [Staff Roster]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: List of rosters with full details
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 count:
+ *                   type: integer
+ *                   example: 2
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id:
+ *                         type: string
+ *                       staff_id:
+ *                         type: string
+ *                       shift_id:
+ *                         type: string
+ *                       location_id:
+ *                         type: string
+ *                       cluster_id:
+ *                         type: string
+ *                       is_active:
+ *                         type: boolean
+ *                       is_temporary:
+ *                         type: boolean
+ *                       work_date:
+ *                         type: string
+ *                         format: date-time
+ *                         nullable: true
+ *                       created_at:
+ *                         type: string
+ *                         format: date-time
+ *                       shift:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                           shift_name:
+ *                             type: string
+ *                             example: "CA SÁNG"
+ *                           start_time:
+ *                             type: string
+ *                             example: "06:00"
+ *                           end_time:
+ *                             type: string
+ *                             example: "14:00"
+ *                           is_active:
+ *                             type: boolean
+ *                       location:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                           name:
+ *                             type: string
+ *                           type:
+ *                             type: string
+ *                           address:
+ *                             type: string
+ *                           lat:
+ *                             type: number
+ *                           lng:
+ *                             type: number
+ *                       cluster:
+ *                         type: object
+ *                         nullable: true
+ *                         properties:
+ *                           id:
+ *                             type: string
+ *                           name:
+ *                             type: string
+ *                           description:
+ *                             type: string
+ *                           location_id:
+ *                             type: string
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden – not a cleaner
+ */
+router.get(
+	"/me",
+	authMiddleware.protect,
+	authMiddleware.authorize("cleaner"),
+	staffWorkRosterController.getMyRosters
+);
+
+/**
+ * @swagger
  * /api/staff-work-rosters/{id}:
  *   get:
  *     summary: Get a roster by ID

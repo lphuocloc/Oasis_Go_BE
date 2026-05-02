@@ -247,6 +247,41 @@ class StaffWorkRosterService {
     return roster;
   }
 
+  /**
+   * Get all rosters of the authenticated cleaner with full populated info
+   * (shift details, location details, cluster details).
+   */
+  async getMyRostersWithFullInfo(userId) {
+    const StaffShift = require("../models/StaffShift");
+    const Location = require("../models/Location");
+    const PodCluster = require("../models/PodCluster");
+
+    const rosters = await StaffWorkRoster.find({ staff_id: userId }).lean();
+
+    if (!rosters.length) return [];
+
+    const shiftIds = [...new Set(rosters.map((r) => r.shift_id).filter(Boolean))];
+    const locationIds = [...new Set(rosters.map((r) => r.location_id).filter(Boolean))];
+    const clusterIds = [...new Set(rosters.map((r) => r.cluster_id).filter(Boolean))];
+
+    const [shifts, locations, clusters] = await Promise.all([
+      StaffShift.find({ id: { $in: shiftIds } }).lean(),
+      Location.find({ id: { $in: locationIds } }).select("id name type address lat lng").lean(),
+      PodCluster.find({ id: { $in: clusterIds } }).select("id name description location_id").lean(),
+    ]);
+
+    const shiftMap = Object.fromEntries(shifts.map((s) => [s.id, s]));
+    const locationMap = Object.fromEntries(locations.map((l) => [l.id, l]));
+    const clusterMap = Object.fromEntries(clusters.map((c) => [c.id, c]));
+
+    return rosters.map((r) => ({
+      ...r,
+      shift: r.shift_id ? (shiftMap[r.shift_id] || null) : null,
+      location: r.location_id ? (locationMap[r.location_id] || null) : null,
+      cluster: r.cluster_id ? (clusterMap[r.cluster_id] || null) : null,
+    }));
+  }
+
   async autoDeactivateExpiredTemporaryRosters() {
     try {
       const today = new Date();
