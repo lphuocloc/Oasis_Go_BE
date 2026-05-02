@@ -454,25 +454,25 @@ const notifyManagersTaskRejected = async (task) => {
   let managerUserIds = [];
 
   if (rosters.length > 0) {
-     const rosterManagerIds = [...new Set(rosters.map(r => String(r.staff_id)))];
-     
-     // Only notify managers who are currently checked in (or fallback to all if none checked in)
-     const today = new Date();
-     const startOfDay = new Date(today);
-     startOfDay.setHours(0, 0, 0, 0);
-     const endOfDay = new Date(today);
-     endOfDay.setHours(23, 59, 59, 999);
+    const rosterManagerIds = [...new Set(rosters.map(r => String(r.staff_id)))];
 
-     const checkins = await StaffAttendanceLog.find({
-         location_id: locationId,
-         action: "CHECKIN",
-         created_at: { $gte: startOfDay, $lte: endOfDay }
-     }).lean();
-     
-     const checkedInStaffIds = checkins.map(c => String(c.staff_id));
-     const currentlyCheckedInManagers = rosterManagerIds.filter(id => checkedInStaffIds.includes(id));
-     
-     managerUserIds = currentlyCheckedInManagers.length > 0 ? currentlyCheckedInManagers : rosterManagerIds;
+    // Only notify managers who are currently checked in (or fallback to all if none checked in)
+    const today = new Date();
+    const startOfDay = new Date(today);
+    startOfDay.setHours(0, 0, 0, 0);
+    const endOfDay = new Date(today);
+    endOfDay.setHours(23, 59, 59, 999);
+
+    const checkins = await StaffAttendanceLog.find({
+      location_id: locationId,
+      action: "CHECKIN",
+      created_at: { $gte: startOfDay, $lte: endOfDay }
+    }).lean();
+
+    const checkedInStaffIds = checkins.map(c => String(c.staff_id));
+    const currentlyCheckedInManagers = rosterManagerIds.filter(id => checkedInStaffIds.includes(id));
+
+    managerUserIds = currentlyCheckedInManagers.length > 0 ? currentlyCheckedInManagers : rosterManagerIds;
   }
 
   // Fallback: notify all active managers in the system
@@ -523,7 +523,7 @@ const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerId
     requestSource === "AUTO_AFTER_CHECKOUT" && dueAtInput && !Number.isNaN(dueAtInput.getTime());
 
   const cleanerIdSet = new Set(eligibleCleanerIds.map((id) => String(id)));
-  
+
   const today = new Date();
   const startOfDay = new Date(today);
   startOfDay.setHours(0, 0, 0, 0);
@@ -532,11 +532,11 @@ const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerId
 
   // Find who checked in today
   const checkins = await StaffAttendanceLog.find({
-      staff_id: { $in: eligibleCleanerIds },
-      action: "CHECKIN",
-      created_at: { $gte: startOfDay, $lte: endOfDay }
+    staff_id: { $in: eligibleCleanerIds },
+    action: "CHECKIN",
+    created_at: { $gte: startOfDay, $lte: endOfDay }
   }).lean();
-  
+
   const checkedInCleanerIds = new Set(checkins.map(c => String(c.staff_id)));
 
   const checkedInRosters = rosters.filter(
@@ -654,20 +654,20 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
   // Actually, we can just look up their Roster to see their cluster, then check location.
   const rosters = await StaffWorkRoster.find({ staff_id: normalizedCleanerId, is_active: true }).lean();
   if (rosters.length === 0) return false;
-  
+
   // They are checked in if they have a CHECKIN today
   const checkinLogs = await StaffAttendanceLog.find({
-      staff_id: normalizedCleanerId,
-      action: "CHECKIN",
-      created_at: { $gte: startOfDay, $lte: endOfDay }
+    staff_id: normalizedCleanerId,
+    action: "CHECKIN",
+    created_at: { $gte: startOfDay, $lte: endOfDay }
   }).sort({ created_at: -1 }).lean();
 
   if (checkinLogs.length === 0) return false;
 
   const checkoutLogs = await StaffAttendanceLog.find({
-      staff_id: normalizedCleanerId,
-      action: "CHECKOUT",
-      created_at: { $gte: startOfDay, $lte: endOfDay }
+    staff_id: normalizedCleanerId,
+    action: "CHECKOUT",
+    created_at: { $gte: startOfDay, $lte: endOfDay }
   }).sort({ created_at: -1 }).lean();
 
   if (checkoutLogs.length === 0) return true;
