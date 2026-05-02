@@ -363,9 +363,11 @@ class StaffAttendanceLogService {
       const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
       if (!shift) continue;
       try {
-        this.resolveShiftWindow(shift, now);
-        canCheckin = true;
-        break;
+        const window = this.resolveShiftWindow(shift, now);
+        if (now <= window.shiftEnd) {
+          canCheckin = true;
+          break;
+        }
       } catch (e) { /* Not in window */ }
     }
 
@@ -395,6 +397,18 @@ class StaffAttendanceLogService {
       query.shift_id = String(filters.shift_id);
     }
 
+    if (filters.location_id) {
+      query.location_id = String(filters.location_id);
+    }
+
+    if (filters.cluster_id) {
+      query.cluster_id = String(filters.cluster_id);
+    }
+
+    if (filters.date) {
+      query.work_date = toStartOfDayInAppTz(filters.date);
+    }
+
     const normalizedAction = this.validateAction(filters.action);
     if (normalizedAction) {
       query.action = normalizedAction;
@@ -407,7 +421,8 @@ class StaffAttendanceLogService {
         .sort({ created_at: -1 })
         .skip(pagination.skip)
         .limit(pagination.limit)
-        .lean(),
+        .populate("staff")
+        .populate("cluster"),
       StaffAttendanceLog.countDocuments(query),
     ]);
 
@@ -446,11 +461,13 @@ class StaffAttendanceLogService {
 
       try {
         const window = this.resolveShiftWindow(shift, now);
-        // If we got here, this shift is valid for current time
-        activeRoster = roster;
-        activeShift = shift;
-        activeWindow = window;
-        break;
+        if (now <= window.shiftEnd) {
+          // If we got here, this shift is valid for current time
+          activeRoster = roster;
+          activeShift = shift;
+          activeWindow = window;
+          break;
+        }
       } catch (e) {
         // Not in window for this shift, keep looking
         continue;

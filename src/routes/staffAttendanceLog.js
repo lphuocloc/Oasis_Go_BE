@@ -258,6 +258,42 @@ router.post(
  *         schema:
  *           type: integer
  *         description: Items per page (default 20, max 100)
+ *       - in: query
+ *         name: staff_id
+ *         schema:
+ *           type: string
+ *         description: Filter by staff ID
+ *       - in: query
+ *         name: location_id
+ *         schema:
+ *           type: string
+ *         description: Filter by location ID
+ *       - in: query
+ *         name: date
+ *         schema:
+ *           type: string
+ *           format: date
+ *         description: Filter by date (YYYY-MM-DD)
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved attendance logs
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.get(
   "/",
@@ -274,6 +310,31 @@ router.get(
  *     tags: [Staff Attendance Logs]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Attendance Log ID
+ *     responses:
+ *       200:
+ *         description: Successfully retrieved attendance log
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Not found
  */
 router.get(
   "/:id",

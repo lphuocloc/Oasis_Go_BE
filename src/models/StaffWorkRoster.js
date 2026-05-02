@@ -62,7 +62,7 @@ staffWorkRosterSchema.index(
 staffWorkRosterSchema.virtual("staff", {
   ref: "User",
   localField: "staff_id",
-  foreignField: "id",
+  foreignField: "_id",
   justOne: true,
 });
 
