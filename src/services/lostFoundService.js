@@ -353,24 +353,28 @@ exports.generateHandoverOTP = async (itemId, actor) => {
   item.handover_otp_expires_at = expiresAt;
   await item.save();
 
-  // Gửi OTP qua Notification cho User
+  // Gửi OTP qua Notification cho User (Sửa tham số và dùng notifyUser để gửi thật)
   try {
-    await notificationService.createNotification({
-      user_id: item.claimed_by_user_id,
+    await notificationService.notifyUser(item.claimed_by_user_id, {
       title: "Mã xác nhận nhận đồ thất lạc",
       message: `Mã OTP để nhận lại "${item.item_name}" của bạn là: ${otp}. Mã hết hạn sau 15 phút.`,
       type: "LOST_FOUND_OTP",
-      reference_id: item.id,
-      reference_type: "LostFoundItem",
+      event_code: "LOST_FOUND_HANDOVER",
+      data: {
+        item_id: item.id,
+        otp: otp
+      }
     });
   } catch (notifErr) {
     console.error("[lostFoundService] Failed to send OTP notification:", notifErr.message);
   }
 
   return {
+    success: true,
     message: "OTP generated and sent to user",
     item_id: item.id,
     item_name: item.item_name,
+    otp: otp, // Trả về để Manager/Dev có thể xem trong Network tab để test
     otp_expires_at: expiresAt,
   };
 };
