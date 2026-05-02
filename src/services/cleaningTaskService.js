@@ -530,14 +530,7 @@ const selectAssignmentWithLoadBalancing = async (rosters = [], eligibleCleanerId
   const endOfDay = new Date(today);
   endOfDay.setHours(23, 59, 59, 999);
 
-  // Find who checked in today
-  const checkins = await StaffAttendanceLog.find({
-    staff_id: { $in: eligibleCleanerIds },
-    action: "CHECKIN",
-    created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).lean();
 
-  const checkedInCleanerIds = new Set(checkins.map(c => String(c.staff_id)));
   // Find who is currently checked in (has CHECKIN today with no later CHECKOUT)
   const [checkins, checkouts] = await Promise.all([
     StaffAttendanceLog.find({
@@ -695,22 +688,6 @@ const isCleanerCheckedInAtLocation = async (cleanerId, locationId, referenceTime
   }).lean();
   if (rosters.length === 0) return false;
 
-  // They are checked in if they have a CHECKIN today
-  const checkinLogs = await StaffAttendanceLog.find({
-    staff_id: normalizedCleanerId,
-    action: "CHECKIN",
-    created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ created_at: -1 }).lean();
-
-  if (checkinLogs.length === 0) return false;
-
-  const checkoutLogs = await StaffAttendanceLog.find({
-    staff_id: normalizedCleanerId,
-    action: "CHECKOUT",
-    created_at: { $gte: startOfDay, $lte: endOfDay }
-  }).sort({ created_at: -1 }).lean();
-
-  // Attendance check: the cleaner must be currently checked in (has CHECKIN with no later CHECKOUT today)
   const [checkinLogs, checkoutLogs] = await Promise.all([
     StaffAttendanceLog.find({
       staff_id: normalizedCleanerId,
