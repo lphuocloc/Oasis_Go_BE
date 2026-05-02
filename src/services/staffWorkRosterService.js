@@ -111,6 +111,22 @@ class StaffWorkRosterService {
       throw duplicateError;
     }
 
+    // NEW: Prevent multiple managers per shift/location
+    if (staff.role === "manager" && resolvedLocationId) {
+      const managerConflict = await StaffWorkRoster.findOne({
+        shift_id,
+        location_id: resolvedLocationId,
+        is_active: true,
+        staff_id: { $ne: staff_id }
+      });
+
+      if (managerConflict) {
+        const error = new Error("Ca truc nay tai location da co Manager khac phu trach");
+        error.statusCode = 409;
+        throw error;
+      }
+    }
+
     try {
       const is_active = data.is_active !== undefined ? Boolean(data.is_active) : true;
       const isTemporary = Boolean(is_temporary);
@@ -221,6 +237,24 @@ class StaffWorkRosterService {
       roster.shift_id = nextShiftId;
       roster.location_id = nextLocationId || null;
       roster.cluster_id = nextClusterId || null;
+    }
+
+    // NEW: Prevent multiple managers per shift/location during update
+    const finalStaff = await this.findUserById(roster.staff_id);
+    if (finalStaff && finalStaff.role === "manager" && roster.location_id && roster.is_active) {
+      const managerConflict = await StaffWorkRoster.findOne({
+        id: { $ne: id }, // Exclude current roster
+        shift_id: roster.shift_id,
+        location_id: roster.location_id,
+        is_active: true,
+        staff_id: { $ne: roster.staff_id }
+      });
+
+      if (managerConflict) {
+        const error = new Error("Khong the cap nhat: Ca truc nay tai location da co Manager khac phu trach");
+        error.statusCode = 409;
+        throw error;
+      }
     }
 
     if (data.is_active !== undefined) {

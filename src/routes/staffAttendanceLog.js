@@ -23,6 +23,22 @@ const router = express.Router();
  *         schema:
  *           type: integer
  *         description: Items per page (default 20, max 100)
+ *     responses:
+ *       200:
+ *         description: List of your attendance logs
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
  */
 router.get(
   "/me",
@@ -40,7 +56,6 @@ router.get(
  *     security:
  *       - bearerAuth: []
  *     parameters:
-
  *       - in: query
  *         name: date
  *         required: false
@@ -48,6 +63,22 @@ router.get(
  *           type: string
  *           format: date
  *         description: Optional work date (YYYY-MM-DD), default is today
+ *     responses:
+ *       200:
+ *         description: Attendance status for the specified date
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.get(
   "/me/status",
@@ -72,6 +103,22 @@ router.get(
  *           type: string
  *           format: date
  *         description: Optional date (YYYY-MM-DD), default is today
+ *     responses:
+ *       200:
+ *         description: Today's attendance status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: object
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.get(
   "/me/today-status",
@@ -95,12 +142,39 @@ router.get(
  *           schema:
  *             type: object
  *             properties:
-
  *               date:
  *                 type: string
  *                 format: date
  *                 description: Optional selected card date (YYYY-MM-DD)
-
+ *     responses:
+ *       201:
+ *         description: Checked in successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *       400:
+ *         description: Already checked in or invalid request
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.post(
   "/checkin",
@@ -124,13 +198,39 @@ router.post(
  *           schema:
  *             type: object
  *             properties:
- *               shift_assignment_id:
- *                 type: string
  *               date:
  *                 type: string
  *                 format: date
  *                 description: Optional selected card date (YYYY-MM-DD)
-
+ *     responses:
+ *       200:
+ *         description: Checked out successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   type: object
+ *       400:
+ *         description: Checkout failed (e.g. shift not ended, pending tasks, or missing handover)
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.post(
   "/checkout",
