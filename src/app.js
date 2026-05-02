@@ -248,10 +248,16 @@ const staffAttendanceLogService = require("./services/staffAttendanceLogService"
 // Run once on startup after 10 seconds
 setTimeout(() => {
   staffAttendanceLogService.autoCheckoutGhostSessions();
+  
+  const staffWorkRosterService = require("./services/staffWorkRosterService");
+  staffWorkRosterService.autoDeactivateExpiredTemporaryRosters();
 }, 10 * 1000);
-// Run every 1 hour
+// Run every 10 minutes
 setInterval(() => {
   staffAttendanceLogService.autoCheckoutGhostSessions();
-}, 60 * 60 * 1000);
+  
+  const staffWorkRosterService = require("./services/staffWorkRosterService");
+  staffWorkRosterService.autoDeactivateExpiredTemporaryRosters();
+}, 10 * 60 * 1000);
 
 module.exports = app;

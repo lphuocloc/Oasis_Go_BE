@@ -95,7 +95,22 @@ router.post(
  *         description: Include ASSIGNED staff (not checked in yet)
  *     responses:
  *       200:
- *         description: Working staff list returned
+ *         description: Working staff list returned successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       400:
+ *         description: Invalid request
+ *       404:
+ *         description: Location not found
  */
 router.get(
 	"/locations/:locationId/working",
@@ -116,7 +131,24 @@ router.get(
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: List of all location shifts
+ *         description: List of all location shifts retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 count:
+ *                   type: integer
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
  */
 router.get(
   "/",
@@ -143,6 +175,17 @@ router.get(
  *     responses:
  *       200:
  *         description: Location shift deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *       404:
+ *         description: Location shift not found
  */
 router.delete(
   "/:id",

@@ -21,25 +21,44 @@ class ShiftHandoverService {
       user && user._id ? String(user._id) : null,
     ].filter(Boolean);
 
-    // Find active roster for manager
-    const roster = await StaffWorkRoster.findOne({ staff_id: { $in: requesterIds }, is_active: true }).lean();
-    if (!roster || !roster.location_id) {
-      const error = new Error("Manager is not assigned to any active location");
+    // Find ALL active rosters for manager
+    const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
+    if (!rosters || rosters.length === 0) {
+      const error = new Error("Manager is not assigned to any active roster");
       error.statusCode = 404;
       throw error;
     }
 
-    const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
-    if (!shift) {
-      const error = new Error("Assigned shift not found");
+    const staffAttendanceLogService = require("./staffAttendanceLogService");
+    const now = new Date();
+    let activeRoster = null;
+    let activeShift = null;
+
+    // Find the roster that matches the current time window
+    for (const roster of rosters) {
+      const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
+      if (!shift) continue;
+
+      try {
+        staffAttendanceLogService.resolveShiftWindow(shift, now);
+        activeRoster = roster;
+        activeShift = shift;
+        break;
+      } catch (e) {
+        continue;
+      }
+    }
+
+    if (!activeRoster || !activeShift) {
+      const error = new Error("Khong tim thay ca truc phu hop de ban giao vao luc này");
       error.statusCode = 404;
       throw error;
     }
 
     const log = await ShiftHandoverLog.create({
       manager_id: requesterIds[0],
-      location_id: roster.location_id,
-      shift_id: shift.id,
+      location_id: activeRoster.location_id,
+      shift_id: activeShift.id,
       note_text: String(note_text).trim(),
     });
 
