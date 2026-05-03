@@ -71,6 +71,15 @@ const incidentSchema = new mongoose.Schema(
       default: "PENDING",
       index: true,
     },
+    replenishment_status: {
+      type: String,
+      enum: {
+        values: ["NOT_REPLENISHED", "REPLENISHED"],
+        message: "{VALUE} is not a valid replenishment_status",
+      },
+      default: "NOT_REPLENISHED",
+      index: true,
+    },
     estimated_service_fee: {
       type: Number,
       default: 0,

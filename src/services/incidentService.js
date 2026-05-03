@@ -1284,12 +1284,13 @@ exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayloa
   }
 
   incident.status = "RESOLVED";
+  incident.replenishment_status = "REPLENISHED";
   incident.handled_by = user.id || String(user._id);
   incident.resolution_note = "Đã bổ sung vật dụng từ kho";
   await incident.save();
 
   return {
-    message: "Việc bổ sung hàng đã được giải quyết thành công.",
+    message: "Việc bổ sung đồ đã được giải quyết thành công.",
     incident_id: incident.id,
     warehouse_id: warehouseId,
     items_processed: itemQuantities.size
@@ -1368,17 +1369,17 @@ exports.getCleanerIncidents = async (actor, filters = {}) => {
   const [tasks, bookings] = await Promise.all([
     cleaningTaskIdSet.size > 0
       ? CleaningTask.find({ id: { $in: Array.from(cleaningTaskIdSet) } })
-          .select(
-            "id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source"
-          )
-          .lean()
+        .select(
+          "id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source"
+        )
+        .lean()
       : Promise.resolve([]),
     bookingIdSet.size > 0
       ? Booking.find({ id: { $in: Array.from(bookingIdSet) } })
-          .select(
-            "id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state"
-          )
-          .lean()
+        .select(
+          "id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state"
+        )
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -1397,13 +1398,13 @@ exports.getCleanerIncidents = async (actor, filters = {}) => {
   const [users, pods] = await Promise.all([
     userIdSet.size > 0
       ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
-          .select("id _id name")
-          .lean()
+        .select("id _id name")
+        .lean()
       : Promise.resolve([]),
     podIdSet.size > 0
       ? Pod.find({ id: { $in: Array.from(podIdSet) } })
-          .select("id name")
-          .lean()
+        .select("id name")
+        .lean()
       : Promise.resolve([]),
   ]);
 
@@ -1498,8 +1499,8 @@ exports.getCleanerIncidentDetail = async (incidentId, actor) => {
       : null,
     userIdSet.size > 0
       ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
-          .select("id _id name")
-          .lean()
+        .select("id _id name")
+        .lean()
       : Promise.resolve([]),
     incident.pod_id
       ? Pod.findOne({ id: incident.pod_id }).select("id name").lean()
