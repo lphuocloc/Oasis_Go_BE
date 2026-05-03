@@ -145,8 +145,44 @@ class AdminLedgerService {
             AdminLedgerEntry.countDocuments(filter),
         ]);
 
+        // Fetch user details for entries with user_id
+        const User = require("../models/User");
+        const userIds = [...new Set(rows.map((row) => row.user_id).filter(Boolean))];
+        const userMap = new Map();
+
+        if (userIds.length > 0) {
+            const users = await User.find({
+                $or: [
+                    { _id: { $in: userIds } },
+                    { id: { $in: userIds } },
+                ],
+            })
+                .select("_id id name email phone")
+                .lean();
+
+            users.forEach((user) => {
+                const key = String(user._id || user.id);
+                userMap.set(key, {
+                    user_name: user.name || null,
+                    user_email: user.email || null,
+                    user_phone: user.phone || null,
+                });
+            });
+        }
+
+        // Enhance each row with user info
+        const enrichedData = rows.map((row) => {
+            const userKey = String(row.user_id);
+            const userInfo = userMap.get(userKey) || {
+                user_name: null,
+                user_email: null,
+                user_phone: null,
+            };
+            return { ...row, ...userInfo };
+        });
+
         return {
-            data: rows,
+            data: enrichedData,
             pagination: {
                 page,
                 limit,
