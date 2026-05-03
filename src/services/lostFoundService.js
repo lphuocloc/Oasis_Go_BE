@@ -37,6 +37,47 @@ const parsePositiveInt = (value, fallback) => {
   return parsed;
 };
 
+const normalizeId = (value) => (value ? String(value) : null);
+
+const buildUserMapByIds = async (userIds = []) => {
+  const ids = [...new Set(userIds.filter(Boolean).map(String))];
+  if (!ids.length) return {};
+
+  const users = await User.find({ _id: { $in: ids } })
+    .select("name phone email")
+    .lean();
+
+  return users.reduce((map, user) => {
+    const id = String(user._id);
+    map[id] = {
+      id,
+      name: user.name || null,
+      phone: user.phone || null,
+      email: user.email || null,
+    };
+    return map;
+  }, {});
+};
+
+const buildBookingUserMap = async (bookingIds = []) => {
+  const ids = [...new Set(bookingIds.filter(Boolean).map(String))];
+  if (!ids.length) return {};
+
+  const bookings = await Booking.find({ id: { $in: ids } })
+    .select("id user_id")
+    .lean();
+
+  const userIds = bookings.map((b) => b.user_id).filter(Boolean).map(String);
+  const userMap = await buildUserMapByIds(userIds);
+
+  return bookings.reduce((map, booking) => {
+    const bookingId = String(booking.id);
+    const userId = normalizeId(booking.user_id);
+    map[bookingId] = userId ? userMap[userId] || null : null;
+    return map;
+  }, {});
+};
+
 /**
  * Lấy cleaning_task_ids từ booking_id của các LostFoundItem.
  */
@@ -324,6 +365,29 @@ exports.rejectLostItemRequest = async (requestId, { manager_note }, actor) => {
   return request.toObject();
 };
 
+/**
+ * API 4c (Manager): Đóng request thủ công (chỉ PENDING).
+ */
+exports.closeLostItemRequest = async (requestId, { manager_note }, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Chỉ managers và admin có thể đóng yêu cầu", 403);
+  }
+
+  const request = await LostItemRequest.findOne({ id: requestId });
+  if (!request) throw createError("Yêu cầu tìm đồ không tồn tại", 404);
+
+  if (request.status !== "PENDING") {
+    throw createError(`Yêu cầu đã ở trạng thái ${request.status}, không thể đóng`, 400);
+  }
+
+  request.status = "CLOSED";
+  request.manager_note = manager_note ? String(manager_note).trim() : null;
+  await request.save();
+
+  return request.toObject();
+};
+
 // ─── Luồng Handover: Bàn giao đồ ────────────────────────────────
 
 /**
@@ -336,13 +400,13 @@ exports.generateHandoverOTP = async (itemId, actor) => {
   }
 
   const item = await LostFoundItem.findOne({ id: itemId });
-  if (!item) throw createError("Lost & Found item not found", 404);
+  if (!item) throw createError("Đồ thất lạc không tồn tại", 404);
 
   if (item.status !== "CLAIM_PENDING") {
-    throw createError(`Item must be in CLAIM_PENDING status, current: ${item.status}`, 400);
+    throw createError(`Đồ phải ở trạng thái CLAIM_PENDING, hiện tại: ${item.status}`, 400);
   }
   if (!item.claimed_by_user_id) {
-    throw createError("Item has no claimant. Please confirm match first.", 400);
+    throw createError("Đồ không có người nhận. Vui lòng xác nhận khớp trước.", 400);
   }
 
   // Tạo OTP 6 chữ số, hết hạn sau 15 phút
@@ -451,12 +515,23 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
     const items = await LostFoundItem.find(query).sort({ created_at: -1 }).lean();
     const itemIds = items.map((i) => i.id);
     const bookingIds = items.map((i) => i.booking_id);
-    const [mediaMap, cleaningTaskMap] = await Promise.all([
+    const [mediaMap, cleaningTaskMap, bookingUserMap] = await Promise.all([
       buildMediaMap(itemIds),
       buildCleaningTaskMap(bookingIds),
+      buildBookingUserMap(bookingIds),
     ]);
     return {
-      items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
+      items: items.map((item) => {
+        const view = toLostFoundItemView(
+          item,
+          mediaMap[item.id] || [],
+          cleaningTaskMap[item.booking_id] || [],
+        );
+        return {
+          ...view,
+          booking_user: bookingUserMap[item.booking_id] || null,
+        };
+      }),
       pagination: null,
     };
   }
@@ -472,13 +547,24 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
 
   const itemIds = items.map((i) => i.id);
   const bookingIds = items.map((i) => i.booking_id);
-  const [mediaMap, cleaningTaskMap] = await Promise.all([
+  const [mediaMap, cleaningTaskMap, bookingUserMap] = await Promise.all([
     buildMediaMap(itemIds),
     buildCleaningTaskMap(bookingIds),
+    buildBookingUserMap(bookingIds),
   ]);
 
   return {
-    items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
+    items: items.map((item) => {
+      const view = toLostFoundItemView(
+        item,
+        mediaMap[item.id] || [],
+        cleaningTaskMap[item.booking_id] || [],
+      );
+      return {
+        ...view,
+        booking_user: bookingUserMap[item.booking_id] || null,
+      };
+    }),
     pagination: {
       current_page: page,
       total_pages: total > 0 ? Math.ceil(total / limit) : 0,
@@ -535,7 +621,14 @@ exports.getLostItemRequests = async (filters = {}, actor = null) => {
   const shouldPaginate = filters.page !== undefined || filters.limit !== undefined;
   if (!shouldPaginate) {
     const requests = await LostItemRequest.find(query).sort({ created_at: -1 }).lean();
-    return { items: requests, pagination: null };
+    const userMap = await buildUserMapByIds(requests.map((r) => r.user_id));
+    return {
+      items: requests.map((request) => ({
+        ...request,
+        user: userMap[normalizeId(request.user_id)] || null,
+      })),
+      pagination: null,
+    };
   }
 
   const page = parsePositiveInt(filters.page, 1);
@@ -547,8 +640,13 @@ exports.getLostItemRequests = async (filters = {}, actor = null) => {
     LostItemRequest.find(query).sort({ created_at: -1 }).skip(skip).limit(limit).lean(),
   ]);
 
+  const userMap = await buildUserMapByIds(requests.map((r) => r.user_id));
+
   return {
-    items: requests,
+    items: requests.map((request) => ({
+      ...request,
+      user: userMap[normalizeId(request.user_id)] || null,
+    })),
     pagination: {
       current_page: page,
       total_pages: total > 0 ? Math.ceil(total / limit) : 0,
@@ -573,5 +671,10 @@ exports.getLostItemRequestById = async (requestId, actor = null) => {
     if (!isOwner) throw createError("You are not allowed to access this request", 403);
   }
 
-  return request;
+  const userMap = await buildUserMapByIds([request.user_id]);
+
+  return {
+    ...request,
+    user: userMap[normalizeId(request.user_id)] || null,
+  };
 };
