@@ -20,6 +20,7 @@ const CleaningTask = require("../models/CleaningTask");
 const reviewService = require("./reviewService");
 const notificationService = require("./notificationService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const adminLedgerService = require("./adminLedgerService");
 
 const Notification = require("../models/Notification");
 
@@ -664,6 +665,23 @@ class BookingOrderService {
           ordered: true,
         },
       );
+
+      await adminLedgerService.createEntry(
+        {
+          type: "ESCROW_CREDIT",
+          amount: totalAmount,
+          source: "WALLET_REFUND",
+          dedupe_key: `WALLET_REFUND:${createdWalletTransactions[0]?.id || orderId}`,
+          user_id: String(userId || ""),
+          wallet_id: wallet.id,
+          order_id: String(orderId || ""),
+          transaction_id: String(transactionId || ""),
+          wallet_transaction_id: createdWalletTransactions[0]?.id || null,
+          reference_id: String(orderId || ""),
+          description: `Wallet refund for order ${orderId}`,
+        },
+        session,
+      );
     }
 
     return {
@@ -673,6 +691,43 @@ class BookingOrderService {
       balanceBefore: walletBalanceBefore,
       balanceAfter: walletBalanceAfter,
     };
+  }
+
+  async _recordRevenueIfOrderCompleted(orderId) {
+    const normalizedOrderId = String(orderId || "").trim();
+    if (!normalizedOrderId) return null;
+
+    const order = await BookingOrder.findOne({ id: normalizedOrderId })
+      .select("id status user_id payable_total_price final_total_price")
+      .lean();
+    if (!order) return null;
+
+    const status = String(order.status || "").toUpperCase();
+    if (!["PAID", "PARTIAL_CANCEL"].includes(status)) {
+      return null;
+    }
+
+    const remainingActive = await Booking.countDocuments({
+      order_id: normalizedOrderId,
+      status: { $in: ["BOOKED", "IN_USE"] },
+    });
+
+    if (remainingActive > 0) {
+      return null;
+    }
+
+    const amount = Number(order.payable_total_price ?? order.final_total_price ?? 0);
+
+    return adminLedgerService.createEntry({
+      type: "REVENUE_RECOGNIZED",
+      amount,
+      source: "ORDER_COMPLETED",
+      dedupe_key: `REVENUE_RECOGNIZED:${normalizedOrderId}`,
+      user_id: String(order.user_id || ""),
+      order_id: normalizedOrderId,
+      reference_id: normalizedOrderId,
+      description: `Revenue recognized for completed order ${normalizedOrderId}`,
+    });
   }
 
   async _notifyCancellationAndRefund({
@@ -2578,6 +2633,12 @@ class BookingOrderService {
         status: booking.status,
         actual_end_time: booking.actual_end_time,
       });
+    }
+
+    try {
+      await this._recordRevenueIfOrderCompleted(order.id);
+    } catch (error) {
+      console.error("Failed to record revenue for completed order", error);
     }
 
     return {

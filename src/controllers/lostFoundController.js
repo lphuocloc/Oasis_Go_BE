@@ -90,6 +90,23 @@ exports.rejectLostItemRequest = async (req, res) => {
   }
 };
 
+exports.closeLostItemRequest = async (req, res) => {
+  try {
+    const request = await lostFoundService.closeLostItemRequest(req.params.id, req.body, req.user);
+    res.status(200).json({
+      success: true,
+      message: "Lost item request closed",
+      data: request,
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error closing request",
+    });
+  }
+};
+
 exports.generateHandoverOTP = async (req, res) => {
   try {
     const result = await lostFoundService.generateHandoverOTP(req.params.id, req.user);

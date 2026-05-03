@@ -13,6 +13,7 @@ const {
   cancelOpenTasksForNoShowBooking,
 } = require("./cleaningTaskService");
 const notificationService = require("./notificationService");
+const adminLedgerService = require("./adminLedgerService");
 const { emitPodCheckinConfirmed } = require("../socket/socketServer");
 
 const readEnvMinutes = (key, fallback, min = 0) => {
@@ -73,6 +74,43 @@ class BookingService {
     error.statusCode = statusCode;
     error.errorCode = errorCode;
     return error;
+  }
+
+  async _recordRevenueIfOrderCompleted(orderId) {
+    const normalizedOrderId = String(orderId || "").trim();
+    if (!normalizedOrderId) return null;
+
+    const order = await BookingOrder.findOne({ id: normalizedOrderId })
+      .select("id status user_id payable_total_price final_total_price")
+      .lean();
+    if (!order) return null;
+
+    const status = String(order.status || "").toUpperCase();
+    if (!["PAID", "PARTIAL_CANCEL"].includes(status)) {
+      return null;
+    }
+
+    const remainingActive = await Booking.countDocuments({
+      order_id: normalizedOrderId,
+      status: { $in: ["BOOKED", "IN_USE"] },
+    });
+
+    if (remainingActive > 0) {
+      return null;
+    }
+
+    const amount = Number(order.payable_total_price ?? order.final_total_price ?? 0);
+
+    return adminLedgerService.createEntry({
+      type: "REVENUE_RECOGNIZED",
+      amount,
+      source: "ORDER_COMPLETED",
+      dedupe_key: `REVENUE_RECOGNIZED:${normalizedOrderId}`,
+      user_id: String(order.user_id || ""),
+      order_id: normalizedOrderId,
+      reference_id: normalizedOrderId,
+      description: `Revenue recognized for completed order ${normalizedOrderId}`,
+    });
   }
 
   async _revokeCleanerKeysForBooking(bookingId) {
@@ -206,6 +244,7 @@ class BookingService {
     }
 
     let markedCount = 0;
+    const affectedOrderIds = new Set();
 
     for (const booking of expiredAutoActivatedBookings) {
       const updated = await Booking.updateOne(
@@ -231,6 +270,9 @@ class BookingService {
       }
 
       markedCount += 1;
+      if (booking.order_id) {
+        affectedOrderIds.add(String(booking.order_id));
+      }
 
       await OnlineKey.updateMany(
         {
@@ -261,6 +303,16 @@ class BookingService {
       });
     }
 
+    if (affectedOrderIds.size > 0) {
+      for (const orderId of affectedOrderIds) {
+        try {
+          await this._recordRevenueIfOrderCompleted(orderId);
+        } catch (error) {
+          console.error("Failed to record revenue for completed order", error);
+        }
+      }
+    }
+
     return {
       found: expiredAutoActivatedBookings.length,
       no_show_marked: markedCount,
@@ -284,6 +336,7 @@ class BookingService {
 
     let autoCheckedOutCount = 0;
     let accessLogsUpdatedCount = 0;
+    const affectedOrderIds = new Set();
 
     for (const booking of expiredBookings) {
       const updated = await Booking.updateOne(
@@ -306,6 +359,9 @@ class BookingService {
       }
 
       autoCheckedOutCount += 1;
+      if (booking.order_id) {
+        affectedOrderIds.add(String(booking.order_id));
+      }
 
       // Update booking access session with timeout checkout
       const accessSessionUpdate = await BookingAccessSession.updateOne(
@@ -340,6 +396,16 @@ class BookingService {
           checkout_type: "TIMEOUT",
         },
       });
+    }
+
+    if (affectedOrderIds.size > 0) {
+      for (const orderId of affectedOrderIds) {
+        try {
+          await this._recordRevenueIfOrderCompleted(orderId);
+        } catch (error) {
+          console.error("Failed to record revenue for completed order", error);
+        }
+      }
     }
 
     return {
@@ -962,11 +1028,13 @@ class BookingService {
 
       const nowMs = now.getTime();
       const inUseBooking = candidateBookings.find((item) => item.status === "IN_USE");
-      const bookedInWindow = candidateBookings.find((item) => {
-        if (item.status !== "BOOKED") return false;
-        const startMs = new Date(item.start_time).getTime();
-        return nowMs >= startMs - CHECKIN_EARLY_WINDOW_MS && nowMs <= startMs + CHECKIN_LATE_WINDOW_MS;
-      });
+      const bookedInWindow = candidateBookings
+        .filter((item) => {
+          if (item.status !== "BOOKED") return false;
+          const startMs = new Date(item.start_time).getTime();
+          return nowMs >= startMs - CHECKIN_EARLY_WINDOW_MS && nowMs <= startMs + CHECKIN_LATE_WINDOW_MS;
+        })
+        .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
       const latestPastBooked = candidateBookings.find((item) => {
         if (item.status !== "BOOKED") return false;
         return new Date(item.start_time).getTime() <= nowMs;
@@ -975,10 +1043,10 @@ class BookingService {
         .filter((item) => item.status === "BOOKED" && new Date(item.start_time).getTime() > nowMs)
         .sort((a, b) => new Date(a.start_time).getTime() - new Date(b.start_time).getTime())[0];
 
-      // Priority: active session -> valid check-in window booking -> nearest past booking -> nearest future booking.
+      // Priority: valid check-in window booking -> active session -> nearest past booking -> nearest future booking.
       const booking =
-        inUseBooking ||
         bookedInWindow ||
+        inUseBooking ||
         latestPastBooked ||
         earliestFutureBooked ||
         candidateBookings[0];
