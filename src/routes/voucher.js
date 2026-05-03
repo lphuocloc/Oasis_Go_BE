@@ -156,9 +156,63 @@ const voucherController = require("../controllers/voucherController");
  *     tags: [Vouchers]
  *     security:
  *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           default: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *           default: 20
+ *       - in: query
+ *         name: code
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: discount_type
+ *         schema:
+ *           type: string
+ *           enum: [PERCENT, FIXED]
+ *       - in: query
+ *         name: is_active
+ *         schema:
+ *           type: boolean
  *     responses:
  *       200:
  *         description: Voucher list retrieved successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                   example: true
+ *                 data:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/Voucher'
+ *                 pagination:
+ *                   type: object
+ *                   properties:
+ *                     current_page:
+ *                       type: integer
+ *                       example: 1
+ *                     total_pages:
+ *                       type: integer
+ *                       example: 5
+ *                     total_items:
+ *                       type: integer
+ *                       example: 100
+ *                     items_per_page:
+ *                       type: integer
+ *                       example: 20
  *       401:
  *         description: Unauthorized
  */
