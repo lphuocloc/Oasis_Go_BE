@@ -449,14 +449,14 @@ class BookingOrderController {
 
       return res.status(200).json({
         success: true,
-        message: "Payment processed",
+        message: "Thanh toán hóa đơn thiệt hại thành công",
         data: result,
       });
     } catch (error) {
       console.error("Error paying damage bill:", error);
       return res.status(error.statusCode || 500).json({
         success: false,
-        message: error.message || "Failed to pay damage bill",
+        message: error.message || "Thanh toán hóa đơn thiệt hại thất bại",
       });
     }
   }
