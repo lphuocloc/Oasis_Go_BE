@@ -45,74 +45,21 @@ const parseTimeParts = (timeValue) => {
   return { hours, minutes, seconds };
 };
 
-const getAppTzOffsetMs = (date) => {
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIMEZONE,
-    year: "numeric",
-    month: "numeric",
-    day: "numeric",
-    hour: "numeric",
-    minute: "numeric",
-    second: "numeric",
-    hour12: false,
-  });
-  const parts = Object.fromEntries(
-    fmt.formatToParts(date).map(({ type, value }) => [type, value])
-  );
-  const localAsUtcMs = Date.UTC(
-    Number(parts.year),
-    Number(parts.month) - 1,
-    Number(parts.day),
-    parts.hour === "24" ? 0 : Number(parts.hour),
-    Number(parts.minute),
-    Number(parts.second)
-  );
-  return localAsUtcMs - date.getTime();
-};
+const APP_TZ_OFFSET_MS = 7 * 60 * 60 * 1000; // Fixed +7 hours for Asia/Ho_Chi_Minh
 
 const toStartOfDayInAppTz = (date) => {
   const d = new Date(date);
-  const dateStr = new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(d);
-  
-  // Format as YYYY-MM-DDT00:00:00 in Local Time, then convert to Date
-  // To get exactly 00:00:00 in Asia/Ho_Chi_Minh:
-  const naiveIso = `${dateStr}T00:00:00`;
-  const localDate = new Date(naiveIso); 
-  
-  // If we want it represented as local midnight (which is 17:00 UTC previous day):
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: APP_TIMEZONE,
-    year: "numeric", month: "numeric", day: "numeric",
-    hour: "numeric", minute: "numeric", second: "numeric",
-    hour12: false,
-  });
-  
-  const parts = Object.fromEntries(fmt.formatToParts(localDate).map(p => [p.type, p.value]));
-  const offsetMs = Date.UTC(parts.year, parts.month-1, parts.day, parts.hour==='24'?0:parts.hour, parts.minute, parts.second) - localDate.getTime();
-  
-  return new Date(localDate.getTime() - offsetMs);
+  const localMs = d.getTime() + APP_TZ_OFFSET_MS;
+  // Floor to midnight in local time
+  const localMidnightMs = localMs - (localMs % (24 * 60 * 60 * 1000));
+  // Convert back to UTC
+  return new Date(localMidnightMs - APP_TZ_OFFSET_MS);
 };
 
 const withTimeInAppTz = (baseDate, parts) => {
-  const dateStr = new Intl.DateTimeFormat("en-CA", {
-    timeZone: APP_TIMEZONE,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(baseDate);
-
-  const hh = String(parts.hours).padStart(2, "0");
-  const mm = String(parts.minutes).padStart(2, "0");
-  const ss = String(parts.seconds).padStart(2, "0");
-
-  const naiveMs = Date.parse(`${dateStr}T${hh}:${mm}:${ss}Z`);
-  const offsetMs = getAppTzOffsetMs(new Date(naiveMs));
-  return new Date(naiveMs - offsetMs);
+  // baseDate is guaranteed to be 00:00 local time
+  const ms = baseDate.getTime() + (parts.hours * 60 * 60 * 1000) + (parts.minutes * 60 * 1000) + (parts.seconds * 1000);
+  return new Date(ms);
 };
 
 const formatDateTimeVi = (value) => {
@@ -361,9 +308,9 @@ class StaffAttendanceLogService {
       );
     }
 
-    // 4. Fallback: if no logs for current active shift, or no active shift, 
+    // 4. Fallback: if no active shift, 
     // pick the absolute latest session in the last 24h to show "last known status"
-    if (relevantLogs.length === 0 && logs.length > 0) {
+    if (!activeShiftId && logs.length > 0) {
       const sessions = {};
       for (const log of logs) {
         const key = `${log.work_date?.toISOString() || 'no-date'}_${log.shift_id}`;
@@ -531,35 +478,6 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    // Lazy checkout previous manager if they forgot
-    if (user.role === "manager" && activeRoster.location_id) {
-      const previousManagerCheckin = await StaffAttendanceLog.findOne({
-        location_id: activeRoster.location_id,
-        action: "CHECKIN",
-        staff_id: { $nin: requesterIds }
-      }).sort({ created_at: -1 }).lean();
-
-      if (previousManagerCheckin) {
-        const hasCheckedOut = await StaffAttendanceLog.findOne({
-          staff_id: previousManagerCheckin.staff_id,
-          action: "CHECKOUT",
-          work_date: previousManagerCheckin.work_date,
-          shift_id: previousManagerCheckin.shift_id
-        }).lean();
-
-        if (!hasCheckedOut) {
-          // Force checkout previous manager
-          await StaffAttendanceLog.create({
-            staff_id: previousManagerCheckin.staff_id,
-            shift_id: previousManagerCheckin.shift_id,
-            location_id: previousManagerCheckin.location_id,
-            cluster_id: previousManagerCheckin.cluster_id,
-            action: "CHECKOUT",
-            work_date: previousManagerCheckin.work_date,
-          });
-        }
-      }
-    }
 
     try {
       const log = await StaffAttendanceLog.create({
@@ -706,71 +624,9 @@ class StaffAttendanceLogService {
   }
 
   async autoCheckoutGhostSessions() {
-    console.log("[StaffAttendance] Running auto-checkout for ghost sessions...");
-    try {
-      const now = new Date();
-
-      // Find all CHECKIN logs in the last 24 hours
-      const cutoffStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-      const activeCheckins = await StaffAttendanceLog.find({
-        action: "CHECKIN",
-        created_at: { $gt: cutoffStart }
-      }).lean();
-
-      let checkedOutCount = 0;
-
-      for (const checkin of activeCheckins) {
-        // 1. Check if already has a CHECKOUT
-        const hasCheckout = await StaffAttendanceLog.exists({
-          staff_id: checkin.staff_id,
-          action: "CHECKOUT",
-          work_date: checkin.work_date,
-          shift_id: checkin.shift_id
-        });
-
-        if (hasCheckout) continue;
-
-        // 2. Get shift details to see when it ended
-        const shift = await StaffShift.findOne({ id: checkin.shift_id }).lean();
-        if (!shift) continue;
-
-        try {
-          // Get the actual end time for this shift on its work_date
-          const startParts = parseTimeParts(shift.start_time);
-          const endParts = parseTimeParts(shift.end_time);
-          if (!startParts || !endParts) continue;
-
-          let shiftEnd = withTimeInAppTz(checkin.work_date, endParts);
-          if (shiftEnd <= withTimeInAppTz(checkin.work_date, startParts)) {
-            shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
-          }
-
-          // Auto checkout if 30 minutes past shift end
-          const autoCheckoutTime = new Date(shiftEnd.getTime() + 30 * 60 * 1000);
-
-          if (now >= autoCheckoutTime) {
-            await StaffAttendanceLog.create({
-              staff_id: checkin.staff_id,
-              shift_id: checkin.shift_id,
-              location_id: checkin.location_id,
-              cluster_id: checkin.cluster_id,
-              action: "CHECKOUT",
-              work_date: checkin.work_date,
-              created_at: autoCheckoutTime // Record it as checked out exactly at the threshold
-            });
-            checkedOutCount++;
-          }
-        } catch (err) {
-          console.error(`[StaffAttendance] Error processing auto-checkout for log ${checkin.id}:`, err);
-        }
-      }
-
-      if (checkedOutCount > 0) {
-        console.log(`[StaffAttendance] Auto-checked out ${checkedOutCount} ghost sessions.`);
-      }
-    } catch (error) {
-      console.error("[StaffAttendance] Failed to run ghost session cleanup:", error);
-    }
+    // Feature disabled as per user request to avoid accidental checkouts
+    console.log("[StaffAttendance] Auto-checkout feature is currently disabled.");
+    return;
   }
 }
 
