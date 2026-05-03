@@ -1,7 +1,7 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
-const cleaningPhotoSchema = new mongoose.Schema(
+const incidentMediaSchema = new mongoose.Schema(
   {
     id: {
       type: String,
@@ -9,31 +9,31 @@ const cleaningPhotoSchema = new mongoose.Schema(
       unique: true,
       required: true,
     },
-    cleaning_task_id: {
+    incident_id: {
       type: String,
-      required: [true, "cleaning_task_id is required"],
-      ref: "CleaningTask",
+      required: [true, "incident_id is required"],
+      ref: "Incident",
       index: true,
     },
-    photo_url: {
+    media_url: {
       type: String,
-      required: [true, "photo_url is required"],
+      required: [true, "media_url is required"],
       trim: true,
     },
-    photo_public_id: {
+    media_public_id: {
       type: String,
       default: null,
       trim: true,
       index: true,
     },
-    type: {
+    file_type: {
       type: String,
       required: true,
+      default: "IMAGE",
       enum: {
-        values: ["BEFORE", "AFTER"],
-        message: "{VALUE} is not a valid type",
+        values: ["IMAGE", "VIDEO"],
+        message: "{VALUE} is not a valid file_type",
       },
-      index: true,
     },
   },
   {
@@ -41,6 +41,6 @@ const cleaningPhotoSchema = new mongoose.Schema(
   }
 );
 
-cleaningPhotoSchema.index({ cleaning_task_id: 1, created_at: -1 });
+incidentMediaSchema.index({ incident_id: 1, created_at: -1 });
 
-module.exports = mongoose.model("CleaningPhoto", cleaningPhotoSchema);
+module.exports = mongoose.model("IncidentMedia", incidentMediaSchema);

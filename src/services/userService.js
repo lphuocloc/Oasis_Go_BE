@@ -35,6 +35,49 @@ class UserService {
       createdAt: 1,
     }).lean();
   }
+
+  async createUser(userData) {
+    const { email, password, name, phone, role } = userData;
+
+    // Check if user exists
+    const existingUser = await User.findOne({ email });
+    if (existingUser) {
+      const error = new Error("Người dùng với email này đã tồn tại");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    const user = new User({
+      email,
+      password,
+      name,
+      phone,
+      role: this.normalizeRole(role),
+      isActive: true,
+      authProvider: "local",
+    });
+
+    await user.save();
+    return user;
+  }
+
+  async updateUser(userId, updateData) {
+    const user = await User.findOne({ id: userId });
+    if (!user) {
+      const error = new Error("Không tìm thấy người dùng");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    if (updateData.name) user.name = updateData.name;
+    if (updateData.phone) user.phone = updateData.phone;
+    if (updateData.role) user.role = this.normalizeRole(updateData.role);
+    if (updateData.isActive !== undefined) user.isActive = updateData.isActive;
+    if (updateData.password) user.password = updateData.password;
+
+    await user.save();
+    return user;
+  }
 }
 
 module.exports = new UserService();

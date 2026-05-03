@@ -12,6 +12,19 @@ const OPEN_INCIDENT_STATUSES = ["PENDING", "INVESTIGATING"];
 const SUCCESS_PAYMENT_STATUSES = ["SUCCESS"];
 const SUCCESS_ORDER_STATUSES = ["PAID"];
 
+const nonRevenueStatuses = new Set(["CANCELLED", "FAILED", "EXPIRED"]);
+
+const normalizeStatus = (status) => {
+  if (!status) return "UNKNOWN";
+  return String(status).trim().toUpperCase();
+};
+
+const getBookingAmount = (booking) => {
+  const raw = booking.total_price != null ? booking.total_price : booking.base_price;
+  const amount = Number(raw || 0);
+  return Number.isFinite(amount) ? amount : 0;
+};
+
 const toDateOrNull = (value) => {
   if (!value) return null;
   const d = new Date(value);
@@ -34,6 +47,35 @@ const getDateRange = (fromInput, toInput) => {
   const from = toDateOrNull(fromInput) || defaults.from;
   const to = toDateOrNull(toInput) || defaults.to;
   return { from, to };
+};
+
+const getPreviousPeriod = (from, to) => {
+  const diffMs = to.getTime() - from.getTime();
+  const diffDays = diffMs / (1000 * 60 * 60 * 24);
+
+  const prevFrom = new Date(from);
+  const prevTo = new Date(to);
+
+  if (diffDays <= 1.1) {
+    // Trường hợp "Hôm nay" -> lùi 1 ngày
+    prevFrom.setDate(prevFrom.getDate() - 1);
+    prevTo.setDate(prevTo.getDate() - 1);
+  } else if (diffDays > 1.1 && diffDays <= 7.1) {
+    // Trường hợp "Tuần này" -> lùi 1 tuần
+    prevFrom.setDate(prevFrom.getDate() - 7);
+    prevTo.setDate(prevTo.getDate() - 7);
+  } else {
+    // Trường hợp "Tháng này" hoặc dài hơn -> lùi đúng 1 tháng (MTD)
+    prevFrom.setMonth(prevFrom.getMonth() - 1);
+    prevTo.setMonth(prevTo.getMonth() - 1);
+  }
+
+  return { from: prevFrom, to: prevTo };
+};
+
+const calculateGrowth = (current, previous) => {
+  if (previous === 0 || !previous) return current > 0 ? 100 : 0;
+  return Number((((current - previous) / previous) * 100).toFixed(2));
 };
 
 const isValidRange = (range) =>
@@ -135,13 +177,30 @@ exports.getDashboard = async (req, res) => {
     }
     const incidentFilters = {};
 
-    const [podsRaw, bookingsResult, incidentsRaw, clustersTotalRaw, ordersRaw] = await Promise.all([
+    const prevRange = getPreviousPeriod(rangeFrom, rangeTo);
+
+    const [podsRaw, bookingsResult, incidentsRaw, clustersTotalRaw, ordersRaw, prevBookingsRaw, prevOrdersRaw] = await Promise.all([
       podService.getAllPods(podFilters),
       bookingService.getAllBookings(bookingFilters),
       incidentService.getIncidents(incidentFilters),
       PodCluster.countDocuments({}),
       BookingOrder.find({ createdAt: { $gte: rangeFrom, $lte: rangeTo } }).lean(),
+      bookingService.getAllBookings({
+        ...bookingFilters,
+        start_date: prevRange.from,
+        end_date: prevRange.to,
+      }),
+      BookingOrder.find({ createdAt: { $gte: prevRange.from, $lte: prevRange.to } }).lean(),
     ]);
+
+    const prevBookings = isManager
+      ? (prevBookingsRaw?.bookings || []).filter((b) => scopedPodIds.has(String(b.pod_id)))
+      : (prevBookingsRaw?.bookings || []);
+    
+    const prevOrders = prevOrdersRaw.filter((o) => ["PAID", "PENDING"].includes(normalizeStatus(o.status)));
+    const prevRevenueInRange = prevBookings
+      .filter((b) => !nonRevenueStatuses.has(normalizeStatus(b.status)))
+      .reduce((sum, b) => sum + getBookingAmount(b), 0);
 
     const pods = isManager
       ? podsRaw.filter((pod) => scopedPodIds.has(String(pod.id)))
@@ -170,17 +229,6 @@ exports.getDashboard = async (req, res) => {
     const clustersTotal = isManager
       ? scopedClusterIds.size
       : clustersTotalRaw;
-
-    const normalizeStatus = (status) => {
-      if (!status) return "UNKNOWN";
-      return String(status).trim().toUpperCase();
-    };
-
-    const getBookingAmount = (booking) => {
-      const raw = booking.total_price != null ? booking.total_price : booking.base_price;
-      const amount = Number(raw || 0);
-      return Number.isFinite(amount) ? amount : 0;
-    };
 
     const bookingStatusCounts = countByField(
       bookings.map((booking) => ({
@@ -211,7 +259,6 @@ exports.getDashboard = async (req, res) => {
       rate: Number(((item.count / podStatusDenominator) * 100).toFixed(2)),
     }));
 
-    const nonRevenueStatuses = new Set(["CANCELLED", "FAILED", "EXPIRED"]);
     const billableBookings = bookings.filter(
       (booking) => !nonRevenueStatuses.has(normalizeStatus(booking.status))
     );
@@ -281,6 +328,11 @@ exports.getDashboard = async (req, res) => {
       incidentsTotal: incidents.length,
       openIncidents,
       revenueInRange: Number(revenueInRange.toFixed(2)),
+      comparison: {
+        bookingsChange: calculateGrowth(bookings.length, prevBookings.length),
+        ordersChange: calculateGrowth(ordersInRange, prevOrders.length),
+        revenueChange: calculateGrowth(revenueInRange, prevRevenueInRange),
+      },
     };
 
     return res.status(200).json({
@@ -326,11 +378,11 @@ exports.getDashboard = async (req, res) => {
     });
   }
 };
-
 exports.getAdminStats = async (req, res) => {
   try {
     const { from, to } = req.query;
     const range = getDateRange(from, to);
+    const prevRange = getPreviousPeriod(range.from, range.to);
 
     const [
       totalUsers,
@@ -348,6 +400,9 @@ exports.getAdminStats = async (req, res) => {
       allClusters,
       allPods,
       periodBookings,
+      prevNewUsersInPeriod,
+      prevPeriodRevenueAgg,
+      hiddenReviewsCount,
     ] = await Promise.all([
       User.countDocuments({}),
       User.countDocuments({ isActive: true }),
@@ -405,6 +460,17 @@ exports.getAdminStats = async (req, res) => {
       Booking.find({ start_time: { $gte: range.from, $lte: range.to } })
         .select("id pod_id total_price status")
         .lean(),
+      User.countDocuments({ createdAt: { $gte: prevRange.from, $lte: prevRange.to } }),
+      Transaction.aggregate([
+        {
+          $match: {
+            created_at: { $gte: prevRange.from, $lte: prevRange.to },
+            type: "CHARGE",
+            status: { $in: SUCCESS_PAYMENT_STATUSES },
+          },
+        },
+        { $group: { _id: null, total: { $sum: "$amount" } } },
+      ]),
     ]);
 
     const clusterIdsByLocation = new Map();
@@ -474,7 +540,7 @@ exports.getAdminStats = async (req, res) => {
 
       const [
         reviewTotal,
-        reviewPending,
+        reviewHidden,
         reviewAvgAgg,
         reviewDistAgg,
         latestReviewsRaw,
@@ -482,10 +548,14 @@ exports.getAdminStats = async (req, res) => {
         reviewsCol.countDocuments({}),
         reviewsCol.countDocuments({ is_rejected: { $in: [true, "true"] } }),
         reviewsCol
-          .aggregate([{ $group: { _id: null, avg: { $avg: "$rating" } } }])
+          .aggregate([
+            { $match: { rating: { $ne: null }, is_rejected: { $nin: [true, "true"] } } },
+            { $group: { _id: null, avg: { $avg: "$rating" } } }
+          ])
           .toArray(),
         reviewsCol
           .aggregate([
+            { $match: { rating: { $ne: null }, is_rejected: { $nin: [true, "true"] } } },
             { $group: { _id: "$rating", count: { $sum: 1 } } },
             { $project: { _id: 0, rating: "$_id", count: 1 } },
             { $sort: { rating: 1 } },
@@ -510,7 +580,7 @@ exports.getAdminStats = async (req, res) => {
 
       reviews = {
         total: reviewTotal,
-        pendingModeration: reviewPending,
+        totalHidden: reviewHidden,
         averageRating: reviewAvgAgg[0] ? Number(reviewAvgAgg[0].avg || 0) : 0,
         ratingDistribution: reviewDistAgg,
         latest: latestReviewsRaw.map((r) => {
@@ -598,12 +668,21 @@ exports.getAdminStats = async (req, res) => {
             status: p.status,
             created_at: p.created_at,
           })),
+          comparison: {
+            revenueChange: calculateGrowth(
+              periodRevenueAgg[0] ? periodRevenueAgg[0].total : 0,
+              prevPeriodRevenueAgg[0] ? prevPeriodRevenueAgg[0].total : 0
+            ),
+          },
         },
         users: {
           total: totalUsers,
           active: activeUsers,
           newInPeriod: newUsersInPeriod,
           byRole: usersByRole,
+          comparison: {
+            newUsersChange: calculateGrowth(newUsersInPeriod, prevNewUsersInPeriod),
+          },
         },
         locations,
         reviews,

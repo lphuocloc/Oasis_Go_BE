@@ -1,30 +1,6 @@
 const mongoose = require("mongoose");
 const { v4: uuidv4 } = require("uuid");
 
-const depositSettlementSnapshotSchema = new mongoose.Schema(
-  {
-    settled_at: { type: Date, default: null },
-    trigger: { type: String, default: null, trim: true },
-    total_resolved_incident_damage: { type: Number, default: 0, min: 0 },
-    deposit_used: { type: Number, default: 0, min: 0 },
-    refunded_to_wallet_amount: { type: Number, default: 0, min: 0 },
-    wallet_debit_amount: { type: Number, default: 0, min: 0 },
-    outstanding_amount: { type: Number, default: 0, min: 0 },
-    incident_breakdown: {
-      type: [
-        {
-          incident_id: { type: String, required: true },
-          booking_id: { type: String, default: null },
-          amount: { type: Number, default: 0, min: 0 },
-          status: { type: String, default: null },
-        },
-      ],
-      default: [],
-    },
-  },
-  { _id: false },
-);
-
 const bookingOrderSchema = new mongoose.Schema(
   {
     id: {
@@ -55,52 +31,25 @@ const bookingOrderSchema = new mongoose.Schema(
       required: [true, "Final total price is required"],
       min: [0, "Final total price cannot be negative"],
     },
-    deposit_original_total: {
-      type: Number,
-      default: 0,
-      min: [0, "Deposit original total cannot be negative"],
-    },
-    deposit_discount: {
-      type: Number,
-      default: 0,
-      min: [0, "Deposit discount cannot be negative"],
-    },
-    deposit_total: {
-      type: Number,
-      default: 0,
-      min: [0, "Deposit total cannot be negative"],
-    },
     payable_total_price: {
       type: Number,
       required: [true, "Payable total price is required"],
       min: [0, "Payable total price cannot be negative"],
       default: 0,
     },
-    deposit_settlement_status: {
-      type: String,
-      enum: {
-        values: [
-          "PENDING_INSPECTION",
-          "REFUNDED",
-          "PARTIALLY_FORFEITED",
-          "FORFEITED",
-        ],
-        message: "{VALUE} is not a valid deposit settlement status",
-      },
-      default: "PENDING_INSPECTION",
-    },
     outstanding_damage_amount: {
       type: Number,
       default: 0,
       min: [0, "Outstanding damage amount cannot be negative"],
     },
-    deposit_settled_at: {
-      type: Date,
-      default: null,
-    },
-    deposit_settlement_snapshot: {
-      type: depositSettlementSnapshotSchema,
-      default: null,
+    damage_payment_status: {
+      type: String,
+      enum: {
+        values: ["NO_INCIDENT", "PENDING", "PAID"],
+        message: "{VALUE} is not a valid damage payment status",
+      },
+      default: "NO_INCIDENT",
+      index: true,
     },
     status: {
       type: String,
@@ -159,15 +108,12 @@ bookingOrderSchema.pre("save", async function () {
     );
   }
 
-  // Keep payable_total_price in sync with rental + deposit
+  // Keep payable_total_price in sync with final_total_price
   if (
     !this.isModified("payable_total_price") &&
-    (this.isModified("final_total_price") || this.isModified("deposit_total"))
+    this.isModified("final_total_price")
   ) {
-    this.payable_total_price = Math.max(
-      0,
-      (this.final_total_price || 0) + (this.deposit_total || 0),
-    );
+    this.payable_total_price = Math.max(0, this.final_total_price || 0);
   }
 });
 
@@ -181,10 +127,7 @@ bookingOrderSchema.methods.calculateTotal = function () {
 };
 
 bookingOrderSchema.methods.calculatePayableTotal = function () {
-  this.payable_total_price = Math.max(
-    0,
-    (this.final_total_price || 0) + (this.deposit_total || 0),
-  );
+  this.payable_total_price = Math.max(0, this.final_total_price || 0);
   return this.payable_total_price;
 };
 

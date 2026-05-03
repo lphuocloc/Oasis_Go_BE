@@ -160,6 +160,23 @@ class ReviewService {
   }
 
   /**
+   * Restore (un-hide) a review
+   */
+  async restoreReview(reviewId) {
+    const review = await Review.findOne({ id: reviewId });
+    if (!review) {
+      const error = new Error("Review not found");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    review.is_rejected = false;
+    review.moderated_at = null;
+    await review.save();
+    return review;
+  }
+
+  /**
    * Get reviews by cluster (paginated)
    */
   async getReviewsByCluster(clusterId, { page = 1, limit = 10 } = {}) {
@@ -181,22 +198,28 @@ class ReviewService {
   }
 
   /**
-   * Get pending reviews (not submitted, only created)
+   * Get all reviews for admin moderation (submitted reviews)
    */
-  async getPendingReviews({ page = 1, limit = 10 } = {}) {
+  async getAdminAllReviews({ page = 1, limit = 10, status = "active" } = {}) {
     const skip = (page - 1) * limit;
 
-    const filter = {
-      rating: null,
-      is_rejected: false,
-    };
+    let filter = {};
+    if (status === "hidden") {
+      filter = { is_rejected: { $in: [true, "true"] } };
+    } else {
+      // Active: submitted (rating != null) and not rejected
+      filter = { 
+        is_rejected: { $nin: [true, "true"] }, 
+        rating: { $ne: null } 
+      };
+    }
 
     const [reviews, total] = await Promise.all([
       Review.find(filter)
         .sort({ created_at: -1 })
         .skip(skip)
         .limit(limit)
-        .populate("user", "name")
+        .populate("user", "name avatar")
         .populate("cluster", "name")
         .lean(),
       Review.countDocuments(filter),
@@ -214,33 +237,56 @@ class ReviewService {
   }
 
   /**
-   * Get rejected reviews (paginated)
+   * Get global review statistics
    */
-  async getRejectedReviews({ page = 1, limit = 10 } = {}) {
-    const skip = (page - 1) * limit;
-
-    const filter = { is_rejected: true };
-
-    const [reviews, total] = await Promise.all([
-      Review.find(filter)
-        .sort({ moderated_at: -1 })
-        .skip(skip)
-        .limit(limit)
-        .populate("user", "name")
-        .populate("cluster", "name")
-        .lean(),
-      Review.countDocuments(filter),
+  async getGlobalStats() {
+    const stats = await Review.aggregate([
+      {
+        $match: {
+          rating: { $ne: null },
+          is_rejected: { $nin: [true, "true"] },
+        },
+      },
+      {
+        $group: {
+          _id: null,
+          avgRating: { $avg: "$rating" },
+          totalReviews: { $sum: 1 },
+          satisfiedCount: {
+            $sum: {
+              $cond: [{ $gte: ["$rating", 4] }, 1, 0],
+            },
+          },
+        },
+      },
+      {
+        $project: {
+          _id: 0,
+          avgRating: { $round: ["$avgRating", 1] },
+          totalReviews: 1,
+          satisfactionRate: {
+            $cond: [
+              { $gt: ["$totalReviews", 0] },
+              {
+                $multiply: [
+                  { $divide: ["$satisfiedCount", "$totalReviews"] },
+                  100,
+                ],
+              },
+              0,
+            ],
+          },
+        },
+      },
     ]);
 
-    return {
-      data: reviews,
-      pagination: {
-        page,
-        limit,
-        total,
-        pages: Math.ceil(total / limit),
-      },
-    };
+    const result = stats[0] || { avgRating: 0, totalReviews: 0, satisfactionRate: 0 };
+    result.satisfactionRate = Math.round(result.satisfactionRate);
+
+    // Also get count of hidden reviews
+    result.hiddenReviews = await Review.countDocuments({ is_rejected: { $in: [true, "true"] } });
+
+    return result;
   }
 }
 

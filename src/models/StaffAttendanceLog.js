@@ -15,10 +15,22 @@ const staffAttendanceLogSchema = new mongoose.Schema(
 			ref: "User",
 			index: true,
 		},
-		shift_assignment_id: {
+		shift_id: {
 			type: String,
-			required: [true, "Shift assignment ID is required"],
-			ref: "StaffShiftAssignment",
+			default: null,
+			ref: "StaffShift",
+			index: true,
+		},
+		location_id: {
+			type: String,
+			default: null,
+			ref: "Location",
+			index: true,
+		},
+		cluster_id: {
+			type: String,
+			default: null,
+			ref: "PodCluster",
 			index: true,
 		},
 		work_date: {
@@ -41,22 +53,36 @@ const staffAttendanceLogSchema = new mongoose.Schema(
 	}
 );
 
-staffAttendanceLogSchema.index({ shift_assignment_id: 1, created_at: 1 });
+staffAttendanceLogSchema.index({ staff_id: 1, shift_id: 1, created_at: 1 });
 staffAttendanceLogSchema.index(
-	{ shift_assignment_id: 1, work_date: 1, action: 1 },
+	{ staff_id: 1, shift_id: 1, work_date: 1, action: 1 },
 	{ unique: true, sparse: true }
 );
 
 staffAttendanceLogSchema.virtual("staff", {
 	ref: "User",
 	localField: "staff_id",
+	foreignField: "_id",
+	justOne: true,
+});
+
+staffAttendanceLogSchema.virtual("shift", {
+	ref: "StaffShift",
+	localField: "shift_id",
 	foreignField: "id",
 	justOne: true,
 });
 
-staffAttendanceLogSchema.virtual("shiftAssignment", {
-	ref: "StaffShiftAssignment",
-	localField: "shift_assignment_id",
+staffAttendanceLogSchema.virtual("location", {
+	ref: "Location",
+	localField: "location_id",
+	foreignField: "id",
+	justOne: true,
+});
+
+staffAttendanceLogSchema.virtual("cluster", {
+	ref: "PodCluster",
+	localField: "cluster_id",
 	foreignField: "id",
 	justOne: true,
 });

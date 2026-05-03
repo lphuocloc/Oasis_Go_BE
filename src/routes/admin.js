@@ -3,6 +3,7 @@ const router = express.Router();
 const { protect, authorize } = require("../middlewares/authMiddleware");
 const dashboardController = require("../controllers/DashboardController");
 const userController = require("../controllers/userController");
+const adminLedgerController = require("../controllers/adminLedgerController");
 
 /**
  * @swagger
@@ -161,5 +162,63 @@ router.get("/dashboard/summary-cards", protect, authorize("admin"), dashboardCon
  *         description: List of users retrieved successfully
  */
 router.get("/users", protect, authorize("admin", "manager"), userController.getActiveUsers);
+
+/**
+ * @swagger
+ * /api/admin/users:
+ *   post:
+ *     summary: Create a new user (staff)
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.post("/users", protect, authorize("admin"), userController.createUser);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}:
+ *   put:
+ *     summary: Update an existing user
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ */
+router.put("/users/:id", protect, authorize("admin"), userController.updateUser);
+
+/**
+ * @swagger
+ * /api/admin/ledger:
+ *   get:
+ *     summary: Get admin escrow ledger entries
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Admin ledger entries fetched successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+router.get("/ledger", protect, authorize("admin"), adminLedgerController.getLedgerEntries);
+
+/**
+ * @swagger
+ * /api/admin/ledger/summary:
+ *   get:
+ *     summary: Get admin escrow ledger summary
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: Admin ledger summary fetched successfully
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ */
+router.get("/ledger/summary", protect, authorize("admin"), adminLedgerController.getLedgerSummary);
 
 module.exports = router;

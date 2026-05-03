@@ -27,41 +27,78 @@ const uploadPodClusterImage = multer({
   },
 });
 
-const cleaningTaskPhotoStorage = new CloudinaryStorage({
+const cleaningTaskMediaStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: {
-    folder: "oasisgo/cleaning-tasks",
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [{ width: 1600, height: 1600, crop: "limit" }],
+  params: (req, file) => {
+    const isVideo = String(file.mimetype || "").toLowerCase().startsWith("video/");
+    return {
+      folder: "oasisgo/cleaning-tasks",
+      resource_type: isVideo ? "video" : "image",
+      allowed_formats: isVideo
+        ? ["mp4", "mov", "avi", "webm", "mkv"]
+        : ["jpg", "jpeg", "png", "webp"],
+      ...(isVideo ? {} : { transformation: [{ width: 1600, height: 1600, crop: "limit" }] }),
+    };
   },
 });
 
-const uploadCleaningTaskPhoto = multer({
-  storage: cleaningTaskPhotoStorage,
+const uploadCleaningTaskMedia = multer({
+  storage: cleaningTaskMediaStorage,
   limits: {
-    fileSize: 8 * 1024 * 1024, // 8MB
+    fileSize: 100 * 1024 * 1024, // 100MB to support video
   },
 });
 
-const incidentPhotoStorage = new CloudinaryStorage({
+const lostFoundMediaStorage = new CloudinaryStorage({
   cloudinary: cloudinary,
-  params: {
-    folder: "oasisgo/incidents",
-    allowed_formats: ["jpg", "jpeg", "png", "webp"],
-    transformation: [{ width: 1600, height: 1600, crop: "limit" }],
+  params: (req, file) => {
+    const isVideo = String(file.mimetype || "").toLowerCase().startsWith("video/");
+    return {
+      folder: "oasisgo/lost-found-media",
+      resource_type: isVideo ? "video" : "image",
+      allowed_formats: isVideo
+        ? ["mp4", "mov", "avi", "webm", "mkv"]
+        : ["jpg", "jpeg", "png", "webp"],
+      ...(isVideo ? {} : { transformation: [{ width: 1600, height: 1600, crop: "limit" }] }),
+    };
   },
 });
 
-const uploadIncidentPhoto = multer({
-  storage: incidentPhotoStorage,
+const uploadLostFoundMedia = multer({
+  storage: lostFoundMediaStorage,
   limits: {
-    fileSize: 8 * 1024 * 1024, // 8MB
+    fileSize: 100 * 1024 * 1024, // 100MB to support video
+  },
+});
+
+const incidentMediaStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: (req, file) => {
+    const isVideo = String(file.mimetype || "").toLowerCase().startsWith("video/");
+    return {
+      folder: "oasisgo/incidents",
+      resource_type: isVideo ? "video" : "image",
+      allowed_formats: isVideo
+        ? ["mp4", "mov", "avi", "webm", "mkv"]
+        : ["jpg", "jpeg", "png", "webp"],
+      ...(isVideo ? {} : { transformation: [{ width: 1600, height: 1600, crop: "limit" }] }),
+    };
+  },
+});
+
+const uploadIncidentMedia = multer({
+  storage: incidentMediaStorage,
+  limits: {
+    fileSize: 100 * 1024 * 1024, // 100MB to support video
   },
 });
 
 module.exports = {
   cloudinary,
   uploadPodClusterImage,
-  uploadCleaningTaskPhoto,
-  uploadIncidentPhoto,
+  uploadCleaningTaskMedia,
+  uploadCleaningTaskPhoto: uploadCleaningTaskMedia, // backward-compat alias
+  uploadLostFoundMedia,
+  uploadIncidentMedia,
+  uploadIncidentPhoto: uploadIncidentMedia, // backward-compat alias
 };

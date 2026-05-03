@@ -1,146 +1,186 @@
 const express = require("express");
 const router = express.Router();
-const multer = require("multer");
 const { protect, authorize } = require("../middlewares/authMiddleware");
+const { uploadIncidentMedia } = require("../config/cloudinary");
 const {
-  createLostFoundItem,
+  reportFoundItem,
+  storeToWarehouse,
+  submitLostItemRequest,
+  confirmMatch,
+  rejectLostItemRequest,
+  generateHandoverOTP,
+  confirmHandover,
   getLostFoundItems,
-  getMyLostFoundItems,
   getLostFoundItemById,
-  updateLostFoundStatus,
+  getLostItemRequests,
+  getLostItemRequestById,
 } = require("../controllers/lostFoundController");
-
-const uploadLostFoundPhotoInMemory = multer({
-  storage: multer.memoryStorage(),
-  limits: { fileSize: 8 * 1024 * 1024 }, // 8MB
-});
-
-const handleLostFoundPhotoUpload = (req, res, next) => {
-  uploadLostFoundPhotoInMemory.fields([
-    { name: "photo", maxCount: 1 },
-    { name: "image", maxCount: 1 },
-  ])(req, res, (error) => {
-    if (!error) return next();
-    const isMulterError = error && error.name === "MulterError";
-    const statusCode = isMulterError ? 400 : 500;
-    return res.status(statusCode).json({
-      success: false,
-      message: isMulterError ? error.message : "File upload error",
-    });
-  });
-};
 
 /**
  * @swagger
  * tags:
  *   name: Lost Found
- *   description: Found-item workflow independent from incident reporting
+ *   description: Lost & Found Management APIs
  */
+
+// ─── Lấy danh sách Requests (User / Manager) ──────────────────────
 
 /**
  * @swagger
- * components:
- *   schemas:
- *     LostFoundItem:
- *       type: object
- *       properties:
- *         id:
+ * /api/lost-found-items/requests:
+ *   get:
+ *     summary: Get lost item requests
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: status
+ *         schema:
  *           type: string
- *           example: 9c9f1555-f20f-4e1d-b597-c8f6f421648d
- *         pod_id:
+ *           enum: [PENDING, MATCHED, CLOSED, REJECTED]
+ *       - in: query
+ *         name: user_id
+ *         schema:
  *           type: string
- *           nullable: true
- *           example: 8f1a7c3f-9d42-4418-aa0f-f129eb0e2b8d
- *         booking_id:
- *           type: string
- *           nullable: true
- *           example: 98484f31-7549-42fd-8df8-a692bd3da3a4
- *         found_by_user_id:
- *           type: string
- *           example: 87098f0d-a69a-466f-b9c4-9e44383d5882
- *         warehouse_id:
- *           type: string
- *           nullable: true
- *           example: d4e5f6a7-b8c9-4d0e-a1b2-c3d4e5f6a7b8
- *         item_name:
- *           type: string
- *           example: iPhone 14 Pro
- *         description:
- *           type: string
- *           nullable: true
- *           example: Black color phone found under seat
- *         photo_url:
- *           type: string
- *           nullable: true
- *           example: https://res.cloudinary.com/oasisgo/lost-found/item.jpg
- *         found_at:
- *           type: string
- *           format: date-time
- *         status:
- *           type: string
- *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
- *           example: FOUND
- *         claimed_by_user_id:
- *           type: string
- *           nullable: true
- *         claimed_at:
- *           type: string
- *           format: date-time
- *           nullable: true
- *         created_at:
- *           type: string
- *           format: date-time
- *         updated_at:
- *           type: string
- *           format: date-time
- *
- *     LostFoundCreateInput:
- *       type: object
- *       required:
- *         - item_name
- *       properties:
- *         pod_id:
- *           type: string
- *           nullable: true
- *           example: 8f1a7c3f-9d42-4418-aa0f-f129eb0e2b8d
- *         booking_id:
- *           type: string
- *           nullable: true
- *           example: 98484f31-7549-42fd-8df8-a692bd3da3a4
- *         warehouse_id:
- *           type: string
- *           nullable: true
- *           description: Kho cơ sở nơi lưu giữ đồ vật
- *           example: d4e5f6a7-b8c9-4d0e-a1b2-c3d4e5f6a7b8
- *         item_name:
- *           type: string
- *           example: Wallet
- *         description:
- *           type: string
- *           example: Brown leather wallet with card holder
- *         photo:
- *           type: string
- *           format: binary
- *           description: Ảnh thực tế món đồ (multipart/form-data). Nếu không upload file, có thể truyền photo_url hoặc base64 data URI.
- *         photo_url:
- *           type: string
- *           nullable: true
- *           description: URL ảnh trực tiếp hoặc base64 data URI (dùng thay cho field photo)
- *           example: https://res.cloudinary.com/oasisgo/lost-found/item.jpg
- *         found_at:
- *           type: string
- *           format: date-time
- *
- *     LostFoundStatusUpdateInput:
- *       type: object
- *       required:
- *         - status
- *       properties:
- *         status:
- *           type: string
- *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
- *           example: CLAIMED
+ *       - in: query
+ *         name: page
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *       - in: query
+ *         name: limit
+ *         schema:
+ *           type: integer
+ *           minimum: 1
+ *           maximum: 100
+ *     responses:
+ *       200:
+ *         description: Requests retrieved successfully
  */
+router.get("/requests", protect, authorize("admin", "manager", "user"), getLostItemRequests);
+
+// ─── Lấy chi tiết 1 Request ─────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/requests/{id}:
+ *   get:
+ *     summary: Get lost item request detail
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Request retrieved successfully
+ */
+router.get("/requests/:id", protect, authorize("admin", "manager", "user"), getLostItemRequestById);
+
+// ─── Tạo Request tìm đồ (User) ──────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/requests:
+ *   post:
+ *     summary: User submit a lost item request
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - booking_id
+ *               - item_name_reported
+ *             properties:
+ *               booking_id:
+ *                 type: string
+ *               item_name_reported:
+ *                 type: string
+ *               description_reported:
+ *                 type: string
+ *     responses:
+ *       201:
+ *         description: Request submitted successfully
+ */
+router.post("/requests", protect, authorize("user"), submitLostItemRequest);
+
+// ─── Manager xác nhận Match Request ─────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/requests/{id}/match:
+ *   post:
+ *     summary: Manager confirms match for a request
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - found_item_id
+ *             properties:
+ *               found_item_id:
+ *                 type: string
+ *               manager_note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Matched successfully
+ */
+router.post("/requests/:id/match", protect, authorize("admin", "manager"), confirmMatch);
+
+// ─── Manager từ chối Request ────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/requests/{id}/reject:
+ *   post:
+ *     summary: Manager rejects a request
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               manager_note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Rejected successfully
+ */
+router.post("/requests/:id/reject", protect, authorize("admin", "manager"), rejectLostItemRequest);
+
+// ─── Lấy danh sách LostFoundItems (Manager/Cleaner) ───────────────
 
 /**
  * @swagger
@@ -164,57 +204,61 @@ const handleLostFoundPhotoUpload = (req, res, next) => {
  *         schema:
  *           type: string
  *       - in: query
+ *         name: warehouse_id
+ *         schema:
+ *           type: string
+ *       - in: query
+ *         name: serial_number
+ *         schema:
+ *           type: string
+ *       - in: query
  *         name: status
  *         schema:
  *           type: string
- *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
+ *           enum: [FOUND, IN_STORAGE, CLAIM_PENDING, RETURNED, DISPOSED]
  *       - in: query
  *         name: page
  *         schema:
  *           type: integer
- *           minimum: 1
  *       - in: query
  *         name: limit
  *         schema:
  *           type: integer
- *           minimum: 1
- *           maximum: 100
  *     responses:
  *       200:
  *         description: Lost & found items retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: integer
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/LostFoundItem'
- *                 pagination:
- *                   type: object
- *                   nullable: true
- *                   properties:
- *                     current_page:
- *                       type: integer
- *                     total_pages:
- *                       type: integer
- *                     total_items:
- *                       type: integer
- *                     items_per_page:
- *                       type: integer
  */
 router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundItems);
+
+// ─── Lấy chi tiết 1 LostFoundItem ───────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/{id}:
+ *   get:
+ *     summary: Get lost & found item detail
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: Item retrieved successfully
+ */
+router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getLostFoundItemById);
+
+// ─── Báo cáo tìm đồ (Cleaner) ───────────────────────────────────────
 
 /**
  * @swagger
  * /api/lost-found-items:
  *   post:
- *     summary: Báo cáo đồ thất lạc tìm được (Cleaner/Manager/Admin)
+ *     summary: Báo cáo đồ thất lạc (Cleaner/Manager)
  *     tags: [Lost Found]
  *     security:
  *       - bearerAuth: []
@@ -223,126 +267,44 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundI
  *       content:
  *         multipart/form-data:
  *           schema:
- *             $ref: '#/components/schemas/LostFoundCreateInput'
- *         application/json:
- *           schema:
- *             $ref: '#/components/schemas/LostFoundCreateInput'
+ *             type: object
+ *             required:
+ *               - pod_id
+ *               - item_name
+ *             properties:
+ *               pod_id:
+ *                 type: string
+ *               item_name:
+ *                 type: string
+ *               description:
+ *                 type: string
+ *               found_at:
+ *                 type: string
+ *                 format: date-time
+ *               media:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                   format: binary
  *     responses:
  *       201:
- *         description: Tạo lost & found item thành công
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 message:
- *                   type: string
- *                 data:
- *                   $ref: '#/components/schemas/LostFoundItem'
- *       400:
- *         description: Thiếu thông tin bắt buộc hoặc ảnh không hợp lệ
- *       404:
- *         description: Pod không tồn tại
- *       413:
- *         description: Ảnh vượt quá giới hạn 8MB
+ *         description: Item reported successfully
  */
-router.post("/", protect, authorize("admin", "manager", "cleaner"), handleLostFoundPhotoUpload, createLostFoundItem);
+router.post(
+  "/",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  uploadIncidentMedia.array("media", 5),
+  reportFoundItem
+);
+
+// ─── Manager Cất đồ vào kho ─────────────────────────────────────────
 
 /**
  * @swagger
- * /api/lost-found-items/my:
- *   get:
- *     summary: Lấy danh sách đồ thất lạc do tôi tìm thấy
- *     description: Trả về tất cả các món đồ mà người dùng đang đăng nhập đã báo cáo tìm thấy. Hỗ trợ filter theo status và phân trang.
- *     tags: [Lost Found]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: query
- *         name: status
- *         schema:
- *           type: string
- *           enum: [FOUND, CLAIMED, DISPOSED, RETURNED_TO_USER]
- *       - in: query
- *         name: page
- *         schema:
- *           type: integer
- *           minimum: 1
- *       - in: query
- *         name: limit
- *         schema:
- *           type: integer
- *           minimum: 1
- *           maximum: 100
- *     responses:
- *       200:
- *         description: Danh sách đồ tìm thấy của tôi
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 count:
- *                   type: integer
- *                 data:
- *                   type: array
- *                   items:
- *                     $ref: '#/components/schemas/LostFoundItem'
- *                 pagination:
- *                   type: object
- *                   nullable: true
- *                   properties:
- *                     current_page:
- *                       type: integer
- *                     total_pages:
- *                       type: integer
- *                     total_items:
- *                       type: integer
- *                     items_per_page:
- *                       type: integer
- */
-router.get("/my", protect, authorize("admin", "manager", "cleaner"), getMyLostFoundItems);
-
-/**
- * @swagger
- * /api/lost-found-items/{id}:
- *   get:
- *     summary: Get lost & found detail by id
- *     tags: [Lost Found]
- *     security:
- *       - bearerAuth: []
- *     parameters:
- *       - in: path
- *         name: id
- *         required: true
- *         schema:
- *           type: string
- *     responses:
- *       200:
- *         description: Lost & found item retrieved successfully
- *         content:
- *           application/json:
- *             schema:
- *               type: object
- *               properties:
- *                 success:
- *                   type: boolean
- *                 data:
- *                   $ref: '#/components/schemas/LostFoundItem'
- *       404:
- *         description: Lost & found item not found
- */
-router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getLostFoundItemById);
-
-/**
- * @swagger
- * /api/lost-found-items/{id}/status:
- *   patch:
- *     summary: Update lost & found status
+ * /api/lost-found-items/{id}/store:
+ *   post:
+ *     summary: Manager stores item to warehouse
  *     tags: [Lost Found]
  *     security:
  *       - bearerAuth: []
@@ -357,13 +319,71 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), getLostFou
  *       content:
  *         application/json:
  *           schema:
- *             $ref: '#/components/schemas/LostFoundStatusUpdateInput'
+ *             type: object
+ *             required:
+ *               - warehouse_id
+ *             properties:
+ *               warehouse_id:
+ *                 type: string
  *     responses:
  *       200:
- *         description: Lost & found status updated successfully
- *       404:
- *         description: Lost & found item not found
+ *         description: Stored successfully
  */
-router.patch("/:id/status", protect, authorize("admin", "manager", "cleaner"), updateLostFoundStatus);
+router.post("/:id/store", protect, authorize("admin", "manager"), storeToWarehouse);
+
+// ─── Manager Tạo OTP Bàn giao ───────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/{id}/generate-otp:
+ *   post:
+ *     summary: Manager generates handover OTP for user
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     responses:
+ *       200:
+ *         description: OTP generated successfully
+ */
+router.post("/:id/generate-otp", protect, authorize("admin", "manager"), generateHandoverOTP);
+
+// ─── Manager Xác nhận Handover bằng OTP ─────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/{id}/handover:
+ *   post:
+ *     summary: Manager confirms handover with OTP
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - otp
+ *             properties:
+ *               otp:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Handover completed successfully
+ */
+router.post("/:id/handover", protect, authorize("admin", "manager"), confirmHandover);
 
 module.exports = router;

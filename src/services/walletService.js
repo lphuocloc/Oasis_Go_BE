@@ -5,6 +5,7 @@ const WalletTransaction = require("../models/WalletTransaction");
 const WithdrawalRequest = require("../models/WithdrawalRequest");
 const User = require("../models/User");
 const notificationService = require("./notificationService");
+const adminLedgerService = require("./adminLedgerService");
 const { generateOTP, sendOTPEmail } = require("../utils/emailService");
 
 const PIN_REGEX = /^\d{6}$/;
@@ -556,7 +557,7 @@ class WalletService {
 
                 createdRequest = createdRequests[0];
 
-                await WalletTransaction.create([
+                const withdrawalHoldTransactions = await WalletTransaction.create([
                     {
                         wallet_id: wallet.id,
                         amount: withdrawalAmount,
@@ -568,6 +569,22 @@ class WalletService {
                         balance_after: balanceAfter,
                     },
                 ], { session });
+
+                await adminLedgerService.createEntry(
+                    {
+                        type: "ESCROW_DEBIT",
+                        amount: withdrawalAmount,
+                        source: "WITHDRAWAL_HOLD",
+                        dedupe_key: `WITHDRAWAL_HOLD:${createdRequest.id}`,
+                        user_id: String(userId),
+                        wallet_id: wallet.id,
+                        withdrawal_request_id: createdRequest.id,
+                        wallet_transaction_id: withdrawalHoldTransactions[0]?.id || null,
+                        reference_id: createdRequest.id,
+                        description: `Withdrawal hold ${createdRequest.id}`,
+                    },
+                    session,
+                );
             });
         } finally {
             session.endSession();
@@ -775,6 +792,23 @@ class WalletService {
                     liveRequest.processed_by = actorId;
                     liveRequest.note = normalizedNote;
                     await liveRequest.save({ session });
+
+                    await adminLedgerService.createEntry(
+                        {
+                            type: "PAYOUT",
+                            amount: Number(liveRequest.amount || 0),
+                            escrow_delta: 0,
+                            source: "WITHDRAWAL_PAYOUT",
+                            dedupe_key: `WITHDRAWAL_PAYOUT:${liveRequest.id}`,
+                            user_id: String(liveRequest.user_id || ""),
+                            wallet_id: liveRequest.wallet_id || null,
+                            withdrawal_request_id: liveRequest.id,
+                            reference_id: liveRequest.id,
+                            description: `Withdrawal payout ${liveRequest.id}`,
+                        },
+                        session,
+                    );
+
                     updatedRequest = liveRequest;
                     return;
                 }
@@ -811,6 +845,23 @@ class WalletService {
                         },
                     ], { session });
                 }
+
+                await adminLedgerService.createEntry(
+                    {
+                        type: "ESCROW_CREDIT",
+                        amount: Number(liveRequest.amount || 0),
+                        source: "WITHDRAWAL_REFUND",
+                        dedupe_key: `WITHDRAWAL_REFUND:${liveRequest.id}`,
+                        user_id: String(liveRequest.user_id || ""),
+                        wallet_id: wallet.id,
+                        withdrawal_request_id: liveRequest.id,
+                        reference_id: liveRequest.id,
+                        description: normalizedAction === "REJECT"
+                            ? `Withdrawal refund (rejected) ${liveRequest.id}`
+                            : `Withdrawal refund (cancelled) ${liveRequest.id}`,
+                    },
+                    session,
+                );
 
                 liveRequest.status = normalizedAction === "REJECT" ? "REJECTED" : "CANCELLED";
                 liveRequest.processed_at = now;
@@ -918,6 +969,21 @@ class WalletService {
                         },
                     ], { session });
                 }
+
+                await adminLedgerService.createEntry(
+                    {
+                        type: "ESCROW_CREDIT",
+                        amount: Number(liveRequest.amount || 0),
+                        source: "WITHDRAWAL_REFUND",
+                        dedupe_key: `WITHDRAWAL_REFUND:${liveRequest.id}`,
+                        user_id: String(liveRequest.user_id || ""),
+                        wallet_id: wallet.id,
+                        withdrawal_request_id: liveRequest.id,
+                        reference_id: liveRequest.id,
+                        description: `Withdrawal refund (cancelled) ${liveRequest.id}`,
+                    },
+                    session,
+                );
 
                 liveRequest.status = "CANCELLED";
                 liveRequest.processed_at = now;

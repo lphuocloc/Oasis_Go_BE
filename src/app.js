@@ -1,4 +1,4 @@
-﻿require("dotenv").config();
+require("dotenv").config();
 
 // Ensure server-side Date operations run in UTC unless explicitly overridden.
 process.env.TZ = process.env.TZ || "Etc/UTC";
@@ -26,7 +26,6 @@ const bookingAutoActivateGraceMinutes = Number(process.env.BOOKING_AUTO_ACTIVATE
 bookingService.startAutoActivateCheckinJob(bookingAutoActivateJobIntervalMinutes, bookingAutoActivateGraceMinutes);
 
 const cleaningTaskService = require("./services/cleaningTaskService");
-const staffShiftAssignmentService = require("./services/staffShiftAssignmentService");
 const debtService = require("./services/debtService");
 if (
   String(
@@ -60,21 +59,21 @@ if (
   );
 }
 
-if (
-  String(process.env.SHIFT_REMINDER_JOB_ENABLED || "true").toLowerCase() ===
-  "true"
-) {
-  staffShiftAssignmentService.startShiftReminderJob(
-    Number(process.env.SHIFT_REMINDER_JOB_INTERVAL_MINUTES || 5),
-    Number(process.env.SHIFT_REMINDER_LEAD_MINUTES || 30),
-  );
-}
 
 if (
   String(process.env.DEBT_AGING_JOB_ENABLED || "true").toLowerCase() === "true"
 ) {
   debtService.startAgingDebtJob(
     Number(process.env.DEBT_AGING_JOB_INTERVAL_HOURS || 24),
+  );
+}
+
+const bookingChecklistService = require("./services/bookingChecklistService");
+if (
+  String(process.env.CHECKLIST_AUTO_ACCEPT_JOB_ENABLED || "true").toLowerCase() === "true"
+) {
+  bookingChecklistService.startAutoAcceptJob(
+    Number(process.env.CHECKLIST_AUTO_ACCEPT_JOB_INTERVAL_MINUTES || 2),
   );
 }
 
@@ -103,12 +102,12 @@ const locationWarehouseRouter = require("./routes/locationWarehouse");
 const inventoryStockRouter = require("./routes/inventoryStock");
 const inventoryActivityLogRouter = require("./routes/inventoryActivityLog");
 const cleaningTaskRouter = require("./routes/cleaningTask");
-const cleaningPhotoRouter = require("./routes/cleaningPhoto");
+const cleaningMediaRouter = require("./routes/cleaningMedia");
 const maintenanceTaskRouter = require("./routes/maintenanceTask");
 const staffShiftRouter = require("./routes/staffShift");
 const locationShiftRouter = require("./routes/locationShift");
 const staffWorkRosterRouter = require("./routes/staffWorkRoster");
-const staffShiftAssignmentRouter = require("./routes/staffShiftAssignment");
+const shiftHandoverRouter = require("./routes/shiftHandover");
 const staffAttendanceLogRouter = require("./routes/staffAttendanceLog");
 const usersRouter = require("./routes/users");
 const incidentRouter = require("./routes/incident");
@@ -118,7 +117,7 @@ const reviewRouter = require("./routes/review");
 const notificationRouter = require("./routes/notification");
 const cleaningBufferPolicyRouter = require("./routes/cleaningBufferPolicy");
 const walletRouter = require("./routes/wallet");
-const depositPolicyRouter = require("./routes/depositPolicy");
+
 const voucherRouter = require("./routes/voucher");
 const bookingVoucherRouter = require("./routes/bookingVoucher");
 const pricingRuleRouter = require("./routes/pricingRule");
@@ -203,12 +202,12 @@ app.use("/api/location-warehouses", locationWarehouseRouter);
 app.use("/api/inventory-stocks", inventoryStockRouter);
 app.use("/api/inventory-activity-logs", inventoryActivityLogRouter);
 app.use("/api/cleaning-tasks", cleaningTaskRouter);
-app.use("/api/cleaning-photos", cleaningPhotoRouter);
+app.use("/api/cleaning-media", cleaningMediaRouter);
 app.use("/api/maintenance-tasks", maintenanceTaskRouter);
 app.use("/api/staff-shifts", staffShiftRouter);
 app.use("/api/location-shifts", locationShiftRouter);
 app.use("/api/staff-work-rosters", staffWorkRosterRouter);
-app.use("/api/staff-shift-assignments", staffShiftAssignmentRouter);
+app.use("/api/shift-handovers", shiftHandoverRouter);
 app.use("/api/staff-attendance-logs", staffAttendanceLogRouter);
 app.use("/api/users", usersRouter);
 app.use("/api/incidents", incidentRouter);
@@ -218,7 +217,7 @@ app.use("/api/reviews", reviewRouter);
 app.use("/api/notifications", notificationRouter);
 app.use("/api/cleaning-buffer-policies", cleaningBufferPolicyRouter);
 app.use("/api/wallets", walletRouter);
-app.use("/api/deposit-policies", depositPolicyRouter);
+
 app.use("/api/vouchers", voucherRouter);
 app.use("/api/booking-vouchers", bookingVoucherRouter);
 app.use("/api/pricing-rules", pricingRuleRouter);
@@ -243,5 +242,22 @@ app.use((err, req, res, next) => {
     error: process.env.NODE_ENV === "development" ? err : {},
   });
 });
+
+// Background Tasks (Cronjobs)
+const staffAttendanceLogService = require("./services/staffAttendanceLogService");
+// Run once on startup after 10 seconds
+setTimeout(() => {
+  staffAttendanceLogService.autoCheckoutGhostSessions();
+  
+  const staffWorkRosterService = require("./services/staffWorkRosterService");
+  staffWorkRosterService.autoDeactivateExpiredTemporaryRosters();
+}, 10 * 1000);
+// Run every 10 minutes
+setInterval(() => {
+  staffAttendanceLogService.autoCheckoutGhostSessions();
+  
+  const staffWorkRosterService = require("./services/staffWorkRosterService");
+  staffWorkRosterService.autoDeactivateExpiredTemporaryRosters();
+}, 10 * 60 * 1000);
 
 module.exports = app;

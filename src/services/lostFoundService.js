@@ -1,18 +1,20 @@
 const LostFoundItem = require("../models/LostFoundItem");
+const LostFoundMedia = require("../models/LostFoundMedia");
+const LostItemRequest = require("../models/LostItemRequest");
+const CleaningTask = require("../models/CleaningTask");
+const Booking = require("../models/Bookings");
 const Pod = require("../models/Pod");
+const PodCluster = require("../models/PodCluster");
+const LocationWarehouse = require("../models/LocationWarehouse");
 const Warehouse = require("../models/Warehouse");
 const User = require("../models/User");
-const { cloudinary } = require("../config/cloudinary");
-const sharp = require("sharp");
-const https = require("https");
+const notificationService = require("./notificationService");
+const crypto = require("crypto");
 
-const LOST_FOUND_STATUSES = ["FOUND", "CLAIMED", "DISPOSED", "RETURNED_TO_USER"];
-const LOST_FOUND_STATUS_TRANSITIONS = {
-  FOUND: ["CLAIMED", "DISPOSED", "RETURNED_TO_USER"],
-  CLAIMED: ["RETURNED_TO_USER"],
-  DISPOSED: [],
-  RETURNED_TO_USER: [],
-};
+const LOST_FOUND_STATUSES = ["FOUND", "IN_STORAGE", "CLAIM_PENDING", "RETURNED", "DISPOSED"];
+const LOST_ITEM_REQUEST_STATUSES = ["PENDING", "MATCHED", "CLOSED", "REJECTED"];
+
+// ─── Helpers ──────────────────────────────────────────────────────
 
 const createError = (message, statusCode) => {
   const err = new Error(message);
@@ -20,9 +22,13 @@ const createError = (message, statusCode) => {
   return err;
 };
 
-const normalizeStatus = (value) => {
-  if (value === undefined || value === null) return value;
-  return String(value).trim().toUpperCase();
+const resolveActorId = (actor) => {
+  const ids = [actor?.id, actor?._id].filter(Boolean).map(String);
+  return ids.length > 0 ? ids[0] : null;
+};
+
+const resolveActorIdentityIds = (actor) => {
+  return [...new Set([actor?.id, actor?._id].filter(Boolean).map(String))];
 };
 
 const parsePositiveInt = (value, fallback) => {
@@ -31,230 +37,448 @@ const parsePositiveInt = (value, fallback) => {
   return parsed;
 };
 
-// ── Photo upload helpers ──────────────────────────────────────────────────────
-
-const BASE64_IMAGE_DATA_URI_REGEX = /^data:(image\/[a-zA-Z0-9.+-]+);base64,/;
-const MAX_IMAGE_UPLOAD_BYTES = 12 * 1024 * 1024;
-const MAX_IMAGE_BYTES_AFTER_PREPROCESS = 6 * 1024 * 1024;
-const TARGET_LONG_EDGE = 1920;
-const CLOUDINARY_UPLOAD_AGENT = new https.Agent({ keepAlive: true, timeout: 180000 });
-
-const createErrorWithCode = (message, statusCode, errorCode) => {
-  const err = createError(message, statusCode);
-  err.errorCode = errorCode;
-  return err;
+/**
+ * Lấy cleaning_task_ids từ booking_id của các LostFoundItem.
+ */
+const buildCleaningTaskMap = async (bookingIds = []) => {
+  const ids = bookingIds.filter(Boolean);
+  if (!ids.length) return {};
+  const tasks = await CleaningTask.find({ booking_id: { $in: ids } })
+    .select("booking_id id")
+    .lean();
+  return tasks.reduce((map, t) => {
+    if (!map[t.booking_id]) map[t.booking_id] = [];
+    map[t.booking_id].push(t.id);
+    return map;
+  }, {});
 };
 
-const isBase64ImageDataUri = (value) => {
-  if (!value || typeof value !== "string") return false;
-  return BASE64_IMAGE_DATA_URI_REGEX.test(String(value).trim());
+/**
+ * Lấy ảnh của LostFoundItem theo item_id, trả về array media_url.
+ */
+const buildMediaMap = async (itemIds = []) => {
+  if (!itemIds.length) return {};
+  const mediaList = await LostFoundMedia.find({
+    lost_found_item_id: { $in: itemIds },
+  })
+    .select("lost_found_item_id media_url")
+    .lean();
+
+  return mediaList.reduce((map, m) => {
+    if (!map[m.lost_found_item_id]) map[m.lost_found_item_id] = [];
+    map[m.lost_found_item_id].push(m.media_url);
+    return map;
+  }, {});
 };
 
-const decodeBase64ImageDataUri = (dataUri) => {
-  const trimmed = String(dataUri).trim();
-  const matched = trimmed.match(BASE64_IMAGE_DATA_URI_REGEX);
-  const mimeType = matched ? matched[1] : "image/jpeg";
-  const base64Payload = trimmed.replace(BASE64_IMAGE_DATA_URI_REGEX, "");
-  let buffer;
-  try {
-    buffer = Buffer.from(base64Payload, "base64");
-  } catch (_) {
-    throw createErrorWithCode("Invalid base64 image payload", 400, "INVALID_BASE64_IMAGE_DATA");
-  }
-  if (!buffer || buffer.length === 0) {
-    throw createErrorWithCode("Image payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
-  }
-  return { buffer, mimeType };
+/**
+ * Tìm booking COMPLETED hoặc IN_USE gần nhất của pod (không giới hạn thời gian).
+ */
+const findLatestBookingForPod = async (podId) => {
+  const booking = await Booking.findOne({
+    pod_id: podId,
+    status: { $in: ["COMPLETED", "IN_USE"] },
+  })
+    .sort({ end_time: -1 })
+    .select("id user_id pod_id status end_time")
+    .lean();
+  return booking || null;
 };
 
-const preprocessImageBuffer = async ({ buffer, mimeType }) => {
-  if (!Buffer.isBuffer(buffer) || buffer.length === 0) {
-    throw createErrorWithCode("Image payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
-  }
-  if (buffer.length > MAX_IMAGE_UPLOAD_BYTES) {
-    throw createErrorWithCode("Image file is too large", 413, "CLOUDINARY_FILE_TOO_LARGE");
-  }
-  const lowerMime = String(mimeType || "").toLowerCase();
-  const shouldUseJpeg = lowerMime.includes("jpeg") || lowerMime.includes("jpg");
-  try {
-    const image = sharp(buffer, { failOn: "none" })
-      .rotate()
-      .resize({ width: TARGET_LONG_EDGE, height: TARGET_LONG_EDGE, fit: "inside", withoutEnlargement: true });
-    const convertedBuffer = shouldUseJpeg
-      ? await image.jpeg({ quality: 82, mozjpeg: true }).toBuffer()
-      : await image.webp({ quality: 82, effort: 4 }).toBuffer();
-    const optimizedBuffer = convertedBuffer.length > 0 && convertedBuffer.length < buffer.length ? convertedBuffer : buffer;
-    if (optimizedBuffer.length > MAX_IMAGE_BYTES_AFTER_PREPROCESS) {
-      throw createErrorWithCode("Image file is too large", 413, "CLOUDINARY_FILE_TOO_LARGE");
-    }
-    return { buffer: optimizedBuffer, mimeType: shouldUseJpeg ? "image/jpeg" : "image/webp" };
-  } catch (error) {
-    if (error?.errorCode) throw error;
-    if (buffer.length > MAX_IMAGE_BYTES_AFTER_PREPROCESS) {
-      throw createErrorWithCode("Image file is too large", 413, "CLOUDINARY_FILE_TOO_LARGE");
-    }
-    return { buffer, mimeType: mimeType || "image/jpeg" };
-  }
+/**
+ * Lấy warehouse_id từ location của pod (qua cluster → LocationWarehouse).
+ * Trả về warehouse_id đầu tiên tìm thấy, hoặc null.
+ */
+const resolveWarehouseForPod = async (podId) => {
+  const pod = await Pod.findOne({ id: podId }).select("cluster_id").lean();
+  if (!pod) return null;
+
+  const cluster = await PodCluster.findOne({ id: pod.cluster_id })
+    .select("location_id")
+    .lean();
+  if (!cluster?.location_id) return null;
+
+  const locationWarehouse = await LocationWarehouse.findOne({
+    location_id: cluster.location_id,
+  })
+    .select("warehouse_id")
+    .lean();
+  return locationWarehouse?.warehouse_id || null;
 };
 
-const mapCloudinaryUploadError = (error) => {
-  const providerMessage = String(error?.error?.message || error?.message || "");
-  const lower = providerMessage.toLowerCase();
-  if (lower.includes("timeout") || lower.includes("timed out") || error?.http_code === 499) {
-    return createErrorWithCode("Request Timeout", 504, "CLOUDINARY_UPLOAD_TIMEOUT");
-  }
-  if (lower.includes("file size too large")) {
-    return createErrorWithCode("Image file is too large", 413, "CLOUDINARY_FILE_TOO_LARGE");
-  }
-  if (lower.includes("invalid image") || lower.includes("unsupported")) {
-    return createErrorWithCode("Invalid image format", 400, "CLOUDINARY_INVALID_IMAGE");
-  }
-  const err = createErrorWithCode("Failed to upload image to Cloudinary", 502, "CLOUDINARY_UPLOAD_FAILED");
-  err.providerMessage = providerMessage || null;
-  return err;
+// ─── View mappers ─────────────────────────────────────────────────
+
+const toLostFoundItemView = (item, mediaUrls = [], cleaningTaskIds = []) => {
+  const doc = typeof item.toObject === "function" ? item.toObject() : item;
+  return {
+    ...doc,
+    // Ẩn OTP khỏi response thông thường
+    handover_otp: undefined,
+    photo_urls: mediaUrls,
+    cleaning_task_ids: cleaningTaskIds,
+  };
 };
 
-const uploadBufferToCloudinary = async ({ buffer, mimeType }) => {
-  const preprocessed = await preprocessImageBuffer({ buffer, mimeType });
-  if (!Buffer.isBuffer(preprocessed.buffer) || preprocessed.buffer.length === 0) {
-    throw createErrorWithCode("Image payload is empty", 400, "EMPTY_IMAGE_PAYLOAD");
-  }
-  const attemptUpload = () =>
-    new Promise((resolve, reject) => {
-      const upload = cloudinary.uploader.upload_stream(
-        { folder: "oasisgo/lost-found", resource_type: "image", overwrite: false, timeout: 180000, agent: CLOUDINARY_UPLOAD_AGENT },
-        (error, result) => { if (error) return reject(error); return resolve(result); }
-      );
-      upload.on("error", reject);
-      upload.end(preprocessed.buffer);
-    });
-  try {
-    const uploaded = await attemptUpload();
-    return { photo_url: uploaded?.secure_url || uploaded?.url || null };
-  } catch (firstError) {
-    const mapped = mapCloudinaryUploadError(firstError);
-    if (mapped.errorCode !== "CLOUDINARY_UPLOAD_TIMEOUT") throw mapped;
-    try {
-      const uploaded = await attemptUpload();
-      return { photo_url: uploaded?.secure_url || uploaded?.url || null };
-    } catch (retryError) {
-      throw mapCloudinaryUploadError(retryError);
-    }
-  }
-};
+// ─── Luồng Cleaner: Báo cáo tìm thấy đồ ─────────────────────────
 
-const resolvePhotoUrl = async ({ photo_url, photo_buffer, photo_mime_type }) => {
-  if (photo_buffer) {
-    const result = await uploadBufferToCloudinary({ buffer: photo_buffer, mimeType: photo_mime_type });
-    return result.photo_url;
-  }
-  if (isBase64ImageDataUri(photo_url)) {
-    const decoded = decodeBase64ImageDataUri(photo_url);
-    const result = await uploadBufferToCloudinary({ buffer: decoded.buffer, mimeType: decoded.mimeType });
-    return result.photo_url;
-  }
-  return photo_url || null;
-};
+/**
+ * API 1 (Cleaner/Manager): Báo cáo tìm thấy đồ thất lạc tại Pod.
+ *
+ * - Tự động liên kết booking gần nhất của Pod.
+ * - Tự động lấy warehouse tại location.
+ * - serial_number do schema tự tạo.
+ */
+exports.reportFoundItem = async (
+  { pod_id, item_name, description, found_at, uploaded_photos = [] },
+  actor
+) => {
+  const reporterId = resolveActorId(actor);
+  if (!reporterId) throw createError("Unable to resolve reporter identity", 401);
 
-// ─────────────────────────────────────────────────────────────────────────────
+  if (!pod_id) throw createError("pod_id is required", 400);
+  if (!item_name?.trim()) throw createError("item_name is required", 400);
 
-const resolveActorIds = (actor) => [actor?.id, actor?._id].filter(Boolean).map((id) => String(id));
+  const pod = await Pod.findOne({ id: pod_id }).select("id code name cluster_id").lean();
+  if (!pod) throw createError("Pod not found", 404);
 
-const populateLostFoundItem = async (item) => {
-  const raw = typeof item.toObject === "function" ? item.toObject() : { ...item };
-
-  const [pod, warehouse, foundByUser, claimedByUser] = await Promise.all([
-    raw.pod_id ? Pod.findOne({ id: raw.pod_id }).select("id name").lean() : null,
-    raw.warehouse_id ? Warehouse.findOne({ id: raw.warehouse_id }).select("id name").lean() : null,
-    raw.found_by_user_id ? User.findOne({ $or: [{ id: raw.found_by_user_id }, { _id: raw.found_by_user_id }] }).select("id name").lean() : null,
-    raw.claimed_by_user_id ? User.findOne({ $or: [{ id: raw.claimed_by_user_id }, { _id: raw.claimed_by_user_id }] }).select("id name").lean() : null,
+  const [latestBooking, warehouseId] = await Promise.all([
+    findLatestBookingForPod(pod_id),
+    resolveWarehouseForPod(pod_id),
   ]);
 
-  return {
-    ...raw,
-    pod_name: pod?.name || null,
-    warehouse_name: warehouse?.name || null,
-    found_by_user_name: foundByUser?.name || null,
-    claimed_by_user_name: claimedByUser?.name || null,
-  };
-};
-
-const populateLostFoundItems = (items) => Promise.all(items.map(populateLostFoundItem));
-
-const resolveCreateContext = async ({ pod_id, booking_id, warehouse_id }) => {
-  if (pod_id) {
-    const pod = await Pod.findOne({ id: pod_id }).select("id").lean();
-    if (!pod) throw createError("Pod not found", 404);
-  }
-
-  if (warehouse_id) {
-    const warehouse = await Warehouse.findOne({ id: warehouse_id }).select("id").lean();
-    if (!warehouse) throw createError("Warehouse not found", 404);
-  }
-
-  return {
-    pod_id: pod_id || null,
-    booking_id: booking_id || null,
-  };
-};
-
-exports.createLostFoundItem = async ({ pod_id, booking_id, item_name, description, photo_url, photo_buffer, photo_mime_type, found_at, warehouse_id }, actor) => {
-  const context = await resolveCreateContext({ pod_id, booking_id, warehouse_id });
-
-  const normalizedItemName = String(item_name || "").trim();
-  if (!normalizedItemName) throw createError("item_name is required", 400);
-  const actorIds = resolveActorIds(actor);
-  if (!actorIds[0]) throw createError("Unable to resolve finder identity", 401);
-
-  const resolvedPhotoUrl = await resolvePhotoUrl({ photo_url, photo_buffer, photo_mime_type });
-
   const item = await LostFoundItem.create({
-    pod_id: context.pod_id,
-    booking_id: context.booking_id,
-    found_by_user_id: actorIds[0],
-    warehouse_id: warehouse_id || null,
-    item_name: normalizedItemName,
+    pod_id,
+    booking_id: latestBooking?.id || null,
+    found_by_user_id: reporterId,
+    warehouse_id: warehouseId,
+    item_name: item_name.trim(),
     description: description ? String(description).trim() : null,
-    photo_url: resolvedPhotoUrl,
     found_at: found_at ? new Date(found_at) : new Date(),
     status: "FOUND",
   });
 
-  return populateLostFoundItem(item);
+  // Lưu ảnh nếu có
+  if (uploaded_photos.length > 0) {
+    const mediaRecords = uploaded_photos
+      .filter((p) => p?.url)
+      .map((p) => ({
+        lost_found_item_id: item.id,
+        media_url: p.url,
+        media_public_id: p.public_id || null,
+        file_type: p.file_type === "VIDEO" ? "VIDEO" : "IMAGE",
+      }));
+    if (mediaRecords.length) await LostFoundMedia.insertMany(mediaRecords);
+  }
+
+  const mediaUrls = uploaded_photos.filter((p) => p?.url).map((p) => p.url);
+
+  return toLostFoundItemView(item.toObject(), mediaUrls);
 };
 
-exports.getLostFoundItems = async (query = {}) => {
-  const filter = {};
-  const shouldPaginate = query.page !== undefined || query.limit !== undefined;
+// ─── Luồng Manager: Cất đồ vào kho ──────────────────────────────
 
-  if (query.pod_id) filter.pod_id = query.pod_id;
-  if (query.booking_id) filter.booking_id = query.booking_id;
-  if (query.found_by_user_id) filter.found_by_user_id = query.found_by_user_id;
-  if (query.status) {
-    const normalizedStatus = normalizeStatus(query.status);
-    if (!LOST_FOUND_STATUSES.includes(normalizedStatus)) {
+/**
+ * API 2 (Manager): Cập nhật trạng thái đồ → IN_STORAGE, ghi nhận warehouse.
+ */
+exports.storeToWarehouse = async (itemId, { warehouse_id }, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers can store items", 403);
+  }
+
+  const item = await LostFoundItem.findOne({ id: itemId });
+  if (!item) throw createError("Lost & Found item not found", 404);
+
+  if (item.status !== "FOUND") {
+    throw createError(`Cannot store item with status: ${item.status}`, 400);
+  }
+
+  if (!warehouse_id) throw createError("warehouse_id is required", 400);
+  const warehouse = await Warehouse.findOne({ id: warehouse_id }).lean();
+  if (!warehouse) throw createError("Warehouse not found", 404);
+
+  item.warehouse_id = warehouse_id;
+  item.status = "IN_STORAGE";
+  await item.save();
+
+  const mediaUrls = await LostFoundMedia.find({ lost_found_item_id: item.id })
+    .select("media_url")
+    .lean()
+    .then((r) => r.map((m) => m.media_url));
+
+  return toLostFoundItemView(item.toObject(), mediaUrls);
+};
+
+// ─── Luồng User: Gửi yêu cầu tìm đồ ────────────────────────────
+
+/**
+ * API 3 (User): Tạo yêu cầu tìm đồ thất lạc.
+ */
+exports.submitLostItemRequest = async (
+  { booking_id, item_name_reported, description_reported },
+  actor
+) => {
+  const userId = resolveActorId(actor);
+  if (!userId) throw createError("Không thể xác định danh tính", 401);
+
+  if (!item_name_reported?.trim()) throw createError("item_name_reported is required", 400);
+
+  if (!booking_id) throw createError("booking_id is required", 400);
+
+  // Kiểm tra booking thuộc về user này
+  const booking = await Booking.findOne({ id: booking_id }).select("id user_id").lean();
+  if (!booking) throw createError("Booking not found", 404);
+
+  const bookingUserIds = [booking.user_id].filter(Boolean).map(String);
+  const actorIds = resolveActorIdentityIds(actor);
+  const isOwner = actorIds.some((id) => bookingUserIds.includes(id));
+  if (!isOwner) throw createError("You can only request for your own bookings", 403);
+
+  // Khách hàng không thể gửi thêm yêu cầu nếu trước đó đã có yêu cầu bị từ chối ở booking này
+  const rejectedRequest = await LostItemRequest.findOne({
+    booking_id: booking_id,
+    user_id: userId,
+    status: "REJECTED"
+  }).lean();
+
+  if (rejectedRequest) {
+    throw createError("Yêu cầu tìm đồ trước đó của bạn ở Booking này đã bị từ chối, không thể gửi thêm yêu cầu mới.", 403);
+  }
+
+  const request = await LostItemRequest.create({
+    user_id: userId,
+    booking_id: booking_id || null,
+    item_name_reported: item_name_reported.trim(),
+    description_reported: description_reported ? String(description_reported).trim() : null,
+    status: "PENDING",
+  });
+
+  return request.toObject();
+};
+
+// ─── Luồng Manager: Xét duyệt khớp ──────────────────────────────
+
+/**
+ * API 4 (Manager): Xác nhận khớp giữa LostItemRequest và LostFoundItem.
+ * - LostItemRequest.status → MATCHED
+ * - LostFoundItem.status → CLAIM_PENDING
+ */
+exports.confirmMatch = async (requestId, { found_item_id, manager_note }, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers can confirm match", 403);
+  }
+
+  if (!found_item_id) throw createError("found_item_id is required", 400);
+
+  const [request, foundItem] = await Promise.all([
+    LostItemRequest.findOne({ id: requestId }),
+    LostFoundItem.findOne({ id: found_item_id }),
+  ]);
+
+  if (!request) throw createError("Lost item request not found", 404);
+  if (!foundItem) throw createError("Lost & Found item not found", 404);
+
+  if (request.status !== "PENDING") {
+    throw createError(`Request is already ${request.status}`, 400);
+  }
+  if (!["FOUND", "IN_STORAGE"].includes(foundItem.status)) {
+    throw createError(`Item cannot be matched from status: ${foundItem.status}`, 400);
+  }
+
+  request.status = "MATCHED";
+  request.matched_found_item_id = found_item_id;
+  request.manager_note = manager_note ? String(manager_note).trim() : null;
+  await request.save();
+
+  foundItem.status = "CLAIM_PENDING";
+  foundItem.claimed_by_user_id = request.user_id;
+  await foundItem.save();
+
+  return {
+    request: request.toObject(),
+    found_item: toLostFoundItemView(foundItem.toObject()),
+  };
+};
+
+/**
+ * API 4b (Manager): Từ chối yêu cầu tìm đồ.
+ */
+exports.rejectLostItemRequest = async (requestId, { manager_note }, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers can reject requests", 403);
+  }
+
+  const request = await LostItemRequest.findOne({ id: requestId });
+  if (!request) throw createError("Lost item request not found", 404);
+
+  if (request.status !== "PENDING") {
+    throw createError(`Request is already ${request.status}`, 400);
+  }
+
+  request.status = "REJECTED";
+  request.manager_note = manager_note ? String(manager_note).trim() : null;
+  await request.save();
+
+  return request.toObject();
+};
+
+// ─── Luồng Handover: Bàn giao đồ ────────────────────────────────
+
+/**
+ * API 5 (Manager): Tạo OTP bàn giao, gửi Notification cho User.
+ */
+exports.generateHandoverOTP = async (itemId, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers can generate OTP", 403);
+  }
+
+  const item = await LostFoundItem.findOne({ id: itemId });
+  if (!item) throw createError("Lost & Found item not found", 404);
+
+  if (item.status !== "CLAIM_PENDING") {
+    throw createError(`Item must be in CLAIM_PENDING status, current: ${item.status}`, 400);
+  }
+  if (!item.claimed_by_user_id) {
+    throw createError("Item has no claimant. Please confirm match first.", 400);
+  }
+
+  // Tạo OTP 6 chữ số, hết hạn sau 15 phút
+  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
+  item.handover_otp = otp;
+  item.handover_otp_expires_at = expiresAt;
+  await item.save();
+
+  // Gửi OTP qua Notification cho User
+  try {
+    await notificationService.sendToUser(item.claimed_by_user_id, {
+      title: "Mã xác nhận nhận đồ thất lạc",
+      message: `Mã OTP để nhận lại "${item.item_name}" của bạn là: ${otp}. Mã hết hạn sau 15 phút.`,
+      type: "SUPPORT",
+      data: {
+        reference_id: item.id,
+        reference_type: "LostFoundItem",
+      }
+    });
+  } catch (notifErr) {
+    console.error("[lostFoundService] Failed to send OTP notification:", notifErr.message);
+  }
+
+  return {
+    message: "OTP generated and sent to user",
+    item_id: item.id,
+    item_name: item.item_name,
+    otp_expires_at: expiresAt,
+  };
+};
+
+/**
+ * API 6 (Manager): Xác nhận OTP — hoàn tất bàn giao.
+ * - Kiểm tra OTP + thời hạn.
+ * - LostFoundItem.status → RETURNED.
+ * - LostItemRequest.status → CLOSED.
+ */
+exports.confirmHandover = async (itemId, { otp }, actor) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  if (!["manager", "admin"].includes(actorRole)) {
+    throw createError("Only managers can confirm handover", 403);
+  }
+
+  if (!otp) throw createError("otp is required", 400);
+
+  const item = await LostFoundItem.findOne({ id: itemId });
+  if (!item) throw createError("Lost & Found item not found", 404);
+
+  if (item.status !== "CLAIM_PENDING") {
+    throw createError(`Item must be in CLAIM_PENDING status, current: ${item.status}`, 400);
+  }
+
+  if (!item.handover_otp) {
+    throw createError("No OTP generated for this item. Please generate OTP first.", 400);
+  }
+
+  if (String(item.handover_otp) !== String(otp).trim()) {
+    throw createError("Invalid OTP", 400);
+  }
+
+  if (item.handover_otp_expires_at && new Date() > item.handover_otp_expires_at) {
+    throw createError("OTP has expired. Please generate a new one.", 400);
+  }
+
+  item.status = "RETURNED";
+  item.claimed_at = new Date();
+  item.handover_otp = null;
+  item.handover_otp_expires_at = null;
+  await item.save();
+
+  // Đóng LostItemRequest liên quan
+  await LostItemRequest.updateMany(
+    { matched_found_item_id: item.id, status: "MATCHED" },
+    { $set: { status: "CLOSED" } }
+  );
+
+  return toLostFoundItemView(item.toObject());
+};
+
+// ─── GET APIs ────────────────────────────────────────────────────
+
+/**
+ * Lấy danh sách LostFoundItem có filter + pagination.
+ */
+exports.getLostFoundItems = async (filters = {}, actor = null) => {
+  const query = {};
+
+  if (filters.pod_id) query.pod_id = filters.pod_id;
+  if (filters.booking_id) query.booking_id = filters.booking_id;
+  if (filters.found_by_user_id) query.found_by_user_id = filters.found_by_user_id;
+  if (filters.warehouse_id) query.warehouse_id = filters.warehouse_id;
+  if (filters.serial_number) query.serial_number = filters.serial_number;
+
+  if (filters.status) {
+    const status = String(filters.status).toUpperCase();
+    if (!LOST_FOUND_STATUSES.includes(status)) {
       throw createError(`Invalid status. Must be one of: ${LOST_FOUND_STATUSES.join(", ")}`, 400);
     }
-    filter.status = normalizedStatus;
+    query.status = status;
   }
 
+  const shouldPaginate = filters.page !== undefined || filters.limit !== undefined;
   if (!shouldPaginate) {
-    const items = await LostFoundItem.find(filter).sort({ created_at: -1 });
-    return populateLostFoundItems(items);
+    const items = await LostFoundItem.find(query).sort({ created_at: -1 }).lean();
+    const itemIds = items.map((i) => i.id);
+    const bookingIds = items.map((i) => i.booking_id);
+    const [mediaMap, cleaningTaskMap] = await Promise.all([
+      buildMediaMap(itemIds),
+      buildCleaningTaskMap(bookingIds),
+    ]);
+    return {
+      items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
+      pagination: null,
+    };
   }
 
-  const page = parsePositiveInt(query.page, 1);
-  const requestedLimit = parsePositiveInt(query.limit, 20);
-  const limit = Math.min(requestedLimit, 100);
+  const page = parsePositiveInt(filters.page, 1);
+  const limit = Math.min(parsePositiveInt(filters.limit, 20), 100);
   const skip = (page - 1) * limit;
 
   const [total, items] = await Promise.all([
-    LostFoundItem.countDocuments(filter),
-    LostFoundItem.find(filter).sort({ created_at: -1 }).skip(skip).limit(limit),
+    LostFoundItem.countDocuments(query),
+    LostFoundItem.find(query).sort({ created_at: -1 }).skip(skip).limit(limit).lean(),
+  ]);
+
+  const itemIds = items.map((i) => i.id);
+  const bookingIds = items.map((i) => i.booking_id);
+  const [mediaMap, cleaningTaskMap] = await Promise.all([
+    buildMediaMap(itemIds),
+    buildCleaningTaskMap(bookingIds),
   ]);
 
   return {
-    items: await populateLostFoundItems(items),
+    items: items.map((i) => toLostFoundItemView(i, mediaMap[i.id] || [], cleaningTaskMap[i.booking_id] || [])),
     pagination: {
       current_page: page,
       total_pages: total > 0 ? Math.ceil(total / limit) : 0,
@@ -264,50 +488,90 @@ exports.getLostFoundItems = async (query = {}) => {
   };
 };
 
-exports.getMyLostFoundItems = async (query = {}, actor) => {
-  const actorIds = resolveActorIds(actor);
-  if (!actorIds[0]) throw createError("Unable to resolve user identity", 401);
-  return exports.getLostFoundItems({ ...query, found_by_user_id: actorIds[0] });
+/**
+ * Lấy chi tiết 1 LostFoundItem.
+ */
+exports.getLostFoundItemById = async (itemId, actor = null) => {
+  const item = await LostFoundItem.findOne({ id: itemId }).lean();
+  if (!item) throw createError("Lost & Found item not found", 404);
+
+  const [mediaUrls, cleaningTaskIds] = await Promise.all([
+    LostFoundMedia.find({ lost_found_item_id: itemId })
+      .select("media_url")
+      .lean()
+      .then((r) => r.map((m) => m.media_url)),
+    item.booking_id
+      ? CleaningTask.find({ booking_id: item.booking_id }).select("id").lean().then((r) => r.map((t) => t.id))
+      : Promise.resolve([]),
+  ]);
+
+  return toLostFoundItemView(item, mediaUrls, cleaningTaskIds);
 };
 
-exports.getLostFoundItemById = async (id) => {
-  const item = await LostFoundItem.findOne({ id });
-  if (!item) throw createError("Lost & found item not found", 404);
-  return populateLostFoundItem(item);
-};
-
-exports.updateLostFoundStatus = async (id, status, actor) => {
-  const normalizedStatus = normalizeStatus(status);
-  if (!LOST_FOUND_STATUSES.includes(normalizedStatus)) {
-    throw createError(`Invalid status. Must be one of: ${LOST_FOUND_STATUSES.join(", ")}`, 400);
-  }
-
-  const item = await LostFoundItem.findOne({ id });
-  if (!item) throw createError("Lost & found item not found", 404);
-
+/**
+ * Lấy danh sách LostItemRequest (Manager xem tất cả / User xem của mình).
+ */
+exports.getLostItemRequests = async (filters = {}, actor = null) => {
   const actorRole = String(actor?.role || "").toLowerCase();
-  const actorIds = resolveActorIds(actor);
-  const isFinder = actorIds.includes(String(item.found_by_user_id));
+  const actorIds = resolveActorIdentityIds(actor);
+  const query = {};
 
-  if (actorRole === "cleaner" && !isFinder) {
-    throw createError("You are not allowed to update this lost & found item", 403);
+  // User chỉ xem được request của mình
+  if (actorRole === "user") {
+    query.user_id = actorIds.length === 1 ? actorIds[0] : { $in: actorIds };
   }
 
-  const currentStatus = normalizeStatus(item.status);
-  const allowedNextStatuses = LOST_FOUND_STATUS_TRANSITIONS[currentStatus] || [];
-  const isSameStatus = currentStatus === normalizedStatus;
-
-  if (!isSameStatus && !allowedNextStatuses.includes(normalizedStatus)) {
-    throw createError(`Invalid status transition from ${currentStatus} to ${normalizedStatus}`, 400);
+  if (filters.status) {
+    const status = String(filters.status).toUpperCase();
+    if (!LOST_ITEM_REQUEST_STATUSES.includes(status)) {
+      throw createError(`Invalid status. Must be one of: ${LOST_ITEM_REQUEST_STATUSES.join(", ")}`, 400);
+    }
+    query.status = status;
+  }
+  if (filters.user_id && ["manager", "admin"].includes(actorRole)) {
+    query.user_id = filters.user_id;
   }
 
-  item.status = normalizedStatus;
-
-  if (normalizedStatus === "CLAIMED" || normalizedStatus === "RETURNED_TO_USER") {
-    item.claimed_by_user_id = actorIds[0] || item.claimed_by_user_id || null;
-    item.claimed_at = item.claimed_at || new Date();
+  const shouldPaginate = filters.page !== undefined || filters.limit !== undefined;
+  if (!shouldPaginate) {
+    const requests = await LostItemRequest.find(query).sort({ created_at: -1 }).lean();
+    return { items: requests, pagination: null };
   }
 
-  await item.save();
-  return populateLostFoundItem(item);
+  const page = parsePositiveInt(filters.page, 1);
+  const limit = Math.min(parsePositiveInt(filters.limit, 20), 100);
+  const skip = (page - 1) * limit;
+
+  const [total, requests] = await Promise.all([
+    LostItemRequest.countDocuments(query),
+    LostItemRequest.find(query).sort({ created_at: -1 }).skip(skip).limit(limit).lean(),
+  ]);
+
+  return {
+    items: requests,
+    pagination: {
+      current_page: page,
+      total_pages: total > 0 ? Math.ceil(total / limit) : 0,
+      total_items: total,
+      items_per_page: limit,
+    },
+  };
+};
+
+/**
+ * Lấy chi tiết 1 LostItemRequest.
+ */
+exports.getLostItemRequestById = async (requestId, actor = null) => {
+  const actorRole = String(actor?.role || "").toLowerCase();
+  const actorIds = resolveActorIdentityIds(actor);
+
+  const request = await LostItemRequest.findOne({ id: requestId }).lean();
+  if (!request) throw createError("Lost item request not found", 404);
+
+  if (actorRole === "user") {
+    const isOwner = actorIds.includes(String(request.user_id || ""));
+    if (!isOwner) throw createError("You are not allowed to access this request", 403);
+  }
+
+  return request;
 };

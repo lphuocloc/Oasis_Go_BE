@@ -1,10 +1,14 @@
 const StaffAttendanceLog = require("../models/StaffAttendanceLog");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
+const StaffShift = require("../models/StaffShift");
+const ShiftHandoverLog = require("../models/ShiftHandoverLog");
+const CleaningTask = require("../models/CleaningTask");
+const User = require("../models/User");
 
 const CHECKIN_EARLY_MINUTES = 30;
 const CHECKOUT_LATE_MINUTES = 180;
 const APP_LOCALE = process.env.APP_LOCALE || "vi-VN";
-const APP_TIMEZONE = process.env.APP_TIMEZONE || "UTC";
+const APP_TIMEZONE = process.env.APP_TIMEZONE || "Asia/Ho_Chi_Minh";
 
 const toStartOfDay = (value) => {
   const date = new Date(value);
@@ -41,28 +45,74 @@ const parseTimeParts = (timeValue) => {
   return { hours, minutes, seconds };
 };
 
-const resolveAssignmentTimeValue = (assignment, kind) => {
-  if (!assignment) return null;
-
-  const keyPairs =
-    kind === "start"
-      ? ["start_time", "checkin_at"]
-      : ["end_time", "checkout_at"];
-
-  for (const key of keyPairs) {
-    const value = assignment[key];
-    if (value !== null && value !== undefined && String(value).trim() !== "") {
-      return value;
-    }
-  }
-
-  return null;
+const getAppTzOffsetMs = (date) => {
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
+    second: "numeric",
+    hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(date).map(({ type, value }) => [type, value])
+  );
+  const localAsUtcMs = Date.UTC(
+    Number(parts.year),
+    Number(parts.month) - 1,
+    Number(parts.day),
+    parts.hour === "24" ? 0 : Number(parts.hour),
+    Number(parts.minute),
+    Number(parts.second)
+  );
+  return localAsUtcMs - date.getTime();
 };
 
-const withTime = (baseDate, parts) => {
-  const date = new Date(baseDate);
-  date.setHours(parts.hours, parts.minutes, parts.seconds, 0);
-  return date;
+const toStartOfDayInAppTz = (date) => {
+  const d = new Date(date);
+  const dateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(d);
+  
+  // Format as YYYY-MM-DDT00:00:00 in Local Time, then convert to Date
+  // To get exactly 00:00:00 in Asia/Ho_Chi_Minh:
+  const naiveIso = `${dateStr}T00:00:00`;
+  const localDate = new Date(naiveIso); 
+  
+  // If we want it represented as local midnight (which is 17:00 UTC previous day):
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric", month: "numeric", day: "numeric",
+    hour: "numeric", minute: "numeric", second: "numeric",
+    hour12: false,
+  });
+  
+  const parts = Object.fromEntries(fmt.formatToParts(localDate).map(p => [p.type, p.value]));
+  const offsetMs = Date.UTC(parts.year, parts.month-1, parts.day, parts.hour==='24'?0:parts.hour, parts.minute, parts.second) - localDate.getTime();
+  
+  return new Date(localDate.getTime() - offsetMs);
+};
+
+const withTimeInAppTz = (baseDate, parts) => {
+  const dateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: APP_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(baseDate);
+
+  const hh = String(parts.hours).padStart(2, "0");
+  const mm = String(parts.minutes).padStart(2, "0");
+  const ss = String(parts.seconds).padStart(2, "0");
+
+  const naiveMs = Date.parse(`${dateStr}T${hh}:${mm}:${ss}Z`);
+  const offsetMs = getAppTzOffsetMs(new Date(naiveMs));
+  return new Date(naiveMs - offsetMs);
 };
 
 const formatDateTimeVi = (value) => {
@@ -90,15 +140,6 @@ const formatDateTimeVi = (value) => {
   }
 };
 
-const formatDateYmd = (value) => {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return null;
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, "0");
-  const d = String(date.getDate()).padStart(2, "0");
-  return `${y}-${m}-${d}`;
-};
-
 class StaffAttendanceLogService {
   resolveWorkDate(inputDate) {
     const base = inputDate ? new Date(inputDate) : new Date();
@@ -108,54 +149,12 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    const workDate = new Date(base);
-    workDate.setHours(0, 0, 0, 0);
-    return workDate;
+    return toStartOfDayInAppTz(base);
   }
 
-  getWorkDateFromShiftWindow(shiftWindow) {
-    return toStartOfDay(shiftWindow.shiftStart);
-  }
-
-  ensureRequestedWorkDateMatchesWindow(requestedDate, effectiveWorkDate) {
-    if (!requestedDate) {
-      return;
-    }
-
-    const requestedWorkDate = this.resolveWorkDate(requestedDate);
-    if (requestedWorkDate.getTime() !== effectiveWorkDate.getTime()) {
-      const requestedText = formatDateYmd(requestedWorkDate);
-      const allowedText = formatDateYmd(effectiveWorkDate);
-      const error = new Error(
-        `Ngay ban dang thao tac (${requestedText}) khong dung voi ngay co the cham cong hien tai (${allowedText})`
-      );
-      error.statusCode = 400;
-      throw error;
-    }
-  }
-
-  resolveDateRangeOfDay(inputDate) {
-    const base = inputDate ? new Date(inputDate) : new Date();
-    if (Number.isNaN(base.getTime())) {
-      const error = new Error("date khong hop le, dinh dang dung la YYYY-MM-DD");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const start = new Date(base);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(base);
-    end.setHours(23, 59, 59, 999);
-
-    return { start, end };
-  }
-
-  resolveShiftWindow(assignment, now = new Date()) {
-    const assignmentStartTime = resolveAssignmentTimeValue(assignment, "start");
-    const assignmentEndTime = resolveAssignmentTimeValue(assignment, "end");
-
-    const startParts = parseTimeParts(assignmentStartTime);
-    const endParts = parseTimeParts(assignmentEndTime);
+  resolveShiftWindow(shift, now = new Date()) {
+    const startParts = parseTimeParts(shift.start_time);
+    const endParts = parseTimeParts(shift.end_time);
 
     if (!startParts || !endParts) {
       const error = new Error("Ca lam viec chua duoc cau hinh gio bat dau/ket thuc");
@@ -163,24 +162,18 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    const assignmentStartDay = toStartOfDay(assignment.start_date);
-    const assignmentEndDay = toEndOfDay(assignment.end_date);
     const nowTime = now.getTime();
-
+    const todayInAppTz = toStartOfDayInAppTz(now);
     const candidateDays = [
-      toStartOfDay(now),
-      new Date(toStartOfDay(now).getTime() - 24 * 60 * 60 * 1000),
+      todayInAppTz,
+      new Date(todayInAppTz.getTime() - 24 * 60 * 60 * 1000),
     ];
 
     let selectedWindow = null;
 
     for (const day of candidateDays) {
-      if (day < assignmentStartDay || day > assignmentEndDay) {
-        continue;
-      }
-
-      const shiftStart = withTime(day, startParts);
-      let shiftEnd = withTime(day, endParts);
+      const shiftStart = withTimeInAppTz(day, startParts);
+      let shiftEnd = withTimeInAppTz(day, endParts);
       if (shiftEnd <= shiftStart) {
         shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
       }
@@ -190,6 +183,7 @@ class StaffAttendanceLogService {
 
       if (nowTime >= gateStart.getTime() && nowTime <= gateEnd.getTime()) {
         selectedWindow = {
+          workDate: day,
           shiftStart,
           shiftEnd,
           checkinAllowedFrom: gateStart,
@@ -208,23 +202,6 @@ class StaffAttendanceLogService {
     );
     error.statusCode = 400;
     throw error;
-  }
-
-  ensureAssignmentStatusForCheckin(status) {
-    if (status !== "ASSIGNED") {
-      const error = new Error(`Khong the vao ca khi phan cong dang o trang thai ${status}`);
-      error.statusCode = 400;
-      throw error;
-    }
-  }
-
-  ensureAssignmentStatusForCheckout(status) {
-    const allowed = ["ASSIGNED", "COMPLETED"];
-    if (!allowed.includes(status)) {
-      const error = new Error(`Khong the tan ca khi phan cong dang o trang thai ${status}`);
-      error.statusCode = 400;
-      throw error;
-    }
   }
 
   resolveRequesterIds(user) {
@@ -273,24 +250,18 @@ class StaffAttendanceLogService {
 
     if (fromDateInput) {
       const fromDate = new Date(fromDateInput);
-      if (Number.isNaN(fromDate.getTime())) {
-        const error = new Error("from_date khong hop le, dinh dang dung la YYYY-MM-DD");
-        error.statusCode = 400;
-        throw error;
+      if (!Number.isNaN(fromDate.getTime())) {
+        fromDate.setHours(0, 0, 0, 0);
+        query.created_at.$gte = fromDate;
       }
-      fromDate.setHours(0, 0, 0, 0);
-      query.created_at.$gte = fromDate;
     }
 
     if (toDateInput) {
       const toDate = new Date(toDateInput);
-      if (Number.isNaN(toDate.getTime())) {
-        const error = new Error("to_date khong hop le, dinh dang dung la YYYY-MM-DD");
-        error.statusCode = 400;
-        throw error;
+      if (!Number.isNaN(toDate.getTime())) {
+        toDate.setHours(23, 59, 59, 999);
+        query.created_at.$lte = toDate;
       }
-      toDate.setHours(23, 59, 59, 999);
-      query.created_at.$lte = toDate;
     }
   }
 
@@ -301,7 +272,7 @@ class StaffAttendanceLogService {
     return { page, limit, skip };
   }
 
-  async getMyAttendanceLogs({ user, action, from_date, to_date, shift_assignment_id, page, limit }) {
+  async getMyAttendanceLogs({ user, action, from_date, to_date, shift_id, page, limit }) {
     const requesterIds = this.resolveRequesterIds(user);
     const pagination = this.resolvePagination(page, limit);
 
@@ -314,8 +285,8 @@ class StaffAttendanceLogService {
       query.action = normalizedAction;
     }
 
-    if (shift_assignment_id) {
-      query.shift_assignment_id = String(shift_assignment_id);
+    if (shift_id) {
+      query.shift_id = String(shift_id);
     }
 
     this.applyDateRangeFilter(query, from_date, to_date);
@@ -341,87 +312,76 @@ class StaffAttendanceLogService {
     };
   }
 
-  async getMyAssignmentAttendanceStatus({ user, shift_assignment_id, date }) {
-    if (!shift_assignment_id) {
-      const error = new Error("Thieu shift_assignment_id");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const assignment = await StaffShiftAssignment.findOne({ id: String(shift_assignment_id) }).lean();
-    if (!assignment) {
-      const error = new Error("Khong tim thay phan cong ca");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    const requesterIds = this.resolveRequesterIds(user);
-    if (!requesterIds.includes(String(assignment.staff_id))) {
-      const error = new Error("Ban khong co quyen xem phan cong ca nay");
-      error.statusCode = 403;
-      throw error;
-    }
-
-    const workDate = this.resolveWorkDate(date);
-
-    const [checkinLog, checkoutLog] = await Promise.all([
-      StaffAttendanceLog.findOne({
-        shift_assignment_id: assignment.id,
-        action: "CHECKIN",
-        work_date: workDate,
-      })
-        .sort({ created_at: 1 })
-        .select("id created_at work_date")
-        .lean(),
-      StaffAttendanceLog.findOne({
-        shift_assignment_id: assignment.id,
-        action: "CHECKOUT",
-        work_date: workDate,
-      })
-        .sort({ created_at: 1 })
-        .select("id created_at work_date")
-        .lean(),
-    ]);
-
-    return {
-      shift_assignment_id: assignment.id,
-      date: workDate.toISOString().slice(0, 10),
-      checked_in: Boolean(checkinLog),
-      checked_out: Boolean(checkoutLog),
-      checkin_at: checkinLog ? checkinLog.created_at : null,
-      checkout_at: checkoutLog ? checkoutLog.created_at : null,
-    };
-  }
-
   async getMyTodayAttendanceStatus({ user, date }) {
     const requesterIds = this.resolveRequesterIds(user);
-    const { start, end } = this.resolveDateRangeOfDay(date);
-    const workDate = this.resolveWorkDate(date);
+    const now = date ? new Date(date) : new Date();
+    const start = toStartOfDayInAppTz(now);
+    const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
+
+    // CRITICAL FIX: Only look at logs from the last 24 hours to determine CURRENT status.
+    // We don't want "zombie" sessions from days ago to affect the UI.
+    const lookbackLimit = new Date(now.getTime() - 24 * 60 * 60 * 1000);
 
     const logs = await StaffAttendanceLog.find({
       staff_id: { $in: requesterIds },
-      $or: [
-        { work_date: workDate },
-        { work_date: { $exists: false }, created_at: { $gte: start, $lte: end } },
-      ],
-    })
-      .sort({ created_at: 1 })
-      .select("id shift_assignment_id action created_at work_date")
-      .lean();
+      created_at: { $gte: lookbackLimit, $lte: end }
+    }).sort({ created_at: 1 }).lean();
 
-    const checkinLogs = logs.filter((item) => item.action === "CHECKIN");
-    const checkoutLogs = logs.filter((item) => item.action === "CHECKOUT");
+    // Group logs by work_date + shift_id to find the "current" active session
+    const sessions = {};
+    for (const log of logs) {
+      const key = `${log.work_date?.toISOString() || 'no-date'}_${log.shift_id}`;
+      if (!sessions[key]) sessions[key] = [];
+      sessions[key].push(log);
+    }
+
+    // CRITICAL: We only care about the ABSOLUTE LATEST session in the last 24h.
+    // If it's finished, it's finished. Don't look for old unfinished ones.
+    const sessionKeys = Object.keys(sessions).sort().reverse(); 
+    const bestKey = sessionKeys[0]; 
+
+    const relevantLogs = sessions[bestKey] || [];
+
+    const checkinLogs = relevantLogs.filter((item) => item.action === "CHECKIN");
+    const checkoutLogs = relevantLogs.filter((item) => item.action === "CHECKOUT");
+    const shiftIds = [...new Set(relevantLogs.map((item) => String(item.shift_id)))];
+
+    let hasHandover = false;
+    if (user.role === "manager" && shiftIds.length > 0) {
+      const handover = await ShiftHandoverLog.findOne({
+        manager_id: { $in: requesterIds },
+        shift_id: { $in: shiftIds },
+        created_at: { $gte: lookbackLimit }
+      }).lean();
+      hasHandover = !!handover;
+    }
+
+    // NEW: Check if there's any shift available for check-in RIGHT NOW
+    let canCheckin = false;
+    const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
+    for (const roster of rosters) {
+      const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
+      if (!shift) continue;
+      try {
+        const window = this.resolveShiftWindow(shift, now);
+        if (now <= window.shiftEnd) {
+          canCheckin = true;
+          break;
+        }
+      } catch (e) { /* Not in window */ }
+    }
 
     return {
       date: start.toISOString().slice(0, 10),
       checked_in_today: checkinLogs.length > 0,
       checked_out_today: checkoutLogs.length > 0,
+      can_checkin: canCheckin,
       checkin_count: checkinLogs.length,
       checkout_count: checkoutLogs.length,
       latest_checkin_at: checkinLogs.length > 0 ? checkinLogs[checkinLogs.length - 1].created_at : null,
       latest_checkout_at: checkoutLogs.length > 0 ? checkoutLogs[checkoutLogs.length - 1].created_at : null,
-      checkin_assignment_ids: [...new Set(checkinLogs.map((item) => String(item.shift_assignment_id)))],
-      checkout_assignment_ids: [...new Set(checkoutLogs.map((item) => String(item.shift_assignment_id)))],
+      shift_ids: shiftIds,
+      has_handover: hasHandover,
     };
   }
 
@@ -433,8 +393,20 @@ class StaffAttendanceLogService {
       query.staff_id = String(filters.staff_id);
     }
 
-    if (filters.shift_assignment_id) {
-      query.shift_assignment_id = String(filters.shift_assignment_id);
+    if (filters.shift_id) {
+      query.shift_id = String(filters.shift_id);
+    }
+
+    if (filters.location_id) {
+      query.location_id = String(filters.location_id);
+    }
+
+    if (filters.cluster_id) {
+      query.cluster_id = String(filters.cluster_id);
+    }
+
+    if (filters.date) {
+      query.work_date = toStartOfDayInAppTz(filters.date);
     }
 
     const normalizedAction = this.validateAction(filters.action);
@@ -449,7 +421,8 @@ class StaffAttendanceLogService {
         .sort({ created_at: -1 })
         .skip(pagination.skip)
         .limit(pagination.limit)
-        .lean(),
+        .populate("staff")
+        .populate("cluster"),
       StaffAttendanceLog.countDocuments(query),
     ]);
 
@@ -465,54 +438,53 @@ class StaffAttendanceLogService {
     };
   }
 
-  async getAttendanceLogById(id) {
-    const attendanceLog = await StaffAttendanceLog.findOne({ id });
-
-    if (!attendanceLog) {
-      const error = new Error("Khong tim thay ban ghi cham cong");
-      error.statusCode = 404;
-      throw error;
-    }
-
-    return attendanceLog;
-  }
-
-  async checkinWork({ shift_assignment_id, user, date }) {
-    if (!shift_assignment_id) {
-      const error = new Error("Thieu shift_assignment_id");
-      error.statusCode = 400;
-      throw error;
-    }
-
-    const assignment = await StaffShiftAssignment.findOne({ id: shift_assignment_id }).lean();
-    if (!assignment) {
-      const error = new Error("Khong tim thay phan cong ca");
-      error.statusCode = 404;
-      throw error;
-    }
-
+  async checkinWork({ user }) {
     const requesterIds = this.resolveRequesterIds(user);
-    if (!requesterIds.includes(String(assignment.staff_id))) {
-      const error = new Error("Ban khong co quyen vao ca cho phan cong nay");
-      error.statusCode = 403;
+    const now = new Date();
+
+    // Find ALL active rosters for this staff
+    const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
+    if (!rosters || rosters.length === 0) {
+      const error = new Error("Khong tim thay thong tin phan cong (Roster)");
+      error.statusCode = 404;
       throw error;
     }
 
-    this.ensureAssignmentStatusForCheckin(assignment.status);
+    let activeRoster = null;
+    let activeShift = null;
+    let activeWindow = null;
 
-    const shiftWindow = this.resolveShiftWindow(assignment, new Date());
-    const workDate = this.getWorkDateFromShiftWindow(shiftWindow);
-    this.ensureRequestedWorkDateMatchesWindow(date, workDate);
-    const now = new Date();
-    // TEMP DISABLED FOR TESTING: check-in time window validation (30 min early)
-    // if (now < shiftWindow.checkinAllowedFrom || now > shiftWindow.shiftEnd) {
-    //   const error = new Error("Chi duoc vao ca tu 30 phut truoc gio bat dau den het gio ket thuc ca");
-    //   error.statusCode = 400;
-    //   throw error;
-    // }
+    // Iterate through rosters to find the one whose shift matches current time
+    for (const roster of rosters) {
+      const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
+      if (!shift) continue;
+
+      try {
+        const window = this.resolveShiftWindow(shift, now);
+        if (now <= window.shiftEnd) {
+          // If we got here, this shift is valid for current time
+          activeRoster = roster;
+          activeShift = shift;
+          activeWindow = window;
+          break;
+        }
+      } catch (e) {
+        // Not in window for this shift, keep looking
+        continue;
+      }
+    }
+
+    if (!activeRoster || !activeShift) {
+      const error = new Error("Ban khong co ca truc nao phu hop vao thoi diem nay");
+      error.statusCode = 404;
+      throw error;
+    }
+
+    const workDate = activeWindow.workDate;
 
     const existingCheckinLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
+      staff_id: { $in: requesterIds },
+      shift_id: activeShift.id,
       action: "CHECKIN",
       work_date: workDate,
     }).select("id created_at").lean();
@@ -528,14 +500,46 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    let log;
+    // Lazy checkout previous manager if they forgot
+    if (user.role === "manager" && activeRoster.location_id) {
+      const previousManagerCheckin = await StaffAttendanceLog.findOne({
+        location_id: activeRoster.location_id,
+        action: "CHECKIN",
+        staff_id: { $nin: requesterIds }
+      }).sort({ created_at: -1 }).lean();
+
+      if (previousManagerCheckin) {
+        const hasCheckedOut = await StaffAttendanceLog.findOne({
+          staff_id: previousManagerCheckin.staff_id,
+          action: "CHECKOUT",
+          work_date: previousManagerCheckin.work_date,
+          shift_id: previousManagerCheckin.shift_id
+        }).lean();
+
+        if (!hasCheckedOut) {
+          // Force checkout previous manager
+          await StaffAttendanceLog.create({
+            staff_id: previousManagerCheckin.staff_id,
+            shift_id: previousManagerCheckin.shift_id,
+            location_id: previousManagerCheckin.location_id,
+            cluster_id: previousManagerCheckin.cluster_id,
+            action: "CHECKOUT",
+            work_date: previousManagerCheckin.work_date,
+          });
+        }
+      }
+    }
+
     try {
-      log = await StaffAttendanceLog.create({
-        staff_id: assignment.staff_id,
-        shift_assignment_id: assignment.id,
+      const log = await StaffAttendanceLog.create({
+        staff_id: requesterIds[0],
+        shift_id: activeShift.id,
+        location_id: activeRoster.location_id || null,
+        cluster_id: activeRoster.cluster_id || null,
         action: "CHECKIN",
         work_date: workDate,
       });
+      return log;
     } catch (createError) {
       if (createError && createError.code === 11000) {
         const error = new Error("Ban da vao ca truoc do");
@@ -544,46 +548,60 @@ class StaffAttendanceLogService {
       }
       throw createError;
     }
-
-    return log;
   }
 
-  async checkoutWork({ shift_assignment_id, user, date }) {
-    if (!shift_assignment_id) {
-      const error = new Error("Thieu shift_assignment_id");
+  async checkoutWork({ user }) {
+    const requesterIds = this.resolveRequesterIds(user);
+    const now = new Date();
+
+    // 1. Find the latest CHECKIN for this staff that doesn't have a CHECKOUT yet
+    const latestCheckin = await StaffAttendanceLog.findOne({
+      staff_id: { $in: requesterIds },
+      action: "CHECKIN"
+    }).sort({ created_at: -1 }).lean();
+
+    if (!latestCheckin) {
+      const error = new Error("Ban can vao ca truoc khi tan ca");
       error.statusCode = 400;
       throw error;
     }
 
-    const assignment = await StaffShiftAssignment.findOne({ id: shift_assignment_id }).lean();
-    if (!assignment) {
-      const error = new Error("Khong tim thay phan cong ca");
+    // Check if already checked out for this specific checkin
+    const alreadyCheckedOut = await StaffAttendanceLog.findOne({
+      staff_id: latestCheckin.staff_id,
+      action: "CHECKOUT",
+      work_date: latestCheckin.work_date,
+      shift_id: latestCheckin.shift_id
+    }).lean();
+
+    if (alreadyCheckedOut) {
+      const error = new Error("Ban da tan ca truoc do");
+      error.statusCode = 400;
+      throw error;
+    }
+
+    // 2. Resolve the shift window to check if checkout is allowed
+    const shift = await StaffShift.findOne({ id: latestCheckin.shift_id }).lean();
+    if (!shift) {
+      const error = new Error("Khong tim thay thong tin ca lam viec");
       error.statusCode = 404;
       throw error;
     }
 
-    const requesterIds = this.resolveRequesterIds(user);
-    if (!requesterIds.includes(String(assignment.staff_id))) {
-      const error = new Error("Ban khong co quyen tan ca cho phan cong nay");
-      error.statusCode = 403;
+    const shiftWindow = this.resolveShiftWindow(shift, now);
+    const workDate = shiftWindow.workDate;
+    const shiftEnd = shiftWindow.shiftEnd;
+
+    // 3. Enforce checkout ONLY after shift end (user request)
+    if (now < shiftEnd) {
+      const error = new Error(`Ban chi co the tan ca sau khi ca truc ket thuc (${shift.end_time})`);
+      error.statusCode = 400;
       throw error;
     }
 
-    this.ensureAssignmentStatusForCheckout(assignment.status);
-
-    const shiftWindow = this.resolveShiftWindow(assignment, new Date());
-    const workDate = this.getWorkDateFromShiftWindow(shiftWindow);
-    this.ensureRequestedWorkDateMatchesWindow(date, workDate);
-    const now = new Date();
-    // TEMP DISABLED FOR TESTING: check-out time window validation (180 min late)
-    // if (now < shiftWindow.shiftStart || now > shiftWindow.checkoutAllowedUntil) {
-    //   const error = new Error("Chi duoc tan ca trong thoi gian ca va toi da 180 phut sau khi ket thuc ca");
-    //   error.statusCode = 400;
-    //   throw error;
-    // }
-
     const existingCheckinLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
+      staff_id: { $in: requesterIds },
+      shift_id: shift.id,
       action: "CHECKIN",
       work_date: workDate,
     }).select("id created_at").lean();
@@ -594,37 +612,59 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    if (new Date(existingCheckinLog.created_at).getTime() > now.getTime()) {
-      const error = new Error("Du lieu cham cong khong hop le: tan ca khong the xay ra truoc vao ca");
-      error.statusCode = 400;
-      throw error;
-    }
-
     const existingCheckoutLog = await StaffAttendanceLog.findOne({
-      shift_assignment_id: assignment.id,
+      staff_id: { $in: requesterIds },
+      shift_id: shift.id,
       action: "CHECKOUT",
       work_date: workDate,
     }).select("id created_at").lean();
 
     if (existingCheckoutLog) {
-      const checkedOutAt = formatDateTimeVi(existingCheckoutLog.created_at);
-      const error = new Error(
-        checkedOutAt
-          ? `Ban da tan ca truoc do luc ${checkedOutAt}`
-          : "Ban da tan ca truoc do"
-      );
+      const error = new Error("Ban da tan ca truoc do");
       error.statusCode = 400;
       throw error;
     }
 
-    let log;
+    if (user.role === "cleaner") {
+      // Must complete ongoing cleaning tasks
+      const ongoingTask = await CleaningTask.findOne({
+        cleaner_id: { $in: requesterIds },
+        status: "IN_PROGRESS"
+      }).lean();
+
+      if (ongoingTask) {
+        const error = new Error("Vui long hoan thanh cong viec don dep dang dang do truoc khi ket thuc ca");
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
+    if (user.role === "manager") {
+      // Require Handover Note created today
+      const startOfToday = toStartOfDay(now);
+      const handover = await ShiftHandoverLog.findOne({
+        manager_id: { $in: requesterIds },
+        shift_id: shift.id,
+        created_at: { $gte: startOfToday }
+      }).lean();
+
+      if (!handover) {
+        const error = new Error("Vui long ghi chu ban giao ca truoc khi tan ca");
+        error.statusCode = 400;
+        throw error;
+      }
+    }
+
     try {
-      log = await StaffAttendanceLog.create({
-        staff_id: assignment.staff_id,
-        shift_assignment_id: assignment.id,
+      const log = await StaffAttendanceLog.create({
+        staff_id: requesterIds[0],
+        shift_id: shift.id,
+        location_id: latestCheckin.location_id || null,
+        cluster_id: latestCheckin.cluster_id || null,
         action: "CHECKOUT",
         work_date: workDate,
       });
+      return log;
     } catch (createError) {
       if (createError && createError.code === 11000) {
         const error = new Error("Ban da tan ca truoc do");
@@ -633,8 +673,74 @@ class StaffAttendanceLogService {
       }
       throw createError;
     }
+  }
 
-    return log;
+  async autoCheckoutGhostSessions() {
+    console.log("[StaffAttendance] Running auto-checkout for ghost sessions...");
+    try {
+      const now = new Date();
+
+      // Find all CHECKIN logs in the last 24 hours
+      const cutoffStart = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+      const activeCheckins = await StaffAttendanceLog.find({
+        action: "CHECKIN",
+        created_at: { $gt: cutoffStart }
+      }).lean();
+
+      let checkedOutCount = 0;
+
+      for (const checkin of activeCheckins) {
+        // 1. Check if already has a CHECKOUT
+        const hasCheckout = await StaffAttendanceLog.exists({
+          staff_id: checkin.staff_id,
+          action: "CHECKOUT",
+          work_date: checkin.work_date,
+          shift_id: checkin.shift_id
+        });
+
+        if (hasCheckout) continue;
+
+        // 2. Get shift details to see when it ended
+        const shift = await StaffShift.findOne({ id: checkin.shift_id }).lean();
+        if (!shift) continue;
+
+        try {
+          // Get the actual end time for this shift on its work_date
+          const startParts = parseTimeParts(shift.start_time);
+          const endParts = parseTimeParts(shift.end_time);
+          if (!startParts || !endParts) continue;
+
+          let shiftEnd = withTimeInAppTz(checkin.work_date, endParts);
+          if (shiftEnd <= withTimeInAppTz(checkin.work_date, startParts)) {
+            shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+          }
+
+          // Auto checkout if 30 minutes past shift end
+          const autoCheckoutTime = new Date(shiftEnd.getTime() + 30 * 60 * 1000);
+
+          if (now >= autoCheckoutTime) {
+            await StaffAttendanceLog.create({
+              staff_id: checkin.staff_id,
+              shift_id: checkin.shift_id,
+              location_id: checkin.location_id,
+              cluster_id: checkin.cluster_id,
+              action: "CHECKOUT",
+              work_date: checkin.work_date,
+              created_at: autoCheckoutTime // Record it as checked out exactly at the threshold
+            });
+            checkedOutCount++;
+          }
+        } catch (err) {
+          console.error(`[StaffAttendance] Error processing auto-checkout for log ${checkin.id}:`, err);
+        }
+      }
+
+      if (checkedOutCount > 0) {
+        console.log(`[StaffAttendance] Auto-checked out ${checkedOutCount} ghost sessions.`);
+      }
+    } catch (error) {
+      console.error("[StaffAttendance] Failed to run ghost session cleanup:", error);
+    }
   }
 }
 

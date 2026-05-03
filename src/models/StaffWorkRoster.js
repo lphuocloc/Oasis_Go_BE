@@ -15,22 +15,37 @@ const staffWorkRosterSchema = new mongoose.Schema(
       ref: "User",
       index: true,
     },
-    location_shift_id: {
+    shift_id: {
       type: String,
-      required: [true, "Location shift ID is required"],
-      ref: "LocationShift",
+      required: [true, "Shift ID is required"],
+      ref: "StaffShift",
       index: true,
     },
-    day_of_week: {
-      type: Number,
-      required: [true, "day_of_week is required"],
-      min: [0, "day_of_week must be from 0 to 6"],
-      max: [6, "day_of_week must be from 0 to 6"],
+    location_id: {
+      type: String,
+      default: null,
+      ref: "Location",
+      index: true,
+    },
+    cluster_id: {
+      type: String,
+      default: null,
+      ref: "PodCluster",
       index: true,
     },
     is_active: {
       type: Boolean,
       default: true,
+      index: true,
+    },
+    is_temporary: {
+      type: Boolean,
+      default: false,
+      index: true,
+    },
+    work_date: {
+      type: Date,
+      default: null,
       index: true,
     },
   },
@@ -40,20 +55,34 @@ const staffWorkRosterSchema = new mongoose.Schema(
 );
 
 staffWorkRosterSchema.index(
-  { staff_id: 1, location_shift_id: 1, day_of_week: 1 },
+  { staff_id: 1, shift_id: 1, location_id: 1, cluster_id: 1 },
   { unique: true }
 );
 
 staffWorkRosterSchema.virtual("staff", {
   ref: "User",
   localField: "staff_id",
+  foreignField: "_id",
+  justOne: true,
+});
+
+staffWorkRosterSchema.virtual("shift", {
+  ref: "StaffShift",
+  localField: "shift_id",
   foreignField: "id",
   justOne: true,
 });
 
-staffWorkRosterSchema.virtual("locationShift", {
-  ref: "LocationShift",
-  localField: "location_shift_id",
+staffWorkRosterSchema.virtual("location", {
+  ref: "Location",
+  localField: "location_id",
+  foreignField: "id",
+  justOne: true,
+});
+
+staffWorkRosterSchema.virtual("cluster", {
+  ref: "PodCluster",
+  localField: "cluster_id",
   foreignField: "id",
   justOne: true,
 });

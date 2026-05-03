@@ -131,7 +131,7 @@ exports.getPodOccupancyRateByParentLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.createLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
+        const { name, type, parent_id, description, address, city, lat, lng, isActive } = req.body;
 
         const location = await locationService.createLocation({
             type,
@@ -139,6 +139,7 @@ exports.createLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            city,
             lat,
             lng,
             isActive,
@@ -146,14 +147,14 @@ exports.createLocation = async (req, res) => {
 
         res.status(201).json({
             success: true,
-            message: "Location created successfully",
+            message: "Tạo vị trí thành công!",
             data: location,
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error creating location",
+            message: error.message || "Lỗi tạo vị trí",
         });
     }
 };
@@ -163,7 +164,7 @@ exports.createLocation = async (req, res) => {
 // @access  Private (Admin)
 exports.updateLocation = async (req, res) => {
     try {
-        const { name, type, parent_id, description, address, lat, lng, isActive } = req.body;
+        const { name, type, parent_id, description, address, city, lat, lng, isActive } = req.body;
 
         const location = await locationService.updateLocation(req.params.id, {
             type,
@@ -171,6 +172,7 @@ exports.updateLocation = async (req, res) => {
             description,
             parent_id,
             address,
+            city,
             lat,
             lng,
             isActive,
@@ -178,14 +180,14 @@ exports.updateLocation = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: "Location updated successfully",
+            message: "Cập nhật vị trí thành công!",
             data: location,
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error updating location",
+            message: error.message || "Lỗi cập nhật vị trí",
         });
     }
 };
@@ -199,13 +201,13 @@ exports.deleteLocation = async (req, res) => {
 
         res.status(200).json({
             success: true,
-            message: result.message,
+            message: "Xóa vị trí thành công!",
         });
     } catch (error) {
         const statusCode = error.statusCode || 500;
         res.status(statusCode).json({
             success: false,
-            message: error.message || "Error deleting location",
+            message: error.message || "Lỗi xóa vị trí",
         });
     }
 };

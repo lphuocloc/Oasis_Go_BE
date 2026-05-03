@@ -176,6 +176,19 @@ router.get(
  *     responses:
  *       201:
  *         description: Staff shift created successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/StaffShift'
+ *       400:
+ *         description: Invalid input
  *       409:
  *         description: Staff shift already exists
  */
@@ -216,6 +229,19 @@ router.post(
  *     responses:
  *       200:
  *         description: Staff shift updated successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
+ *                 data:
+ *                   $ref: '#/components/schemas/StaffShift'
+ *       400:
+ *         description: Invalid input
  *       404:
  *         description: Staff shift not found
  *       409:
@@ -246,6 +272,15 @@ router.put(
  *     responses:
  *       200:
  *         description: Staff shift deleted successfully
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 success:
+ *                   type: boolean
+ *                 message:
+ *                   type: string
  *       404:
  *         description: Staff shift not found
  */

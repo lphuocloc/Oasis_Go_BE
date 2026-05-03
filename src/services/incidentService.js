@@ -1,6 +1,6 @@
 const Incident = require("../models/Incidents");
 const IncidentDetail = require("../models/IncidentDetail");
-const IncidentPhoto = require("../models/IncidentPhoto");
+const IncidentMedia = require("../models/IncidentMedia");
 const Booking = require("../models/Bookings");
 const BookingOrder = require("../models/BookingOrder");
 const Wallet = require("../models/Wallet");
@@ -11,18 +11,20 @@ const Pod = require("../models/Pod");
 const PodCluster = require("../models/PodCluster");
 const Item = require("../models/Item");
 const DamageServiceCatalog = require("../models/DamageServiceCatalog");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
-const LocationShift = require("../models/LocationShift");
-const StaffShift = require("../models/StaffShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const User = require("../models/User");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
 const debtService = require("./debtService");
 const { emitCleanerNotificationEvent } = require("../socket/socketServer");
+const LocationWarehouse = require("../models/LocationWarehouse");
+const InventoryStock = require("../models/InventoryStock");
+const InventoryActivityLog = require("../models/InventoryActivityLog");
+const PodItem = require("../models/PodItem");
 
-const INCIDENT_STATUSES = ["PENDING", "RESOLVED", "DISMISSED"];
+const INCIDENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
-const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT"];
+const INCIDENT_TYPES = ["OPERATIONAL", "DAMAGE_REPORT", "REPLENISHMENT_REQUEST"];
 const INCIDENT_DETAIL_TYPES = ["ITEM", "SERVICE"];
 const REFUND_BLOCKING_TASK_STATUSES = ["ASSIGNED", "ACCEPTED", "IN_PROGRESS", "MISSED"];
 const ORDER_BOOKING_TERMINAL_STATUSES = ["COMPLETED", "CANCELLED"];
@@ -98,9 +100,11 @@ const roundMoney = (value) => {
 };
 
 const getIncidentDamageTotal = async (incident) => {
-  const estimated = Number(incident?.estimated_total_value);
-  if (Number.isFinite(estimated) && estimated >= 0) {
-    return roundMoney(estimated);
+  if (incident?.estimated_total_value !== null && incident?.estimated_total_value !== undefined) {
+    const estimated = Number(incident.estimated_total_value);
+    if (Number.isFinite(estimated) && estimated >= 0) {
+      return roundMoney(estimated);
+    }
   }
 
   const detailRows = await IncidentDetail.find({ incident_id: incident.id })
@@ -133,455 +137,9 @@ const getOrCreateWalletByUserId = async (userId, session = null) => {
   return wallet;
 };
 
-const resolveOrderById = async (orderId, session = null) => {
-  let query = BookingOrder.findOne({ id: String(orderId || "") })
-    .select("id user_id status deposit_total deposit_settlement_status outstanding_damage_amount deposit_settled_at");
-  if (session) query = query.session(session);
-  return query;
-};
 
-const settleOrderDepositAfterIncidentsInternal = async ({
-  orderId,
-  trigger = "SYSTEM",
-  session,
-} = {}) => {
-  const normalizedOrderId = String(orderId || "").trim();
-  const logPrefix = "[DepositSettlement][Incident]";
 
-  console.info(`${logPrefix} Start`, {
-    order_id: normalizedOrderId || null,
-    trigger,
-  });
 
-  if (!normalizedOrderId) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "MISSING_ORDER_ID",
-      trigger,
-    });
-    return { settled: false, reason: "MISSING_ORDER_ID" };
-  }
-
-  const order = await resolveOrderById(normalizedOrderId, session);
-  if (!order) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_NOT_FOUND",
-      order_id: normalizedOrderId,
-      trigger,
-    });
-    return { settled: false, reason: "ORDER_NOT_FOUND" };
-  }
-
-  console.info(`${logPrefix} OrderLoaded`, {
-    order_id: normalizedOrderId,
-    order_status: String(order.status || ""),
-    deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    deposit_total: Number(order.deposit_total || 0),
-  });
-
-  if (!["PAID", "PARTIAL_CANCEL"].includes(String(order.status || "").toUpperCase())) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_NOT_ELIGIBLE",
-      order_id: normalizedOrderId,
-      order_status: String(order.status || ""),
-    });
-    return { settled: false, reason: "ORDER_NOT_ELIGIBLE", order_id: normalizedOrderId };
-  }
-
-  if (String(order.deposit_settlement_status || "") !== "PENDING_INSPECTION") {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_ALREADY_SETTLED",
-      order_id: normalizedOrderId,
-      deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    });
-    return {
-      settled: false,
-      reason: "ORDER_ALREADY_SETTLED",
-      order_id: normalizedOrderId,
-      deposit_settlement_status: String(order.deposit_settlement_status || ""),
-    };
-  }
-
-  const bookings = await Booking.find({ order_id: normalizedOrderId })
-    .select("id status")
-    .session(session)
-    .lean();
-
-  console.info(`${logPrefix} BookingsLoaded`, {
-    order_id: normalizedOrderId,
-    booking_count: bookings.length,
-  });
-
-  if (!bookings.length) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_BOOKINGS_NOT_FOUND",
-      order_id: normalizedOrderId,
-    });
-    return { settled: false, reason: "ORDER_BOOKINGS_NOT_FOUND", order_id: normalizedOrderId };
-  }
-
-  const bookingIds = bookings.map((booking) => String(booking.id || "")).filter(Boolean);
-
-  const hasNonTerminalBooking = bookings.some(
-    (booking) => !ORDER_BOOKING_TERMINAL_STATUSES.includes(String(booking.status || "").toUpperCase())
-  );
-  if (hasNonTerminalBooking) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "ORDER_BOOKINGS_NOT_TERMINAL",
-      order_id: normalizedOrderId,
-      booking_statuses: bookings.map((booking) => String(booking.status || "").toUpperCase()),
-    });
-    return { settled: false, reason: "ORDER_BOOKINGS_NOT_TERMINAL", order_id: normalizedOrderId };
-  }
-
-  const unfinishedTask = await CleaningTask.findOne({
-    booking_id: { $in: bookingIds },
-    status: { $in: REFUND_BLOCKING_TASK_STATUSES },
-  })
-    .select("id booking_id status")
-    .session(session)
-    .lean();
-  if (unfinishedTask) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "CLEANING_NOT_COMPLETED",
-      order_id: normalizedOrderId,
-      task_id: String(unfinishedTask.id || ""),
-      task_status: String(unfinishedTask.status || ""),
-    });
-    return {
-      settled: false,
-      reason: "CLEANING_NOT_COMPLETED",
-      order_id: normalizedOrderId,
-      task_id: String(unfinishedTask.id || ""),
-    };
-  }
-
-  const pendingIncident = await Incident.findOne({
-    booking_id: { $in: bookingIds },
-    status: "PENDING",
-  })
-    .select("id")
-    .session(session)
-    .lean();
-  if (pendingIncident) {
-    console.warn(`${logPrefix} Stop`, {
-      reason: "PENDING_INCIDENT_EXISTS",
-      order_id: normalizedOrderId,
-      incident_id: String(pendingIncident.id || ""),
-    });
-    return {
-      settled: false,
-      reason: "PENDING_INCIDENT_EXISTS",
-      order_id: normalizedOrderId,
-      incident_id: String(pendingIncident.id || ""),
-    };
-  }
-
-  const resolvedIncidents = await Incident.find({
-    booking_id: { $in: bookingIds },
-    status: "RESOLVED",
-  })
-    .select("id booking_id status incident_type estimated_total_value")
-    .session(session)
-    .lean();
-
-  const resolvedIncidentIds = resolvedIncidents
-    .map((incident) => String(incident.id || ""))
-    .filter(Boolean);
-  const incidentDetailMap = await buildIncidentDetailMap(resolvedIncidentIds, session);
-
-  const incidentBreakdown = [];
-  let totalResolvedIncidentDamage = 0;
-  for (const incident of resolvedIncidents) {
-    const amount = await getIncidentDamageTotal(incident);
-    if (amount <= 0) continue;
-
-    const incidentDetails = (incidentDetailMap[String(incident.id || "")] || []).map((detail) => ({
-      type: String(detail.type || "").toUpperCase(),
-      item_id: detail.item_id ? String(detail.item_id) : null,
-      service_catalog_id: detail.service_catalog_id ? String(detail.service_catalog_id) : null,
-      name_snapshot: detail.name_snapshot || null,
-      quantity: Number(detail.quantity || 0),
-      unit_cost_snapshot: Number(detail.unit_cost_snapshot || 0),
-      total_cost: Number(detail.total_cost || 0),
-      note: detail.note || null,
-    }));
-
-    const damagedProducts = incidentDetails
-      .filter((detail) => detail.type === "ITEM")
-      .map((detail) => ({
-        item_id: detail.item_id,
-        name_snapshot: detail.name_snapshot,
-        quantity: detail.quantity,
-        unit_cost_snapshot: detail.unit_cost_snapshot,
-        total_cost: detail.total_cost,
-        note: detail.note,
-      }));
-
-    totalResolvedIncidentDamage += amount;
-    incidentBreakdown.push({
-      incident_id: String(incident.id || ""),
-      booking_id: String(incident.booking_id || ""),
-      amount,
-      status: String(incident.status || "").toUpperCase(),
-      incident_details: incidentDetails,
-      damaged_products: damagedProducts,
-    });
-  }
-
-  totalResolvedIncidentDamage = roundMoney(totalResolvedIncidentDamage);
-
-  const depositTotal = roundMoney(Number(order.deposit_total || 0));
-  const depositUsed = roundMoney(Math.min(depositTotal, totalResolvedIncidentDamage));
-  const refundedToWalletAmount = roundMoney(Math.max(0, depositTotal - depositUsed));
-
-  const damageAfterDeposit = roundMoney(Math.max(0, totalResolvedIncidentDamage - depositUsed));
-
-  let walletDebitAmount = 0;
-  let outstandingAmount = damageAfterDeposit;
-  let wallet = null;
-
-  console.info(`${logPrefix} AmountCalculated`, {
-    order_id: normalizedOrderId,
-    resolved_incident_count: resolvedIncidents.length,
-    resolved_damage_total: totalResolvedIncidentDamage,
-    deposit_total: depositTotal,
-    deposit_used: depositUsed,
-    refunded_to_wallet_amount: refundedToWalletAmount,
-    damage_after_deposit: damageAfterDeposit,
-  });
-
-  if (damageAfterDeposit > 0) {
-    wallet = await getOrCreateWalletByUserId(order.user_id, session);
-
-    const balanceBefore = roundMoney(Number(wallet.balance || 0));
-    walletDebitAmount = roundMoney(Math.min(balanceBefore, damageAfterDeposit));
-    const balanceAfter = roundMoney(balanceBefore - walletDebitAmount);
-    outstandingAmount = roundMoney(damageAfterDeposit - walletDebitAmount);
-
-    if (walletDebitAmount > 0) {
-      wallet.balance = balanceAfter;
-      await wallet.save({ session });
-
-      console.info(`${logPrefix} WalletDebited`, {
-        order_id: normalizedOrderId,
-        user_id: String(order.user_id || ""),
-        wallet_debit_amount: walletDebitAmount,
-        balance_before: balanceBefore,
-        balance_after: balanceAfter,
-      });
-
-      const createdPenaltyTx = await Transaction.create(
-        [
-          {
-            order_id: normalizedOrderId,
-            amount: walletDebitAmount,
-            currency: "VND",
-            type: "PENALTY",
-            method: "WALLET",
-            status: "SUCCESS",
-            provider_reference: "DEPOSIT_SETTLEMENT_INCIDENT_PENALTY",
-          },
-        ],
-        { session }
-      );
-
-      await WalletTransaction.create(
-        [
-          {
-            wallet_id: wallet.id,
-            amount: walletDebitAmount,
-            type: "PAYMENT",
-            transaction_id: createdPenaltyTx[0].id,
-            reference_id: normalizedOrderId,
-            description: `Tru vi cho chi phi su co don ${normalizedOrderId}`,
-            balance_before: balanceBefore,
-            balance_after: balanceAfter,
-          },
-        ],
-        { session }
-      );
-    }
-  }
-
-  if (refundedToWalletAmount > 0) {
-    wallet = wallet || (await getOrCreateWalletByUserId(order.user_id, session));
-
-    const balanceBefore = roundMoney(Number(wallet.balance || 0));
-    const balanceAfter = roundMoney(balanceBefore + refundedToWalletAmount);
-    wallet.balance = balanceAfter;
-    await wallet.save({ session });
-
-    console.info(`${logPrefix} WalletRefunded`, {
-      order_id: normalizedOrderId,
-      user_id: String(order.user_id || ""),
-      refunded_to_wallet_amount: refundedToWalletAmount,
-      balance_before: balanceBefore,
-      balance_after: balanceAfter,
-    });
-
-    const createdRefundTx = await Transaction.create(
-      [
-        {
-          order_id: normalizedOrderId,
-          amount: refundedToWalletAmount,
-          currency: "VND",
-          type: "REFUND",
-          method: "WALLET",
-          status: "SUCCESS",
-          provider_reference: "DEPOSIT_SETTLEMENT_INCIDENT_REFUND",
-        },
-      ],
-      { session }
-    );
-
-    await WalletTransaction.create(
-      [
-        {
-          wallet_id: wallet.id,
-          amount: refundedToWalletAmount,
-          type: "REFUND",
-          transaction_id: createdRefundTx[0].id,
-          reference_id: normalizedOrderId,
-          description: `Hoan coc don ${normalizedOrderId} sau doi soat su co`,
-          balance_before: balanceBefore,
-          balance_after: balanceAfter,
-        },
-      ],
-      { session }
-    );
-  }
-
-  let settlementStatus = "REFUNDED";
-  if (depositUsed > 0) {
-    settlementStatus = depositUsed >= depositTotal ? "FORFEITED" : "PARTIALLY_FORFEITED";
-  }
-
-  const settledAt = new Date();
-  const snapshot = {
-    settled_at: settledAt,
-    trigger,
-    total_resolved_incident_damage: totalResolvedIncidentDamage,
-    deposit_used: depositUsed,
-    refunded_to_wallet_amount: refundedToWalletAmount,
-    wallet_debit_amount: walletDebitAmount,
-    outstanding_amount: outstandingAmount,
-    incident_breakdown: incidentBreakdown,
-  };
-
-  order.deposit_settlement_status = settlementStatus;
-  order.outstanding_damage_amount = outstandingAmount;
-  order.deposit_settled_at = settledAt;
-  order.deposit_settlement_snapshot = snapshot;
-  await order.save({ session });
-
-  console.info(`${logPrefix} OrderUpdated`, {
-    order_id: normalizedOrderId,
-    settlement_status: settlementStatus,
-    outstanding_amount: outstandingAmount,
-    settled_at: settledAt.toISOString(),
-  });
-
-  await debtService.recordOrderOutstandingDebt(
-    {
-      userId: order.user_id,
-      orderId: normalizedOrderId,
-      outstandingAmount,
-      incidentBreakdown,
-      trigger,
-      dueAt: settledAt,
-      settledAt,
-    },
-    session,
-  );
-
-  console.info(`${logPrefix} DebtSynced`, {
-    order_id: normalizedOrderId,
-    outstanding_amount: outstandingAmount,
-    incident_count: incidentBreakdown.length,
-  });
-
-  console.info(`${logPrefix} Done`, {
-    order_id: normalizedOrderId,
-    settlement_status: settlementStatus,
-  });
-
-  return {
-    settled: true,
-    order_id: normalizedOrderId,
-    summary: {
-      booking_order_id: normalizedOrderId,
-      deposit_total: depositTotal,
-      total_resolved_incident_damage: totalResolvedIncidentDamage,
-      deposit_deducted_value: depositUsed,
-      refunded_to_wallet_amount: refundedToWalletAmount,
-      wallet_debit_amount: walletDebitAmount,
-      outstanding_amount: outstandingAmount,
-      deposit_settlement_status: settlementStatus,
-      incident_breakdown: incidentBreakdown,
-    },
-  };
-};
-
-exports.settleOrderDepositAfterIncidents = async ({ orderId, trigger = "SYSTEM" } = {}) => {
-  let settlementResult = null;
-  const session = await mongoose.startSession();
-  const logPrefix = "[DepositSettlement][Incident]";
-
-  try {
-    console.info(`${logPrefix} TransactionStart`, {
-      order_id: String(orderId || "").trim() || null,
-      trigger,
-    });
-
-    await session.withTransaction(async () => {
-      settlementResult = await settleOrderDepositAfterIncidentsInternal({ orderId, trigger, session });
-    });
-
-    console.info(`${logPrefix} TransactionCommitted`, {
-      order_id: String(orderId || "").trim() || null,
-      settled: Boolean(settlementResult?.settled),
-      reason: settlementResult?.reason || null,
-    });
-  } catch (error) {
-    console.error(`${logPrefix} TransactionFailed`, {
-      order_id: String(orderId || "").trim() || null,
-      trigger,
-      error: error?.message || String(error),
-    });
-    throw error;
-  } finally {
-    await session.endSession();
-  }
-
-  if (settlementResult?.settled && settlementResult?.summary) {
-    const order = await resolveOrderById(orderId);
-    if (order?.user_id) {
-      const summary = settlementResult.summary;
-      await notificationService.sendToUser(order.user_id, {
-        title: "Đã xử lý xong khoản đặt cọc của bạn",
-        message: `Đơn ${summary.booking_order_id} đã đối soát cọc. Tổng tiền hư hại: ${Number(summary.total_resolved_incident_damage || 0).toLocaleString("vi-VN")} VND, hoàn: ${Number(summary.refunded_to_wallet_amount || 0).toLocaleString("vi-VN")} VND, trừ cọc: ${Number(summary.deposit_deducted_value || 0).toLocaleString("vi-VN")} VND, trừ ví: ${Number(summary.wallet_debit_amount || 0).toLocaleString("vi-VN")} VND, công nợ: ${Number(summary.outstanding_amount || 0).toLocaleString("vi-VN")} VND.`,
-        type: "PAYMENT",
-        event_code: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
-        dedupe_key: `PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED:${summary.booking_order_id}:${String(order.deposit_settled_at || "")}`,
-        data: {
-          type: "PAYMENT_DEPOSIT_SETTLEMENT_COMPLETED",
-          order_id: summary.booking_order_id,
-          trigger,
-          deposit_total: String(summary.deposit_total || 0),
-          deposit_deducted_value: String(summary.deposit_deducted_value || 0),
-          refunded_to_wallet_amount: String(summary.refunded_to_wallet_amount || 0),
-          wallet_debit_amount: String(summary.wallet_debit_amount || 0),
-          outstanding_amount: String(summary.outstanding_amount || 0),
-          deposit_settlement_status: String(summary.deposit_settlement_status || ""),
-          total_resolved_incident_damage: String(summary.total_resolved_incident_damage || 0),
-          incident_breakdown: summary.incident_breakdown || [],
-        },
-      });
-    }
-  }
-
-  return settlementResult;
-};
 
 const parseIncidentDetailsPayload = ({ details }) => {
   let parsedDetails = details;
@@ -639,50 +197,28 @@ const resolveManagersForPod = async (podId) => {
   const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("location_id").lean();
   if (!cluster || !cluster.location_id) return [];
 
-  const locationShifts = await LocationShift.find({ location_id: cluster.location_id }).select("id shift_id").lean();
-  if (!locationShifts.length) return [];
+  const rosters = await StaffWorkRoster.find({
+    location_id: cluster.location_id,
+    is_active: true
+  }).lean();
 
-  const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
-  const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
-    .select("id")
-    .lean()
-    .then((rows) => rows.map((row) => String(row.id)));
+  const rosterStaffIds = [...new Set(rosters.map(r => String(r.staff_id)))];
 
-  if (!managerShiftIds.length) return [];
-
-  const managerLocationShiftIds = locationShifts
-    .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
-    .map((entry) => String(entry.id));
-
-  if (!managerLocationShiftIds.length) return [];
-
-  const now = new Date();
-  const assignments = await StaffShiftAssignment.find({
-    location_shift_id: { $in: managerLocationShiftIds },
-    status: { $in: ["ASSIGNED", "CHECKED_IN"] },
-    start_date: { $lte: now },
-    end_date: { $gte: now },
-  })
-    .select("staff_id")
-    .lean();
-
-  const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-  
-  if (!assignmentStaffIds.length) {
+  if (!rosterStaffIds.length) {
     const allManagers = await User.find({ role: "manager", isActive: true })
       .select("_id")
       .lean();
     return [...new Set(allManagers.map((m) => String(m._id || "")).filter(Boolean))];
   }
 
-  const assignmentObjectIds = assignmentStaffIds
+  const assignmentObjectIds = rosterStaffIds
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
   const managers = await User.find({
     role: "manager",
     isActive: true,
-    $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+    $or: [{ id: { $in: rosterStaffIds } }, { _id: { $in: assignmentObjectIds } }],
   })
     .select("_id")
     .lean();
@@ -751,13 +287,13 @@ const buildIncidentPhotoMap = async (incidentIds = []) => {
     return {};
   }
 
-  const photos = await IncidentPhoto.find({ incident_id: { $in: incidentIds } })
-    .select("incident_id photo_url")
+  const photos = await IncidentMedia.find({ incident_id: { $in: incidentIds } })
+    .select("incident_id media_url")
     .lean();
 
   return photos.reduce((map, item) => {
     if (!map[item.incident_id]) map[item.incident_id] = [];
-    map[item.incident_id].push(item.photo_url);
+    map[item.incident_id].push(item.media_url);
     return map;
   }, {});
 };
@@ -970,7 +506,7 @@ exports.getIncidents = async (filters = {}, actor = null) => {
   if (filters.incident_type) {
     const incidentType = normalizeIncidentType(filters.incident_type);
     if (!INCIDENT_TYPES.includes(incidentType)) {
-      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT", 400);
+      throw createError("Invalid incident_type. Must be one of: OPERATIONAL, DAMAGE_REPORT, REPLENISHMENT_REQUEST", 400);
     }
     query.incident_type = incidentType;
   }
@@ -1161,7 +697,7 @@ exports.getIncidentById = async (incidentId, actor = null, managerScope = null) 
   }
 
   const [photos, details] = await Promise.all([
-    IncidentPhoto.find({ incident_id: incidentId }).select("photo_url -_id").lean(),
+    IncidentMedia.find({ incident_id: incidentId }).select("media_url file_type -_id").lean(),
     IncidentDetail.find({ incident_id: incidentId })
       .select("type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
       .lean(),
@@ -1169,7 +705,7 @@ exports.getIncidentById = async (incidentId, actor = null, managerScope = null) 
 
   return toIncidentView(
     incident,
-    photos.map((item) => item.photo_url),
+    photos.map((item) => item.media_url),
     details
   );
 };
@@ -1249,6 +785,7 @@ exports.createDamageReport = async (
       .map((item) => ({
         url: String(item.url || "").trim(),
         public_id: item.public_id ? String(item.public_id).trim() : null,
+        file_type: item.file_type === "VIDEO" ? "VIDEO" : "IMAGE",
       }))
       .filter((item) => item.url)
     : [];
@@ -1305,11 +842,12 @@ exports.createDamageReport = async (
       );
 
       if (photoRecords.length > 0) {
-        await IncidentPhoto.insertMany(
+        await IncidentMedia.insertMany(
           photoRecords.map((item) => ({
             incident_id: createdIncident.id,
-            photo_url: item.url,
-            photo_public_id: item.public_id,
+            media_url: item.url,
+            media_public_id: item.public_id || null,
+            file_type: item.file_type || "IMAGE",
           })),
           { session }
         );
@@ -1337,6 +875,7 @@ exports.createDamageReport = async (
           incident_id: incident.id,
           pod_id: resolvedPodId,
           pod_code: podCode,
+          cleaning_task_id: taskContext ? taskContext.id : null,
           status: String(incident.status || "PENDING").toUpperCase(),
           incident_type: "DAMAGE_REPORT",
           estimated_total_value: incident.estimated_total_value,
@@ -1351,6 +890,7 @@ exports.createDamageReport = async (
             incident_id: incident.id,
             pod_id: resolvedPodId,
             pod_code: podCode,
+            cleaning_task_id: taskContext ? taskContext.id : null,
             status: String(incident.status || "PENDING").toUpperCase(),
             incident_type: "DAMAGE_REPORT",
             estimated_total_value: incident.estimated_total_value,
@@ -1435,8 +975,9 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
     requested_status: normalizedStatus,
   });
 
-  if (previousStatus !== normalizedStatus && previousStatus !== "PENDING") {
-    throw createError("Only incidents in PENDING status can be reviewed", 400);
+  const MANAGER_REVIEWABLE_STATUSES = ["PENDING", "COMPLETED"];
+  if (previousStatus !== normalizedStatus && !MANAGER_REVIEWABLE_STATUSES.includes(previousStatus)) {
+    throw createError("Only incidents in PENDING or COMPLETED status can be reviewed", 400);
   }
 
   if (actorRole === "manager" && !["RESOLVED", "DISMISSED"].includes(normalizedStatus)) {
@@ -1445,14 +986,10 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
 
   let damageBilling = {
     damage_total_value: 0,
-    user_deposit_value: 0,
-    deposit_deducted_value: 0,
     total_amount_value: 0,
     currency: "VND",
     booking_id: incident.booking_id || null,
     booking_order_id: null,
-    refunded_to_wallet_amount: 0,
-    refunded_transaction_id: null,
     settlement_applied: false,
     settlement_reason: null,
   };
@@ -1529,47 +1066,13 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
     });
 
     if (booking?.order_id) {
-      console.info(`${logPrefix} TriggerSettlement`, {
-        incident_id: String(incident.id || incidentId || ""),
-        order_id: String(booking.order_id),
-        trigger: `INCIDENT_${normalizedStatus}`,
-      });
-
-      const settlementResult = await exports.settleOrderDepositAfterIncidents({
-        orderId: booking.order_id,
-        trigger: `INCIDENT_${normalizedStatus}`,
-      });
-
-      console.info(`${logPrefix} SettlementResult`, {
-        incident_id: String(incident.id || incidentId || ""),
-        order_id: String(booking.order_id),
-        settled: Boolean(settlementResult?.settled),
-        reason: settlementResult?.reason || null,
-        has_summary: Boolean(settlementResult?.summary),
-      });
-
-      if (settlementResult?.summary) {
-        damageBilling.booking_order_id = settlementResult.summary.booking_order_id;
-        damageBilling.user_deposit_value = settlementResult.summary.deposit_total;
-        damageBilling.deposit_deducted_value = settlementResult.summary.deposit_deducted_value;
-        damageBilling.total_amount_value = settlementResult.summary.outstanding_amount;
-        damageBilling.refunded_to_wallet_amount = settlementResult.summary.refunded_to_wallet_amount;
-        damageBilling.settlement_applied = true;
-        damageBilling.settlement_reason = null;
-      } else {
-        damageBilling.booking_order_id = booking.order_id;
-        damageBilling.settlement_applied = false;
-        damageBilling.settlement_reason = settlementResult?.reason || "SETTLEMENT_NOT_APPLIED";
-      }
+      damageBilling.booking_order_id = booking.order_id;
     } else {
       console.warn(`${logPrefix} SkipSettlement`, {
         incident_id: String(incident.id || incidentId || ""),
         reason: "BOOKING_ORDER_NOT_FOUND",
         booking_id: String(incident.booking_id || ""),
       });
-
-      damageBilling.settlement_applied = false;
-      damageBilling.settlement_reason = "BOOKING_ORDER_NOT_FOUND";
     }
   } else {
     console.info(`${logPrefix} SkipSettlement`, {
@@ -1607,3 +1110,541 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   };
 };
 
+exports.getOrderIncidents = async (orderId) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id").lean();
+  if (!bookings.length) return [];
+  const bookingIds = bookings.map(b => String(b.id));
+
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds } }).lean();
+
+  const results = [];
+  for (const inc of incidents) {
+    const totalAmount = await getIncidentDamageTotal(inc);
+
+    // Get item names from IncidentDetail
+    const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+    const items = details.map(d => d.name_snapshot).filter(Boolean);
+
+    results.push({
+      ...inc,
+      total_amount_value: totalAmount,
+      items
+    });
+  }
+  return results;
+};
+
+exports.createOrderDamageBill = async (orderId, managerActor) => {
+  const bookings = await Booking.find({ order_id: orderId }).select("id user_id").lean();
+  if (!bookings.length) throw createError("Order not found or has no bookings", 404);
+  const userId = bookings[0].user_id;
+
+  const bookingIds = bookings.map(b => String(b.id));
+  const incidents = await Incident.find({ booking_id: { $in: bookingIds }, incident_type: "DAMAGE_REPORT" }).lean();
+
+  if (!incidents.length) {
+    throw createError("No damage incidents found for this order", 400);
+  }
+
+  // Validate all are RESOLVED or DISMISSED
+  const unresolved = incidents.filter(i => !["RESOLVED", "DISMISSED"].includes(i.status));
+  if (unresolved.length > 0) {
+    throw createError("Tất cả báo cáo sự cố (Damage Report) trong Order này phải được xử lý (RESOLVED hoặc DISMISSED) trước khi tạo hóa đơn.", 400);
+  }
+
+  const resolvedIncidents = incidents.filter(i => i.status === "RESOLVED");
+  if (resolvedIncidents.length === 0) {
+    throw createError("Không có sự cố nào cần đền bù (tất cả đều đã bị DISMISSED hoặc không có thiệt hại).", 400);
+  }
+
+  let totalDamageAmount = 0;
+  const incidentBreakdown = [];
+
+  for (const inc of resolvedIncidents) {
+    const amount = await getIncidentDamageTotal(inc);
+    if (amount > 0) {
+      totalDamageAmount += amount;
+      const details = await IncidentDetail.find({ incident_id: inc.id }).select("name_snapshot").lean();
+      const items = details.map(d => d.name_snapshot).filter(Boolean);
+      incidentBreakdown.push({ incident_id: inc.id, amount, items });
+    }
+  }
+
+  if (totalDamageAmount <= 0) {
+    throw createError("Tổng thiệt hại bằng 0, không có hóa đơn nào được tạo.", 400);
+  }
+
+  const order = await BookingOrder.findOne({ id: orderId });
+  if (!order) {
+    throw createError("Không tìm thấy Order.", 404);
+  }
+
+  order.outstanding_damage_amount = totalDamageAmount;
+  order.damage_payment_status = "PENDING";
+  await order.save();
+
+  // Notify user
+  await notificationService.sendToUser(userId, {
+    title: "Yêu cầu thanh toán phí đền bù hư hại",
+    message: `Đơn hàng ${orderId} có phát sinh phí đền bù hư hại là ${totalDamageAmount.toLocaleString("vi-VN")} VND. Vui lòng thanh toán tại quầy.`,
+    type: "INCIDENT",
+    event_code: "DAMAGE_BILL_CREATED",
+    dedupe_key: `DAMAGE_BILL_CREATED:ORDER:${orderId}`,
+    data: {
+      order_id: orderId,
+      outstanding_damage_amount: String(totalDamageAmount),
+    },
+  });
+
+  return {
+    order_id: orderId,
+    outstanding_damage_amount: totalDamageAmount,
+    incident_breakdown: incidentBreakdown
+  };
+};
+
+exports.resolveReplenishmentIncident = async (incidentId, cleanerId, itemsPayload) => {
+  const incident = await Incident.findOne({ id: incidentId });
+  if (!incident) throw createError("Incident not found", 404);
+
+  if (incident.incident_type !== "REPLENISHMENT_REQUEST") {
+    throw createError("This incident is not a replenishment request", 400);
+  }
+  if (!["PENDING", "ASSIGNED", "PROCESSING"].includes(incident.status)) {
+    throw createError("Incident is already resolved or dismissed", 400);
+  }
+
+  // Identify Cleaner
+  const user = await User.findOne(
+    mongoose.Types.ObjectId.isValid(cleanerId)
+      ? { $or: [{ id: cleanerId }, { _id: cleanerId }] }
+      : { id: cleanerId }
+  ).select("_id id name").lean();
+
+  if (!user) throw createError("Cleaner not found", 404);
+
+  // Identify location based on pod
+  const pod = await Pod.findOne({ id: incident.pod_id }).select("cluster_id").lean();
+  if (!pod) throw createError("Pod not found", 404);
+
+  const cluster = await PodCluster.findOne({ id: pod.cluster_id }).select("location_id").lean();
+  if (!cluster || !cluster.location_id) throw createError("Location not found for this pod", 404);
+
+  const locationWarehouse = await LocationWarehouse.findOne({ location_id: cluster.location_id }).lean();
+  if (!locationWarehouse || !locationWarehouse.warehouse_id) {
+    throw createError("No warehouse configured for this location", 400);
+  }
+
+  const warehouseId = locationWarehouse.warehouse_id;
+
+  if (!Array.isArray(itemsPayload) || itemsPayload.length === 0) {
+    throw createError("items payload is required and must be an array", 400);
+  }
+
+  const itemQuantities = new Map();
+  for (const item of itemsPayload) {
+    const qty = parseInt(item.quantity, 10);
+    if (isNaN(qty) || qty <= 0) throw createError(`Invalid quantity for item ${item.item_id}`, 400);
+    const existing = itemQuantities.get(item.item_id) || 0;
+    itemQuantities.set(item.item_id, existing + qty);
+  }
+
+  const itemIds = Array.from(itemQuantities.keys());
+  const stocks = await InventoryStock.find({ warehouse_id: warehouseId, item_id: { $in: itemIds } });
+  const stockMap = new Map(stocks.map(s => [s.item_id, s]));
+
+  for (const [itemId, qty] of itemQuantities.entries()) {
+    const stock = stockMap.get(itemId);
+    if (!stock || stock.quantity_available < qty) {
+      throw createError(`Not enough stock in warehouse for item ${itemId}`, 400);
+    }
+  }
+
+  // Deduct stock and log
+  for (const [itemId, qty] of itemQuantities.entries()) {
+    const stock = stockMap.get(itemId);
+    stock.quantity_available -= qty;
+    await stock.save();
+
+    await InventoryActivityLog.create({
+      inventory_stock_id: stock.id,
+      staff_id: user.id || String(user._id),
+      actor_id: user.id || String(user._id),
+      incident_id: incident.id,
+      quantity: qty,
+      action_type: "CONSUMED",
+      reason: "Bổ sung vật dụng thiếu/hỏng lúc checkin"
+    });
+
+    const podItem = await PodItem.findOne({ pod_id: incident.pod_id, item_id: itemId });
+    if (podItem) {
+      podItem.current_quantity = Math.min(podItem.current_quantity + qty, podItem.expected_quantity);
+      await podItem.save();
+    }
+  }
+
+  incident.status = "RESOLVED";
+  incident.replenishment_status = "REPLENISHED";
+  incident.handled_by = user.id || String(user._id);
+  incident.resolution_note = "Đã bổ sung vật dụng từ kho";
+  await incident.save();
+
+  return {
+    message: "Việc bổ sung đồ đã được giải quyết thành công.",
+    incident_id: incident.id,
+    warehouse_id: warehouseId,
+    items_processed: itemQuantities.size
+  };
+};
+
+// ─── Cleaner Incident APIs ────────────────────────────────────────
+
+exports.getCleanerIncidents = async (actor, filters = {}) => {
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  // Condition 1: incidents reported by this cleaner
+  const ownIncidents = await Incident.find({ reported_by: { $in: actorIds } }).lean();
+
+  // Condition 2: incidents linked to a cleaning task assigned to this cleaner
+  const cleanerTasks = await CleaningTask.find({ cleaner_id: { $in: actorIds } })
+    .select("id")
+    .lean();
+  const cleanerTaskIds = cleanerTasks.map((t) => String(t.id));
+
+  let taskIncidents = [];
+  if (cleanerTaskIds.length > 0) {
+    taskIncidents = await Incident.find({ cleaning_task_id: { $in: cleanerTaskIds } }).lean();
+  }
+
+  // Merge and dedupe
+  const incidentMap = new Map();
+  [...ownIncidents, ...taskIncidents].forEach((inc) => {
+    incidentMap.set(String(inc.id), inc);
+  });
+
+  let incidents = Array.from(incidentMap.values()).sort(
+    (a, b) => new Date(b.created_at) - new Date(a.created_at)
+  );
+
+  // Optional filters
+  if (filters.status) {
+    const status = normalizeStatus(filters.status);
+    if (!INCIDENT_STATUSES.includes(status)) {
+      throw createError(`Invalid status. Must be one of: ${INCIDENT_STATUSES.join(", ")}`, 400);
+    }
+    incidents = incidents.filter((inc) => String(inc.status || "").toUpperCase() === status);
+  }
+  if (filters.incident_type) {
+    const incidentType = normalizeIncidentType(filters.incident_type);
+    if (!INCIDENT_TYPES.includes(incidentType)) {
+      throw createError(
+        `Invalid incident_type. Must be one of: ${INCIDENT_TYPES.join(", ")}`,
+        400
+      );
+    }
+    incidents = incidents.filter(
+      (inc) => String(inc.incident_type || "").toUpperCase() === incidentType
+    );
+  }
+
+  if (incidents.length === 0) return [];
+
+  const incidentIds = incidents.map((i) => i.id);
+
+  // Build photo and detail maps
+  const [photoMap, detailMap] = await Promise.all([
+    buildIncidentPhotoMap(incidentIds),
+    buildIncidentDetailMap(incidentIds),
+  ]);
+
+  // Batch-load cleaning tasks and bookings
+  const cleaningTaskIdSet = new Set(
+    incidents.map((i) => i.cleaning_task_id).filter(Boolean).map(String)
+  );
+  const bookingIdSet = new Set(
+    incidents.map((i) => i.booking_id).filter(Boolean).map(String)
+  );
+
+  const [tasks, bookings] = await Promise.all([
+    cleaningTaskIdSet.size > 0
+      ? CleaningTask.find({ id: { $in: Array.from(cleaningTaskIdSet) } })
+        .select(
+          "id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source"
+        )
+        .lean()
+      : Promise.resolve([]),
+    bookingIdSet.size > 0
+      ? Booking.find({ id: { $in: Array.from(bookingIdSet) } })
+        .select(
+          "id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state"
+        )
+        .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const taskById = new Map(tasks.map((t) => [String(t.id), t]));
+  const bookingById = new Map(bookings.map((b) => [String(b.id), b]));
+
+  // Batch-load users (reporter + handler) and pods
+  const userIdSet = new Set();
+  const podIdSet = new Set();
+  incidents.forEach((inc) => {
+    if (inc.reported_by) userIdSet.add(String(inc.reported_by));
+    if (inc.handled_by) userIdSet.add(String(inc.handled_by));
+    if (inc.pod_id) podIdSet.add(String(inc.pod_id));
+  });
+
+  const [users, pods] = await Promise.all([
+    userIdSet.size > 0
+      ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
+        .select("id _id name")
+        .lean()
+      : Promise.resolve([]),
+    podIdSet.size > 0
+      ? Pod.find({ id: { $in: Array.from(podIdSet) } })
+        .select("id name")
+        .lean()
+      : Promise.resolve([]),
+  ]);
+
+  const userById = new Map();
+  users.forEach((u) => {
+    if (u.id) userById.set(String(u.id), u);
+    if (u._id) userById.set(String(u._id), u);
+  });
+  const podById = new Map(pods.map((p) => [String(p.id), p]));
+
+  return incidents.map((inc) => {
+    const reporter = inc.reported_by ? userById.get(String(inc.reported_by)) : null;
+    const handler = inc.handled_by ? userById.get(String(inc.handled_by)) : null;
+    const pod = inc.pod_id ? podById.get(String(inc.pod_id)) : null;
+    return {
+      ...inc,
+      photo_urls: photoMap[inc.id] || [],
+      details: detailMap[inc.id] || [],
+      cleaning_task: inc.cleaning_task_id ? taskById.get(String(inc.cleaning_task_id)) || null : null,
+      booking: inc.booking_id ? bookingById.get(String(inc.booking_id)) || null : null,
+      reporter_name: reporter?.name || null,
+      handled_by_name: handler?.name || null,
+      pod_name: pod?.name || null,
+    };
+  });
+};
+
+/**
+ * Validate that the logged-in cleaner has access to a given incident.
+ * Access is granted when:
+ *  - The incident.reported_by matches the cleaner (CHECKOUT_REPORT), OR
+ *  - The incident is a CHECKIN_REPORT whose booking_id links to a
+ *    CleaningTask assigned to this cleaner.
+ * Returns the associated CleaningTask if found.
+ */
+const _resolveCleanerAccessToIncident = async (incident, actorIds) => {
+  // Own incident (DAMAGE_REPORT reported by cleaner during checkout)
+  if (actorIds.includes(String(incident.reported_by || ""))) {
+    const task = incident.cleaning_task_id
+      ? await CleaningTask.findOne({ id: incident.cleaning_task_id })
+        .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+        .lean()
+      : null;
+    return { allowed: true, cleaningTask: task };
+  }
+
+  // Guest reports (REPLENISHMENT_REQUEST) during current cleaning session
+  if (incident.incident_type === "REPLENISHMENT_REQUEST" && incident.booking_id) {
+    const task = await CleaningTask.findOne({
+      booking_id: incident.booking_id,
+      cleaner_id: { $in: actorIds },
+    })
+      .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+      .lean();
+
+    if (task) {
+      return { allowed: true, cleaningTask: task };
+    }
+  }
+
+  return { allowed: false, cleaningTask: null };
+};
+
+/**
+ * API 1 (Cleaner): Get incident detail enriched with booking and cleaning task info.
+ */
+exports.getCleanerIncidentDetail = async (incidentId, actor) => {
+  const incident = await Incident.findOne({ id: incidentId }).lean();
+  if (!incident) throw createError("Incident not found", 404);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const { allowed, cleaningTask } = await _resolveCleanerAccessToIncident(incident, actorIds);
+  if (!allowed) {
+    throw createError("You are not allowed to access this incident", 403);
+  }
+
+  const userIdSet = new Set();
+  if (incident.reported_by) userIdSet.add(String(incident.reported_by));
+  if (incident.handled_by) userIdSet.add(String(incident.handled_by));
+
+  const [photos, details, booking, users, pod] = await Promise.all([
+    IncidentMedia.find({ incident_id: incidentId }).select("media_url file_type -_id").lean(),
+    IncidentDetail.find({ incident_id: incidentId })
+      .select("type item_id service_catalog_id name_snapshot unit_cost_snapshot quantity total_cost note")
+      .lean(),
+    incident.booking_id
+      ? Booking.findOne({ id: incident.booking_id })
+        .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+        .lean()
+      : null,
+    userIdSet.size > 0
+      ? User.find({ $or: [{ id: { $in: Array.from(userIdSet) } }, { _id: { $in: Array.from(userIdSet) } }] })
+        .select("id _id name")
+        .lean()
+      : Promise.resolve([]),
+    incident.pod_id
+      ? Pod.findOne({ id: incident.pod_id }).select("id name").lean()
+      : null,
+  ]);
+
+  const userById = new Map();
+  users.forEach((u) => {
+    if (u.id) userById.set(String(u.id), u);
+    if (u._id) userById.set(String(u._id), u);
+  });
+
+  const reporter = incident.reported_by ? userById.get(String(incident.reported_by)) : null;
+  const handler = incident.handled_by ? userById.get(String(incident.handled_by)) : null;
+
+  return {
+    ...incident,
+    photo_urls: photos.map((p) => p.media_url),
+    details,
+    booking: booking || null,
+    cleaning_task: cleaningTask || null,
+    reporter_name: reporter?.name || null,
+    handled_by_name: handler?.name || null,
+    pod_name: pod?.name || null,
+  };
+};
+
+/**
+ * API 2 (Cleaner): Get all REPLENISHMENT_REQUEST incidents for a cleaning task assigned to the cleaner.
+ */
+exports.getReplenishmentRequestsByCleaner = async (cleaningTaskId, actor) => {
+  if (!cleaningTaskId) throw createError("cleaning_task_id is required", 400);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const cleaningTask = await CleaningTask.findOne({ id: cleaningTaskId })
+    .select("id pod_id booking_id cleaner_id status assigned_at accepted_at started_at completed_at due_at request_source")
+    .lean();
+
+  if (!cleaningTask) throw createError("Cleaning task not found", 404);
+
+  const taskCleanerId = String(cleaningTask.cleaner_id || "");
+  if (!actorIds.includes(taskCleanerId)) {
+    throw createError("This cleaning task is not assigned to you", 403);
+  }
+
+  const booking = cleaningTask.booking_id
+    ? await Booking.findOne({ id: cleaningTask.booking_id })
+      .select("id order_id user_id pod_id start_time end_time actual_end_time status checked_in_at checkin_state")
+      .lean()
+    : null;
+
+  if (!cleaningTask.booking_id) {
+    return { cleaning_task: cleaningTask, booking: null, incidents: [] };
+  }
+
+  const incidents = await Incident.find({
+    booking_id: cleaningTask.booking_id,
+    incident_type: "REPLENISHMENT_REQUEST",
+  })
+    .sort({ created_at: -1 })
+    .lean();
+
+  if (!incidents.length) {
+    return { cleaning_task: cleaningTask, booking: booking || null, incidents: [] };
+  }
+
+  const incidentIds = incidents.map((i) => i.id);
+  const [photoMap, detailMap] = await Promise.all([
+    buildIncidentPhotoMap(incidentIds),
+    buildIncidentDetailMap(incidentIds),
+  ]);
+
+  const enrichedIncidents = incidents.map((inc) => ({
+    ...inc,
+    photo_urls: photoMap[inc.id] || [],
+    details: detailMap[inc.id] || [],
+  }));
+
+  return {
+    cleaning_task: cleaningTask,
+    booking: booking || null,
+    incidents: enrichedIncidents,
+  };
+};
+
+/**
+ * API 3 (Cleaner): Update incident status along the cleaner workflow.
+ * Allowed transitions: PENDING → PROCESSING, PROCESSING → COMPLETED.
+ */
+exports.updateCleanerIncidentStatus = async (incidentId, payload, actor) => {
+  const { status, resolution_note } = payload;
+  const normalizedStatus = normalizeStatus(status);
+
+  const ALLOWED_TARGET_STATUSES = ["PROCESSING", "COMPLETED"];
+  if (!ALLOWED_TARGET_STATUSES.includes(normalizedStatus)) {
+    throw createError(
+      "Cleaner can only set incident status to PROCESSING or COMPLETED",
+      400
+    );
+  }
+
+  const incident = await Incident.findOne({ id: incidentId });
+  if (!incident) throw createError("Incident not found", 404);
+
+  const actorIds = resolveActorIdentityIds(actor);
+  if (actorIds.length === 0) throw createError("Unable to resolve actor identity", 401);
+
+  const { allowed } = await _resolveCleanerAccessToIncident(incident.toObject(), actorIds);
+  if (!allowed) {
+    throw createError("You are not allowed to update this incident", 403);
+  }
+
+  const previousStatus = String(incident.status || "").toUpperCase();
+
+  const VALID_TRANSITIONS = {
+    PENDING: "PROCESSING",
+    PROCESSING: "COMPLETED",
+  };
+
+  if (VALID_TRANSITIONS[previousStatus] !== normalizedStatus) {
+    throw createError(
+      `Invalid status transition: ${previousStatus} → ${normalizedStatus}. Allowed: PENDING → PROCESSING, PROCESSING → COMPLETED`,
+      400
+    );
+  }
+
+  incident.status = normalizedStatus;
+  if (resolution_note !== undefined) {
+    incident.resolution_note = resolution_note;
+  }
+  if (normalizedStatus === "COMPLETED") {
+    incident.handled_by = resolveActorId(actor);
+  }
+
+  await incident.save();
+
+  return {
+    id: incident.id,
+    status: incident.status,
+    previous_status: previousStatus,
+    resolution_note: incident.resolution_note || null,
+    handled_by: incident.handled_by || null,
+    updated_at: incident.updated_at,
+  };
+};

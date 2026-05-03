@@ -220,6 +220,43 @@ router.post(
 
 /**
  * @swagger
+ * /api/pod-items/cluster/{cluster_id}/generate-reusable:
+ *   post:
+ *     summary: Auto-generate pod items for all REUSABLE items in a cluster
+ *     description: Finds all items with item_type=REUSABLE and creates PodItem records for every pod in the cluster. Gối nằm Memory Foam and Chăn mền nhẹ get quantity 2, others get 1.
+ *     tags: [Pod Items]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: cluster_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: The ID of the pod cluster
+ *     responses:
+ *       201:
+ *         description: Reusable items generated for cluster pods successfully
+ *       400:
+ *         description: Invalid cluster_id
+ *       401:
+ *         description: Unauthorized
+ *       403:
+ *         description: Forbidden
+ *       404:
+ *         description: Cluster not found or no pods/items
+ */
+router.post(
+  "/cluster/:cluster_id/generate-reusable",
+  protect,
+  authorize("admin", "manager"),
+  loadManagerScope,
+  requireManagerClusterAccess({ source: "params", key: "cluster_id" }),
+  podItemController.generateReusableItemsForCluster
+);
+
+/**
+ * @swagger
  * /api/pod-items/{id}:
  *   get:
  *     summary: Get pod item by ID

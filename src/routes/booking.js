@@ -507,5 +507,116 @@ router.post("/:id/cleaner-access", protect, bookingController.setCleanerAccessFl
 
 router.post("/:id/cancel", protect, bookingController.cancelBooking);
 
+// ─── Booking Checklist Routes ────────────────────────────────────
+
+const bookingChecklistController = require("../controllers/bookingChecklistController");
+
+/**
+ * @swagger
+ * /api/bookings/{id}/checklist-items:
+ *   get:
+ *     summary: Get checklist items for a booking
+ *     description: Returns REUSABLE items that the guest should verify when entering their pod
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking ID
+ *     responses:
+ *       200:
+ *         description: Checklist items retrieved
+ *       403:
+ *         description: Not authorized for this booking
+ *       404:
+ *         description: Booking not found
+ */
+router.get("/:id/checklist-items", protect, bookingChecklistController.getChecklistItems);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/confirm-checklist:
+ *   post:
+ *     summary: Confirm checklist results
+ *     description: Submit item verification results. DAMAGED/MISSING items auto-create incidents and notify cleaners.
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 description: JSON array of item results
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     item_id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       enum: [MATCHED, DAMAGED, MISSING]
+ *                     quantity:
+ *                       type: number
+ *                       description: "Optional. Number of items reported. Defaults to expected_quantity if omitted."
+ *     responses:
+ *       200:
+ *         description: Checklist confirmed
+ *       400:
+ *         description: Invalid payload or booking status
+ *       403:
+ *         description: Not authorized for this booking
+ *       409:
+ *         description: Checklist already completed
+ */
+router.post(
+  "/:id/confirm-checklist",
+  protect,
+  bookingChecklistController.confirmChecklist
+);
+
+/**
+ * @swagger
+ * /api/bookings/{id}/checklist-status:
+ *   get:
+ *     summary: Check if checklist is completed
+ *     description: Returns is_checklist_completed flag. App uses this to decide whether to show the checklist overlay.
+ *     tags: [Bookings]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking ID
+ *     responses:
+ *       200:
+ *         description: Checklist status retrieved
+ *       403:
+ *         description: Not authorized for this booking
+ *       404:
+ *         description: Booking not found
+ */
+router.get("/:id/checklist-status", protect, bookingChecklistController.getChecklistStatus);
+
 
 module.exports = router;

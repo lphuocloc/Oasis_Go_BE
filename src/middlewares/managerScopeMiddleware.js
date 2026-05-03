@@ -1,6 +1,4 @@
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
 const StaffWorkRoster = require("../models/StaffWorkRoster");
-const LocationShift = require("../models/LocationShift");
 const Location = require("../models/Location");
 const PodCluster = require("../models/PodCluster");
 const Pod = require("../models/Pod");
@@ -28,43 +26,13 @@ const loadManagerScope = async (req, res, next) => {
 
     const staffIds = uniqueStrings([req.user.id, req.user._id]);
 
-    const todayStart = new Date();
-    todayStart.setUTCHours(0, 0, 0, 0);
-    const todayEnd = new Date(todayStart);
-    todayEnd.setUTCHours(23, 59, 59, 999);
-
-    const [assignments, rosters] = await Promise.all([
-      StaffShiftAssignment.find({
-        staff_id: { $in: staffIds },
-        status: { $in: ACTIVE_SCOPE_STATUSES },
-        start_date: { $lte: todayEnd },
-        end_date: { $gte: todayStart },
-      })
-        .select("location_shift_id")
-        .lean(),
-      StaffWorkRoster.find({
+    const rosters = await StaffWorkRoster.find({
         staff_id: { $in: staffIds },
         is_active: true
-      })
-        .select("location_shift_id")
-        .lean()
-    ]);
+    }).select("location_id shift_id").lean();
 
-    const assignmentLocShiftIds = assignments.map((item) => item.location_shift_id);
-    const rosterLocShiftIds = rosters.map((item) => item.location_shift_id);
-    const uniqueLocShiftIds = uniqueStrings([...assignmentLocShiftIds, ...rosterLocShiftIds]);
-
-    if (uniqueLocShiftIds.length === 0) {
-      req.managerScope = null;
-      req.managerScopeBypassed = true;
-      return next();
-    }
-
-    const locationShifts = await LocationShift.find({ id: { $in: uniqueLocShiftIds } })
-      .select("location_id")
-      .lean();
-
-    const parentLocationIds = uniqueStrings(locationShifts.map((item) => item.location_id));
+    const parentLocationIds = uniqueStrings(rosters.map((item) => item.location_id));
+    const shiftIds = uniqueStrings(rosters.map((item) => item.shift_id));
 
     if (parentLocationIds.length === 0) {
       req.managerScope = null;
@@ -97,6 +65,7 @@ const loadManagerScope = async (req, res, next) => {
       locationIds,
       clusterIds,
       podIds,
+      shiftIds,
     };
     req.managerScopeBypassed = false;
 

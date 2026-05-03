@@ -10,9 +10,7 @@ const PodQrCode = require("../models/PodQrCode");
 const SupportRequest = require("../models/SupportRequest");
 const TimeSlot = require("../models/TimeSlot");
 const User = require("../models/User");
-const StaffShiftAssignment = require("../models/StaffShiftAssignment");
-const LocationShift = require("../models/LocationShift");
-const StaffShift = require("../models/StaffShift");
+const StaffWorkRoster = require("../models/StaffWorkRoster");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
 const cleaningTaskService = require("./cleaningTaskService");
@@ -379,33 +377,19 @@ class SupportRequestService {
       return;
     }
 
-    const locationShiftIds = await LocationShift.find({ location_id: String(supportRequest.location_id) })
-      .distinct("id");
+    const clusterId = booking.pod_id ? await Pod.findOne({ id: booking.pod_id }).select("cluster_id").lean().then(pod => pod?.cluster_id) : null;
+    if (!clusterId) return;
 
-    if (!locationShiftIds || locationShiftIds.length === 0) {
+    const rosters = await StaffWorkRoster.find({
+      cluster_id: clusterId,
+      is_active: true
+    }).select("staff_id").lean();
+
+    if (!rosters || rosters.length === 0) {
       return;
     }
 
-    const now = new Date();
-    const startOfDay = new Date(now);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(now);
-    endOfDay.setHours(23, 59, 59, 999);
-
-    const assignments = await StaffShiftAssignment.find({
-      location_shift_id: { $in: locationShiftIds },
-      start_date: { $lte: endOfDay },
-      end_date: { $gte: startOfDay },
-      status: { $in: ["CHECKED_IN", "ASSIGNED"] },
-    })
-      .select("staff_id")
-      .lean();
-
-    if (!assignments || assignments.length === 0) {
-      return;
-    }
-
-    const staffIds = [...new Set(assignments.map((item) => String(item.staff_id || "")).filter(Boolean))];
+    const staffIds = [...new Set(rosters.map((item) => String(item.staff_id || "")).filter(Boolean))];
     if (staffIds.length === 0) {
       return;
     }
@@ -481,53 +465,28 @@ class SupportRequestService {
     let managerUserIds = [];
 
     try {
-      const locationShifts = await LocationShift.find({ location_id: String(supportRequest.location_id) }).select("id shift_id").lean();
-      if (locationShifts.length > 0) {
-        const shiftIds = [...new Set(locationShifts.map((entry) => String(entry.shift_id || "")).filter(Boolean))];
-        const managerShiftIds = await StaffShift.find({ id: { $in: shiftIds }, role: "MANAGER", is_active: true })
-          .select("id")
-          .lean()
-          .then((rows) => rows.map((row) => String(row.id)));
+      const rosters = await StaffWorkRoster.find({
+        location_id: String(supportRequest.location_id),
+        is_active: true
+      }).select("staff_id").lean();
 
-        if (managerShiftIds.length > 0) {
-          const managerLocationShiftIds = locationShifts
-            .filter((entry) => managerShiftIds.includes(String(entry.shift_id)))
-            .map((entry) => String(entry.id));
+      if (rosters.length > 0) {
+        const assignmentStaffIds = [...new Set(rosters.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
 
-          if (managerLocationShiftIds.length > 0) {
-            const now = new Date();
-            const startOfDay = new Date(now);
-            startOfDay.setHours(0, 0, 0, 0);
-            const endOfDay = new Date(now);
-            endOfDay.setHours(23, 59, 59, 999);
+        if (assignmentStaffIds.length > 0) {
+          const assignmentObjectIds = assignmentStaffIds
+            .filter((id) => mongoose.Types.ObjectId.isValid(id))
+            .map((id) => new mongoose.Types.ObjectId(id));
 
-            const assignments = await StaffShiftAssignment.find({
-              location_shift_id: { $in: managerLocationShiftIds },
-              status: { $in: ["CHECKED_IN", "ASSIGNED"] },
-              start_date: { $lte: endOfDay },
-              end_date: { $gte: startOfDay },
-            })
-              .select("staff_id")
-              .lean();
+          const managers = await User.find({
+            role: "manager",
+            isActive: true,
+            $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
+          })
+            .select("_id")
+            .lean();
 
-            const assignmentStaffIds = [...new Set(assignments.map((entry) => String(entry.staff_id || "")).filter(Boolean))];
-
-            if (assignmentStaffIds.length > 0) {
-              const assignmentObjectIds = assignmentStaffIds
-                .filter((id) => mongoose.Types.ObjectId.isValid(id))
-                .map((id) => new mongoose.Types.ObjectId(id));
-
-              const managers = await User.find({
-                role: "manager",
-                isActive: true,
-                $or: [{ id: { $in: assignmentStaffIds } }, { _id: { $in: assignmentObjectIds } }],
-              })
-                .select("_id")
-                .lean();
-
-              managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
-            }
-          }
+          managerUserIds = [...new Set(managers.map((manager) => String(manager._id || "")).filter(Boolean))];
         }
       }
     } catch (err) {

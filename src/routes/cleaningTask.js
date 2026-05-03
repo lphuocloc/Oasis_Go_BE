@@ -11,7 +11,10 @@ const {
   updateCleaningTask,
   deleteCleaningTask,
   backfillCleaningTasks,
+  rejectCleaningTask,
+  reassignCleaningTask,
 } = require("../controllers/cleaningTaskController");
+const bookingChecklistController = require("../controllers/bookingChecklistController");
 
 /**
  * @swagger
@@ -31,10 +34,7 @@ const {
  *         name: cleaner_id
  *         schema:
  *           type: string
- *       - in: query
- *         name: shift_assignment_id
- *         schema:
- *           type: string
+
  *       - in: query
  *         name: pod_id
  *         schema:
@@ -131,10 +131,7 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *     security:
  *       - bearerAuth: []
  *     parameters:
- *       - in: query
- *         name: shift_assignment_id
- *         schema:
- *           type: string
+
  *       - in: query
  *         name: pod_id
  *         schema:
@@ -423,9 +420,7 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *               cleaner_id:
  *                 type: string
  *                 description: Cleaner ID
- *               shift_assignment_id:
- *                 type: string
- *                 description: Optional shift assignment ID
+
  *               request_source:
  *                 type: string
  *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
@@ -479,8 +474,7 @@ router.post("/", protect, authorize("admin", "manager"), loadManagerScope, requi
  *                 type: string
  *               cleaner_id:
  *                 type: string
- *               shift_assignment_id:
- *                 type: string
+
  *               request_source:
  *                 type: string
  *                 enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
@@ -516,6 +510,91 @@ router.put("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
 
 /**
  * @swagger
+ * /api/cleaning-tasks/{id}/reject:
+ *   post:
+ *     summary: Cleaner rejects an assigned cleaning task
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Allows a cleaner to reject a task that is currently ASSIGNED or ACCEPTED.
+ *       The task transitions to REJECTED status and managers at the location are notified.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - rejection_reason
+ *             properties:
+ *               rejection_reason:
+ *                 type: string
+ *                 description: Reason the cleaner is rejecting this task
+ *     responses:
+ *       200:
+ *         description: Task rejected successfully
+ *       400:
+ *         description: Missing rejection_reason or invalid status transition
+ *       403:
+ *         description: Not the assigned cleaner for this task
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.post("/:id/reject", protect, authorize("cleaner"), rejectCleaningTask);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{id}/reassign:
+ *   post:
+ *     summary: Manager reassigns a REJECTED or MISSED cleaning task
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     description: |
+ *       Allows a manager or admin to reassign a REJECTED, MISSED, or ASSIGNED cleaning task
+ *       to a different cleaner. If `target_cleaner_id` is provided the task is manually assigned;
+ *       otherwise the system auto-picks the best available cleaner via load balancing,
+ *       excluding the cleaner who previously rejected the task.
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               target_cleaner_id:
+ *                 type: string
+ *                 description: Specific cleaner to assign. Omit for auto load-balanced selection.
+
+ *     responses:
+ *       200:
+ *         description: Task reassigned successfully
+ *       400:
+ *         description: Invalid status or no available cleaners
+ *       403:
+ *         description: Out of management scope
+ *       404:
+ *         description: Cleaning task or target cleaner not found
+ */
+router.post("/:id/reassign", protect, authorize("admin", "manager"), loadManagerScope, reassignCleaningTask);
+
+/**
+ * @swagger
  * /api/cleaning-tasks/{id}:
  *   delete:
  *     summary: Delete cleaning task
@@ -533,5 +612,91 @@ router.put("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *         description: Cleaning task deleted successfully
  */
 router.delete("/:id", protect, authorize("admin"), deleteCleaningTask);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{taskId}/damage-report:
+ *   post:
+ *     summary: Confirm damage report at checkout (Cleaner)
+ *     description: Submit item inspection results at checkout. DAMAGED/MISSING items auto-create DAMAGE_REPORT incidents and notify managers.
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - items
+ *             properties:
+ *               items:
+ *                 type: array
+ *                 description: JSON array of item results
+ *                 items:
+ *                   type: object
+ *                   properties:
+ *                     item_id:
+ *                       type: string
+ *                     status:
+ *                       type: string
+ *                       enum: [MATCHED, DAMAGED, MISSING]
+ *                     quantity:
+ *                       type: number
+ *     responses:
+ *       200:
+ *         description: Damage report confirmed
+ *       400:
+ *         description: Invalid payload or task status
+ *       403:
+ *         description: Not authorized for this task
+ *       409:
+ *         description: Damage report already completed
+ */
+router.post(
+  "/:taskId/damage-report",
+  protect,
+  authorize("cleaner"),
+  bookingChecklistController.confirmDamageReport
+);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{taskId}/damage-report-items:
+ *   get:
+ *     summary: Get damage report items for checkout (Cleaner)
+ *     description: Returns REUSABLE items for cleaner to inspect at checkout, enriched with the guest's replenishment request records.
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: taskId
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     responses:
+ *       200:
+ *         description: Damage report items retrieved
+ *       403:
+ *         description: Not authorized for this task
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.get(
+  "/:taskId/damage-report-items",
+  protect,
+  authorize("cleaner"),
+  bookingChecklistController.getDamageReportItems
+);
 
 module.exports = router;

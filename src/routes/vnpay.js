@@ -95,6 +95,37 @@ router.post('/create-payment', vnpayController.createPayment);
 
 /**
  * @swagger
+ * /api/vnpay/damage-bill/create-payment:
+ *   post:
+ *     summary: Create VNPay payment URL for damage bill
+ *     description: Create a transaction record and generate a VNPay payment URL for an order's outstanding damage amount.
+ *     tags: [VNPay Payment]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - bookingOrderId
+ *               - orderInfo
+ *             properties:
+ *               bookingOrderId:
+ *                 type: string
+ *               orderInfo:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Payment URL created successfully
+ *       400:
+ *         description: Bad request
+ *       404:
+ *         description: Order not found
+ */
+router.post('/damage-bill/create-payment', vnpayController.createDamagePayment);
+
+/**
+ * @swagger
  * /api/vnpay/wallet-topup/create-payment:
  *   post:
  *     summary: Create VNPay payment URL for wallet topup
