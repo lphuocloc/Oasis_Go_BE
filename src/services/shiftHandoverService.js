@@ -55,24 +55,39 @@ class ShiftHandoverService {
       throw error;
     }
 
+    const window = staffAttendanceLogService.resolveShiftWindow(activeShift, now);
+    const workDate = window.workDate;
+
     const log = await ShiftHandoverLog.create({
       manager_id: requesterIds[0],
       location_id: activeRoster.location_id,
       shift_id: activeShift.id,
       note_text: String(note_text).trim(),
+      work_date: workDate,
     });
 
     return log;
   }
 
-  async getRecentHandovers({ location_ids, limit = 5 }) {
+  async getRecentHandovers({ location_ids, limit = 5, current_shift_id = null }) {
     if (!location_ids || location_ids.length === 0) {
       return [];
     }
 
-    const logs = await ShiftHandoverLog.find({
-      location_id: { $in: location_ids }
-    })
+    const now = new Date();
+    const lookbackLimit = new Date(now.getTime() - 18 * 60 * 60 * 1000);
+
+    const query = {
+      location_id: { $in: location_ids },
+      created_at: { $gte: lookbackLimit }
+    };
+    
+    // If we are looking for a "previous" shift handover while currently in a shift
+    if (current_shift_id) {
+      query.shift_id = { $ne: current_shift_id };
+    }
+
+    const logs = await ShiftHandoverLog.find(query)
     .sort({ created_at: -1 })
     .limit(Number(limit))
     .populate("manager", "name email")

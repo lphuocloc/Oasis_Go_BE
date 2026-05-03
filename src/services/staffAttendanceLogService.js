@@ -318,57 +318,85 @@ class StaffAttendanceLogService {
     const start = toStartOfDayInAppTz(now);
     const end = new Date(start.getTime() + 24 * 60 * 60 * 1000 - 1);
 
-    // CRITICAL FIX: Only look at logs from the last 24 hours to determine CURRENT status.
-    // We don't want "zombie" sessions from days ago to affect the UI.
-    const lookbackLimit = new Date(now.getTime() - 24 * 60 * 60 * 1000);
-
-    const logs = await StaffAttendanceLog.find({
-      staff_id: { $in: requesterIds },
-      created_at: { $gte: lookbackLimit, $lte: end }
-    }).sort({ created_at: 1 }).lean();
-
-    // Group logs by work_date + shift_id to find the "current" active session
-    const sessions = {};
-    for (const log of logs) {
-      const key = `${log.work_date?.toISOString() || 'no-date'}_${log.shift_id}`;
-      if (!sessions[key]) sessions[key] = [];
-      sessions[key].push(log);
-    }
-
-    // CRITICAL: We only care about the ABSOLUTE LATEST session in the last 24h.
-    // If it's finished, it's finished. Don't look for old unfinished ones.
-    const sessionKeys = Object.keys(sessions).sort().reverse(); 
-    const bestKey = sessionKeys[0]; 
-
-    const relevantLogs = sessions[bestKey] || [];
-
-    const checkinLogs = relevantLogs.filter((item) => item.action === "CHECKIN");
-    const checkoutLogs = relevantLogs.filter((item) => item.action === "CHECKOUT");
-    const shiftIds = [...new Set(relevantLogs.map((item) => String(item.shift_id)))];
-
-    let hasHandover = false;
-    if (user.role === "manager" && shiftIds.length > 0) {
-      const handover = await ShiftHandoverLog.findOne({
-        manager_id: { $in: requesterIds },
-        shift_id: { $in: shiftIds },
-        created_at: { $gte: lookbackLimit }
-      }).lean();
-      hasHandover = !!handover;
-    }
-
-    // NEW: Check if there's any shift available for check-in RIGHT NOW
+    // 1. Fetch all rosters to find if there is an active shift window RIGHT NOW
+    let activeShiftId = null;
+    let activeWorkDate = null;
+    let activeLocationId = null;
     let canCheckin = false;
+
     const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
     for (const roster of rosters) {
       const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
       if (!shift) continue;
       try {
         const window = this.resolveShiftWindow(shift, now);
-        if (now <= window.shiftEnd) {
-          canCheckin = true;
-          break;
+        // If we are within the allowed gate (checkinAllowedFrom to checkoutAllowedUntil)
+        if (now >= window.checkinAllowedFrom && now <= window.checkoutAllowedUntil) {
+          activeShiftId = shift.id;
+          activeWorkDate = window.workDate;
+          activeLocationId = roster.location_id;
+          // can_checkin is true if shift hasn't ended yet
+          if (now <= window.shiftEnd) {
+            canCheckin = true;
+          }
+          break; 
         }
-      } catch (e) { /* Not in window */ }
+      } catch (e) { /* Not in window for this shift */ }
+    }
+
+    // 2. Fetch logs from the last 24 hours
+    const lookbackLimit = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+    const logs = await StaffAttendanceLog.find({
+      staff_id: { $in: requesterIds },
+      created_at: { $gte: lookbackLimit, $lte: end }
+    }).sort({ created_at: 1 }).lean();
+
+    // 3. Determine "Relevant Logs" for the current status
+    let relevantLogs = [];
+    if (activeShiftId && activeWorkDate) {
+      // If we are in an active shift window, prioritize logs for THAT specific work date and shift
+      relevantLogs = logs.filter(l => 
+        String(l.shift_id) === String(activeShiftId) && 
+        l.work_date?.getTime() === activeWorkDate.getTime()
+      );
+    }
+
+    // 4. Fallback: if no logs for current active shift, or no active shift, 
+    // pick the absolute latest session in the last 24h to show "last known status"
+    if (relevantLogs.length === 0 && logs.length > 0) {
+      const sessions = {};
+      for (const log of logs) {
+        const key = `${log.work_date?.toISOString() || 'no-date'}_${log.shift_id}`;
+        if (!sessions[key]) sessions[key] = [];
+        sessions[key].push(log);
+      }
+      const sessionKeys = Object.keys(sessions).sort().reverse(); 
+      relevantLogs = sessions[sessionKeys[0]] || [];
+    }
+
+    const checkinLogs = relevantLogs.filter((item) => item.action === "CHECKIN");
+    const checkoutLogs = relevantLogs.filter((item) => item.action === "CHECKOUT");
+    const shiftIds = [...new Set(relevantLogs.map((item) => String(item.shift_id)))];
+
+    let hasHandover = false;
+    if (user.role === "manager") {
+      const query = {
+        manager_id: { $in: requesterIds }
+      };
+
+      if (activeShiftId && activeWorkDate) {
+        query.shift_id = String(activeShiftId);
+        query.work_date = activeWorkDate;
+      } else if (shiftIds.length > 0) {
+        // Fallback to latest session's shift
+        query.shift_id = { $in: shiftIds };
+        query.created_at = { $gte: lookbackLimit };
+      } else {
+        query._id = null; // No shift found, no handover possible
+      }
+
+      const handover = await ShiftHandoverLog.findOne(query).lean();
+      hasHandover = !!handover;
     }
 
     return {
@@ -382,6 +410,9 @@ class StaffAttendanceLogService {
       latest_checkout_at: checkoutLogs.length > 0 ? checkoutLogs[checkoutLogs.length - 1].created_at : null,
       shift_ids: shiftIds,
       has_handover: hasHandover,
+      active_shift_id: activeShiftId,
+      active_work_date: activeWorkDate,
+      active_location_id: activeLocationId,
     };
   }
 
@@ -640,12 +671,11 @@ class StaffAttendanceLogService {
     }
 
     if (user.role === "manager") {
-      // Require Handover Note created today
-      const startOfToday = toStartOfDay(now);
+      // Require Handover Note created for THIS shift's work_date
       const handover = await ShiftHandoverLog.findOne({
         manager_id: { $in: requesterIds },
         shift_id: shift.id,
-        created_at: { $gte: startOfToday }
+        work_date: workDate
       }).lean();
 
       if (!handover) {

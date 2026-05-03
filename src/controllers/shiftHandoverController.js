@@ -29,9 +29,21 @@ const getRecentHandovers = async (req, res) => {
       locationIds = req.query.location_ids.split(",");
     }
 
+    const staffAttendanceLogService = require("../services/staffAttendanceLogService");
+    const status = await staffAttendanceLogService.getMyTodayAttendanceStatus({ user: req.user });
+
+    let currentShiftId = status.active_shift_id;
+    let activeLocationId = status.active_location_id;
+
+    // If manager is currently on duty at a specific location, ONLY show that location's handovers
+    if (activeLocationId) {
+      locationIds = [activeLocationId];
+    }
+
     const result = await shiftHandoverService.getRecentHandovers({
       location_ids: locationIds,
-      limit: req.query.limit || 5,
+      limit: activeLocationId ? 1 : (req.query.limit || 5),
+      current_shift_id: activeLocationId ? currentShiftId : null,
     });
 
     res.status(200).json({

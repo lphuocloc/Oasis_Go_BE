@@ -32,6 +32,11 @@ const shiftHandoverLogSchema = new mongoose.Schema(
 			required: [true, "Handover note is required"],
 			trim: true,
 		},
+		work_date: {
+			type: Date,
+			required: false,
+			index: true,
+		},
 	},
 	{
 		timestamps: { createdAt: "created_at", updatedAt: "updated_at" },
