@@ -11,6 +11,7 @@ const { randomInt } = require("crypto");
 const notificationService = require("./notificationService");
 const walletService = require("./walletService");
 const debtService = require("./debtService");
+const adminLedgerService = require("./adminLedgerService");
 const mongoose = require("mongoose");
 
 const readEnvMinutes = (key, fallback, min = 0) => {
@@ -501,7 +502,7 @@ class PaymentService {
             { session },
           );
 
-          await WalletTransaction.create(
+          const walletTransactions = await WalletTransaction.create(
             [
               {
                 wallet_id: wallet.id,
@@ -515,6 +516,23 @@ class PaymentService {
               },
             ],
             { session },
+          );
+
+          await adminLedgerService.createEntry(
+            {
+              type: "ESCROW_DEBIT",
+              amount: Number(walletDebitAmount.toFixed(2)),
+              source: "WALLET_PAYMENT",
+              dedupe_key: `WALLET_PAYMENT:${walletCharge[0].id}`,
+              user_id: normalizedUserId,
+              wallet_id: wallet.id,
+              order_id: bookingOrderId,
+              transaction_id: walletCharge[0].id,
+              wallet_transaction_id: walletTransactions[0]?.id || null,
+              reference_id: bookingOrderId,
+              description: `Wallet payment for order ${bookingOrderId}`,
+            },
+            session,
           );
         }
 
@@ -905,7 +923,7 @@ class PaymentService {
         wallet.balance = balanceAfter;
         await wallet.save({ session });
 
-        await WalletTransaction.create(
+        const walletTopupTransactions = await WalletTransaction.create(
           [
             {
               wallet_id: wallet.id,
@@ -919,6 +937,21 @@ class PaymentService {
             },
           ],
           { session },
+        );
+
+        await adminLedgerService.createEntry(
+          {
+            type: "ESCROW_CREDIT",
+            amount: Number(paidAmount),
+            source: "WALLET_TOPUP",
+            dedupe_key: `WALLET_TOPUP:${txnRef}`,
+            user_id: walletUserId,
+            wallet_id: wallet.id,
+            wallet_transaction_id: walletTopupTransactions[0]?.id || null,
+            reference_id: txnRef,
+            description: `Wallet topup ${txnRef}`,
+          },
+          session,
         );
 
         isNewTopupApplied = true;
@@ -1273,37 +1306,6 @@ class PaymentService {
       throw createError("Đơn hàng không có khoản nợ đền bù nào cần thanh toán", 400);
     }
 
-    // Check existing pending VNPay transaction
-    const existingPendingVnpay = await Transaction.findOne({
-      order_id: bookingOrderId,
-      type: "CHARGE",
-      method: "VNPAY",
-      status: "PENDING",
-      provider_reference: { $regex: /^DAMAGE_PAY_/ }
-    }).sort({ created_at: -1 });
-
-    if (existingPendingVnpay) {
-      const paymentUrl = vnpayService.createPaymentUrl({
-        orderId: bookingOrderId,
-        amount: Number(existingPendingVnpay.amount),
-        orderInfo: orderInfo || `Thanh toan den bu cho don ${bookingOrderId}`,
-        orderType: "billpayment",
-        ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
-        locale: "vn",
-        bankCode: "NCB",
-        txnRef: existingPendingVnpay.provider_reference,
-      });
-
-      return {
-        mode: "pending_vnpay",
-        orderId: bookingOrderId,
-        orderTotalAmount: damageAmount,
-        remainingAmount: Number(existingPendingVnpay.amount),
-        transactionId: existingPendingVnpay.id,
-        paymentUrl,
-      };
-    }
-
     await walletService.verifyPaymentPin(normalizedUserId, pin);
 
     const session = await mongoose.startSession();
@@ -1321,7 +1323,14 @@ class PaymentService {
         walletService.ensureWalletActive(wallet);
 
         const balanceBefore = Number(wallet.balance || 0);
-        const walletDebitAmount = Math.min(balanceBefore, payableAmount);
+        if (balanceBefore < payableAmount) {
+          throw createError(
+            "Số dư ví không đủ để thanh toán khoản đền bù. Vui lòng nạp thêm tiền.",
+            400,
+          );
+        }
+
+        const walletDebitAmount = payableAmount;
 
         let walletCharge = null;
         if (walletDebitAmount > 0) {
@@ -1339,7 +1348,7 @@ class PaymentService {
             description: `Thanh toán đền bù hư hại cho đơn hàng ${bookingOrderId}`
           }], { session });
 
-          await WalletTransaction.create([{
+          const damageWalletTransactions = await WalletTransaction.create([{
             wallet_id: wallet.id,
             amount: Number(walletDebitAmount.toFixed(2)),
             type: "PAYMENT",
@@ -1350,6 +1359,23 @@ class PaymentService {
             balance_after: Number(wallet.balance.toFixed(2)),
           }], { session });
 
+          await adminLedgerService.createEntry(
+            {
+              type: "ESCROW_DEBIT",
+              amount: Number(walletDebitAmount.toFixed(2)),
+              source: "WALLET_DAMAGE_PAYMENT",
+              dedupe_key: `WALLET_DAMAGE_PAYMENT:${walletCharge[0].id}`,
+              user_id: normalizedUserId,
+              wallet_id: wallet.id,
+              order_id: bookingOrderId,
+              transaction_id: walletCharge[0].id,
+              wallet_transaction_id: damageWalletTransactions[0]?.id || null,
+              reference_id: bookingOrderId,
+              description: `Wallet damage payment for order ${bookingOrderId}`,
+            },
+            session,
+          );
+
           order.outstanding_damage_amount = Number(Math.max(0, payableAmount - walletDebitAmount).toFixed(2));
           if (order.outstanding_damage_amount === 0) {
             order.damage_payment_status = "PAID";
@@ -1357,74 +1383,33 @@ class PaymentService {
           await order.save({ session });
         }
 
-        const remainingAmount = Number(order.outstanding_damage_amount);
-
-        if (remainingAmount <= 0) {
-          result = {
-            mode: "completed",
-            orderId: bookingOrderId,
-            orderTotalAmount: payableAmount,
-            paidAmountWallet: walletDebitAmount,
-            remainingAmount: 0,
-          };
-          return;
-        }
-
-        const pendingTxnRef = `DAMAGE_PAY_${bookingOrderId}_${Date.now()}`;
-        const pendingVnpayTransaction = await Transaction.create([{
-          order_id: bookingOrderId,
-          amount: remainingAmount,
-          currency: "VND",
-          type: "CHARGE",
-          method: "VNPAY",
-          status: "PENDING",
-          provider_reference: pendingTxnRef,
-          description: `Thanh toán đền bù hư hại cho đơn hàng ${bookingOrderId}`
-        }], { session });
-
         result = {
-          mode: "pending_vnpay",
+          mode: "completed",
           orderId: bookingOrderId,
           orderTotalAmount: payableAmount,
-          paidAmountWallet: Number(walletDebitAmount.toFixed(2)),
-          remainingAmount,
-          transactionId: pendingVnpayTransaction[0].id,
-          txnRef: pendingTxnRef,
+          paidAmountWallet: walletDebitAmount,
+          remainingAmount: 0,
         };
       });
     } finally {
       session.endSession();
     }
 
-    if (result?.mode === "completed") {
-      await notificationService.sendToUser(normalizedUserId, {
-        title: "Thanh toán đền bù thành công",
-        message: `Hóa đơn đền bù của đơn ${bookingOrderId} đã được thanh toán hoàn tất bằng ví.`,
-        type: "PAYMENT",
-        event_code: "PAYMENT_SUCCESS",
-        dedupe_key: `DAMAGE_PAY_SUCCESS:WALLET:${bookingOrderId}`,
-        data: {
-          type: "PAYMENT_SUCCESS",
-          order_id: bookingOrderId,
-          payment_method: "WALLET",
-          amount: String(result.paidAmountWallet),
-        },
-      });
-      return result;
-    }
-
-    const paymentUrl = vnpayService.createPaymentUrl({
-      orderId: bookingOrderId,
-      amount: Number(result.remainingAmount),
-      orderInfo: orderInfo || `Thanh toan den bu cho don ${bookingOrderId}`,
-      orderType: "billpayment",
-      ipAddr: (ipAddr || "127.0.0.1").replace("::ffff:", ""),
-      locale: "vn",
-      bankCode: "NCB",
-      txnRef: result.txnRef,
+    await notificationService.sendToUser(normalizedUserId, {
+      title: "Thanh toán đền bù thành công",
+      message: `Hóa đơn đền bù của đơn ${bookingOrderId} đã được thanh toán hoàn tất bằng ví.`,
+      type: "PAYMENT",
+      event_code: "PAYMENT_SUCCESS",
+      dedupe_key: `DAMAGE_PAY_SUCCESS:WALLET:${bookingOrderId}`,
+      data: {
+        type: "PAYMENT_SUCCESS",
+        order_id: bookingOrderId,
+        payment_method: "WALLET",
+        amount: String(result.paidAmountWallet),
+      },
     });
 
-    return { ...result, paymentUrl };
+    return result;
   }
 
   /**
