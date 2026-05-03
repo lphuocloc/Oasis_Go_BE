@@ -48,12 +48,30 @@ const buildUserMapByIds = async (userIds = []) => {
     .lean();
 
   return users.reduce((map, user) => {
-    const id = String(user._id);
+    const id = resolveActorId(user);
     map[id] = {
       id,
       name: user.name || null,
       phone: user.phone || null,
       email: user.email || null,
+    };
+    return map;
+  }, {});
+};
+
+const buildPodMapByIds = async (podIds = []) => {
+  const ids = [...new Set(podIds.filter(Boolean).map(String))];
+  if (!ids.length) return {};
+
+  const pods = await Pod.find({ id: { $in: ids } })
+    .select("id name code cluster_id")
+    .lean();
+
+  return pods.reduce((map, pod) => {
+    map[pod.id] = {
+      id: pod.id,
+      name: pod.name,
+      code: pod.code,
     };
     return map;
   }, {});
@@ -149,14 +167,15 @@ const resolveWarehouseForPod = async (podId) => {
 
 // ─── View mappers ─────────────────────────────────────────────────
 
-const toLostFoundItemView = (item, mediaUrls = [], cleaningTaskIds = []) => {
+const toLostFoundItemView = (item, mediaUrls = [], cleaningTaskIds = [], pod = null, foundByUser = null) => {
   const doc = typeof item.toObject === "function" ? item.toObject() : item;
   return {
     ...doc,
-    // Ẩn OTP khỏi response thông thường
     handover_otp: undefined,
     photo_urls: mediaUrls,
     cleaning_task_ids: cleaningTaskIds,
+    pod: pod || doc.pod || null,
+    found_by_user: foundByUser || null,
   };
 };
 
@@ -304,41 +323,67 @@ exports.submitLostItemRequest = async (
  * - LostItemRequest.status → MATCHED
  * - LostFoundItem.status → CLAIM_PENDING
  */
-exports.confirmMatch = async (requestId, { found_item_id, manager_note }, actor) => {
+exports.confirmMatch = async (requestId, { found_item_id, found_item_ids, manager_note, close_others = false }, actor) => {
   const actorRole = String(actor?.role || "").toLowerCase();
   if (!["manager", "admin"].includes(actorRole)) {
     throw createError("Only managers can confirm match", 403);
   }
 
-  if (!found_item_id) throw createError("found_item_id is required", 400);
+  // Normalize IDs to an array
+  const ids = found_item_ids || (found_item_id ? [found_item_id] : []);
+  if (!ids.length) throw createError("found_item_ids is required", 400);
 
-  const [request, foundItem] = await Promise.all([
+  const [request, foundItems] = await Promise.all([
     LostItemRequest.findOne({ id: requestId }),
-    LostFoundItem.findOne({ id: found_item_id }),
+    LostFoundItem.find({ id: { $in: ids } }),
   ]);
 
   if (!request) throw createError("Lost item request not found", 404);
-  if (!foundItem) throw createError("Lost & Found item not found", 404);
+  if (!foundItems.length) throw createError("No valid Lost & Found items found", 404);
 
   if (request.status !== "PENDING") {
     throw createError(`Request is already ${request.status}`, 400);
   }
-  if (!["FOUND", "IN_STORAGE"].includes(foundItem.status)) {
-    throw createError(`Item cannot be matched from status: ${foundItem.status}`, 400);
+
+  // Validate all items are available
+  for (const item of foundItems) {
+    if (!["FOUND", "IN_STORAGE"].includes(item.status)) {
+      throw createError(`Item "${item.item_name}" cannot be matched from status: ${item.status}`, 400);
+    }
   }
 
+  // Update request
   request.status = "MATCHED";
-  request.matched_found_item_id = found_item_id;
+  request.matched_found_item_ids = ids;
   request.manager_note = manager_note ? String(manager_note).trim() : null;
   await request.save();
 
-  foundItem.status = "CLAIM_PENDING";
-  foundItem.claimed_by_user_id = request.user_id;
-  await foundItem.save();
+  // Update all matched items
+  await Promise.all(foundItems.map(item => {
+    item.status = "CLAIM_PENDING";
+    item.claimed_by_user_id = request.user_id;
+    return item.save();
+  }));
+
+  // Auto-close other pending requests from the same user for the same booking (if requested)
+  if (close_others && request.booking_id) {
+    await LostItemRequest.updateMany(
+      {
+        user_id: request.user_id,
+        booking_id: request.booking_id,
+        id: { $ne: requestId },
+        status: "PENDING"
+      },
+      {
+        status: "CLOSED",
+        manager_note: `Tự động đóng do yêu cầu #${requestId} đã được xử lý khớp.`
+      }
+    );
+  }
 
   return {
     request: request.toObject(),
-    found_item: toLostFoundItemView(foundItem.toObject()),
+    matched_count: foundItems.length,
   };
 };
 
@@ -517,17 +562,25 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
     const items = await LostFoundItem.find(query).sort({ created_at: -1 }).lean();
     const itemIds = items.map((i) => i.id);
     const bookingIds = items.map((i) => i.booking_id);
-    const [mediaMap, cleaningTaskMap, bookingUserMap] = await Promise.all([
+    const podIds = items.map((i) => i.pod_id);
+    const userIds = items.map((i) => i.found_by_user_id);
+
+    const [mediaMap, cleaningTaskMap, bookingUserMap, podMap, userMap] = await Promise.all([
       buildMediaMap(itemIds),
       buildCleaningTaskMap(bookingIds),
       buildBookingUserMap(bookingIds),
+      buildPodMapByIds(podIds),
+      buildUserMapByIds(userIds),
     ]);
+
     return {
       items: items.map((item) => {
         const view = toLostFoundItemView(
           item,
           mediaMap[item.id] || [],
           cleaningTaskMap[item.booking_id] || [],
+          podMap[item.pod_id],
+          userMap[item.found_by_user_id]
         );
         return {
           ...view,
@@ -549,10 +602,15 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
 
   const itemIds = items.map((i) => i.id);
   const bookingIds = items.map((i) => i.booking_id);
-  const [mediaMap, cleaningTaskMap, bookingUserMap] = await Promise.all([
+  const podIds = items.map((i) => i.pod_id);
+  const userIds = items.map((i) => i.found_by_user_id);
+
+  const [mediaMap, cleaningTaskMap, bookingUserMap, podMap, userMap] = await Promise.all([
     buildMediaMap(itemIds),
     buildCleaningTaskMap(bookingIds),
     buildBookingUserMap(bookingIds),
+    buildPodMapByIds(podIds),
+    buildUserMapByIds(userIds),
   ]);
 
   return {
@@ -561,6 +619,8 @@ exports.getLostFoundItems = async (filters = {}, actor = null) => {
         item,
         mediaMap[item.id] || [],
         cleaningTaskMap[item.booking_id] || [],
+        podMap[item.pod_id],
+        userMap[item.found_by_user_id]
       );
       return {
         ...view,
@@ -593,7 +653,12 @@ exports.getLostFoundItemById = async (itemId, actor = null) => {
       : Promise.resolve([]),
   ]);
 
-  return toLostFoundItemView(item, mediaUrls, cleaningTaskIds);
+  const [pod, user] = await Promise.all([
+    Pod.findOne({ id: item.pod_id }).select("id name code").lean(),
+    User.findOne({ _id: item.found_by_user_id }).select("name phone").lean(),
+  ]);
+
+  return toLostFoundItemView(item, mediaUrls, cleaningTaskIds, pod, user);
 };
 
 /**

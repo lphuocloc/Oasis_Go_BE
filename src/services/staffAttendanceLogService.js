@@ -416,9 +416,13 @@ class StaffAttendanceLogService {
     };
   }
 
-  async checkinWork({ user }) {
+  async checkinWork({ req, user }) {
     const requesterIds = this.resolveRequesterIds(user);
     const now = new Date();
+    const clientIp = req?.ip || "unknown";
+    const userAgent = req?.headers?.["user-agent"] || "unknown";
+
+    console.log(`[AttendanceAudit] Check-in attempt by ${user.email} (ID: ${requesterIds[0]}) from IP: ${clientIp}, UA: ${userAgent}`);
 
     // Find ALL active rosters for this staff
     const rosters = await StaffWorkRoster.find({ staff_id: { $in: requesterIds }, is_active: true }).lean();
@@ -499,9 +503,20 @@ class StaffAttendanceLogService {
     }
   }
 
-  async checkoutWork({ user }) {
+  async checkoutWork({ req, user }) {
     const requesterIds = this.resolveRequesterIds(user);
     const now = new Date();
+    const clientIp = req?.ip || "unknown";
+    const userAgent = req?.headers?.["user-agent"] || "unknown";
+    const method = req?.method || "N/A";
+    const url = req?.originalUrl || "N/A";
+
+    console.log(`[AttendanceAudit] ${new Date().toISOString()} - CHECKOUT ATTEMPT by ${user.email}`);
+    console.log(`[AttendanceAudit] Metadata: IP=${clientIp}, Method=${method}, URL=${url}, UA=${userAgent}`);
+
+    if (!req) {
+      console.warn(`[AttendanceAudit] WARNING: Checkout called without request object. Possible internal trigger.`);
+    }
 
     // 1. Find the latest CHECKIN for this staff that doesn't have a CHECKOUT yet
     const latestCheckin = await StaffAttendanceLog.findOne({

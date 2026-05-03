@@ -122,6 +122,7 @@ const getAttendanceLogById = async (req, res) => {
 const checkinWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkinWork({
+      req,
       user: req.user,
     });
 
@@ -141,6 +142,7 @@ const checkinWork = async (req, res) => {
 const checkoutWork = async (req, res) => {
   try {
     const result = await staffAttendanceLogService.checkoutWork({
+      req,
       user: req.user,
     });
 
