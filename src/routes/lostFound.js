@@ -8,6 +8,7 @@ const {
   submitLostItemRequest,
   confirmMatch,
   rejectLostItemRequest,
+  closeLostItemRequest,
   generateHandoverOTP,
   confirmHandover,
   getLostFoundItems,
@@ -56,7 +57,7 @@ const {
  *           maximum: 100
  *     responses:
  *       200:
- *         description: Requests retrieved successfully
+ *         description: Requests retrieved successfully (each item includes user info)
  */
 router.get("/requests", protect, authorize("admin", "manager", "user"), getLostItemRequests);
 
@@ -180,6 +181,37 @@ router.post("/requests/:id/match", protect, authorize("admin", "manager"), confi
  */
 router.post("/requests/:id/reject", protect, authorize("admin", "manager"), rejectLostItemRequest);
 
+// ─── Manager đóng Request ─────────────────────────────────────────
+
+/**
+ * @swagger
+ * /api/lost-found-items/requests/{id}/close:
+ *   post:
+ *     summary: Manager closes a lost item request (PENDING only)
+ *     tags: [Lost Found]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *     requestBody:
+ *       required: false
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               manager_note:
+ *                 type: string
+ *     responses:
+ *       200:
+ *         description: Closed successfully
+ */
+router.post("/requests/:id/close", protect, authorize("admin", "manager"), closeLostItemRequest);
+
 // ─── Lấy danh sách LostFoundItems (Manager/Cleaner) ───────────────
 
 /**
@@ -226,7 +258,7 @@ router.post("/requests/:id/reject", protect, authorize("admin", "manager"), reje
  *           type: integer
  *     responses:
  *       200:
- *         description: Lost & found items retrieved successfully
+ *         description: Lost & found items retrieved successfully (each item includes booking_user when booking_id exists)
  */
 router.get("/", protect, authorize("admin", "manager", "cleaner"), getLostFoundItems);
 
