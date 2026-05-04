@@ -6,6 +6,8 @@ const {
   createCleaningTask,
   getAllCleaningTasks,
   getMyCleaningTasks,
+  getCleanerTasksByBookingForManager,
+  getCleaningTaskWithMedia,
   getMyCleanerKeyByTaskId,
   getCleaningTaskById,
   updateCleaningTask,
@@ -230,6 +232,85 @@ router.get("/", protect, authorize("admin", "manager", "cleaner"), loadManagerSc
  *                         type: string
  */
 router.get("/me", protect, authorize("cleaner", "manager", "admin"), getMyCleaningTasks);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/manager/cleaner-booking:
+ *   get:
+ *     summary: Get all cleaning tasks by booking (manager)
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: query
+ *         name: booking_id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Booking ID
+ *       - in: query
+ *         name: status
+ *         schema:
+ *           type: string
+ *           enum: [ASSIGNED, ACCEPTED, IN_PROGRESS, DONE, CANCELLED, MISSED]
+ *       - in: query
+ *         name: request_source
+ *         schema:
+ *           type: string
+ *           enum: [USER_REQUEST, AUTO_AFTER_CHECKOUT, SYSTEM_RETRY, ROOM_CHANGE_VACATED]
+ *       - in: query
+ *         name: due_from
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *       - in: query
+ *         name: due_to
+ *         schema:
+ *           type: string
+ *           format: date-time
+ *     responses:
+ *       200:
+ *         description: Cleaning tasks retrieved successfully
+ *       400:
+ *         description: Missing booking_id
+ */
+router.get(
+  "/manager/cleaner-booking",
+  protect,
+  authorize("manager", "admin"),
+  loadManagerScope,
+  applyManagerPodScope,
+  getCleanerTasksByBookingForManager,
+);
+
+/**
+ * @swagger
+ * /api/cleaning-tasks/{id}/with-media:
+ *   get:
+ *     summary: Get cleaning task detail with before/after media
+ *     tags: [Cleaning Tasks]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: Cleaning task ID
+ *     responses:
+ *       200:
+ *         description: Cleaning task with media retrieved successfully
+ *       404:
+ *         description: Cleaning task not found
+ */
+router.get(
+  "/:id/with-media",
+  protect,
+  authorize("admin", "manager", "cleaner"),
+  loadManagerScope,
+  getCleaningTaskWithMedia,
+);
 
 /**
  * @swagger

@@ -1,4 +1,5 @@
 const cleaningTaskService = require("../services/cleaningTaskService");
+const cleaningMediaService = require("../services/cleaningMediaService");
 
 exports.createCleaningTask = async (req, res) => {
   try {
@@ -27,6 +28,64 @@ exports.getMyCleaningTasks = async (req, res) => {
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({ success: false, message: error.message || "Error fetching my cleaning tasks" });
+  }
+};
+
+exports.getCleanerTasksByBookingForManager = async (req, res) => {
+  try {
+    const { booking_id: bookingId } = req.query;
+
+    if (!bookingId) {
+      return res.status(400).json({
+        success: false,
+        message: "booking_id is required",
+      });
+    }
+
+    const tasks = await cleaningTaskService.getAllCleaningTasks(req.query);
+    res.status(200).json({ success: true, count: tasks.length, data: tasks });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching cleaning tasks by booking",
+    });
+  }
+};
+
+exports.getCleaningTaskWithMedia = async (req, res) => {
+  try {
+    const task = await cleaningTaskService.getCleaningTaskById(req.params.id);
+
+    if (req.user && req.user.role === "manager" && req.managerScope) {
+      if (!req.managerScope.podIds.includes(String(task.pod_id))) {
+        return res.status(403).json({ success: false, message: "Out of management scope" });
+      }
+    }
+
+    const mediaList = await cleaningMediaService.getAllCleaningMedia({
+      cleaning_task_id: req.params.id,
+    });
+
+    const before = mediaList.filter((item) => item.media_type === "BEFORE");
+    const after = mediaList.filter((item) => item.media_type === "AFTER");
+
+    res.status(200).json({
+      success: true,
+      data: {
+        task,
+        media: {
+          before,
+          after,
+        },
+      },
+    });
+  } catch (error) {
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Error fetching cleaning task with media",
+    });
   }
 };
 
