@@ -1462,7 +1462,7 @@ class BookingService {
     }
 
     await OnlineKey.updateMany(
-      { booking_id: booking.id, is_revoked: false },
+      { booking_id: booking.id, is_revoked: false, key_type: { $ne: "CLEANER" } },
       { $set: { pod_id: nextPod.id } }
     );
 
