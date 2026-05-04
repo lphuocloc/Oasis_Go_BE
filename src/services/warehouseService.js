@@ -24,6 +24,19 @@ exports.getAllWarehouses = async (query = {}) => {
   const filter = {};
   if (query.name) filter.name = { $regex: query.name, $options: "i" };
 
+  if (query.location_ids) {
+    const ids = Array.isArray(query.location_ids) 
+      ? query.location_ids 
+      : String(query.location_ids).split(",");
+    
+    const mappings = await LocationWarehouse.find({ location_id: { $in: ids } })
+      .select("warehouse_id")
+      .lean();
+    
+    const warehouseIds = mappings.map(m => m.warehouse_id);
+    filter.id = { $in: warehouseIds };
+  }
+
   return Warehouse.find(filter).sort({ created_at: -1 });
 };
 
