@@ -1689,6 +1689,7 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
   await OnlineKey.updateMany(
     {
       booking_id: String(booking.id),
+      pod_id: String(task.pod_id),
       key_type: "CLEANER",
       is_revoked: false,
       user_id: { $ne: actorCleanerId },
@@ -1698,6 +1699,7 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
 
   let cleanerKey = await OnlineKey.findOne({
     booking_id: String(booking.id),
+    pod_id: String(task.pod_id),
     key_type: "CLEANER",
     user_id: actorCleanerId,
     is_revoked: false,
@@ -1708,7 +1710,7 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
   if (!cleanerKey) {
     cleanerKey = await OnlineKey.create({
       booking_id: String(booking.id),
-      pod_id: String(booking.pod_id || task.pod_id),
+      pod_id: String(task.pod_id),
       user_id: actorCleanerId,
       key_type: "CLEANER",
       key_token: await generateUniqueOnlineKeyToken(),

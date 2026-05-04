@@ -503,7 +503,7 @@ class SupportRequestService {
 
     const typeLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "vệ sinh" : "hỗ trợ";
     const titleLabel = normalizeUpper(supportRequest.type) === "CLEANING" ? "Yêu Cầu Vệ Sinh" : "Yêu Cầu Hỗ Trợ";
-    
+
     await Promise.all(
       managerUserIds.map((managerUserId) =>
         notificationService.sendToUser(managerUserId, {
@@ -610,7 +610,7 @@ class SupportRequestService {
       if (normalizedType === "CLEANING") {
         await this._notifyCleanersForCleaningSupport(supportRequest, booking);
       }
-      
+
       const podCode = pod.code || pod.name || booking.pod_id;
       await this._notifyManagersForSupportRequest(supportRequest, podCode);
 
@@ -983,7 +983,7 @@ class SupportRequestService {
     }
 
     await OnlineKey.updateMany(
-      { booking_id: booking.id, is_revoked: false },
+      { booking_id: booking.id, is_revoked: false, key_type: { $ne: "CLEANER" } },
       { $set: { pod_id: nextPod.id } }
     );
 
