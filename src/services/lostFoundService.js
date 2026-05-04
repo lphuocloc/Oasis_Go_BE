@@ -323,15 +323,15 @@ exports.submitLostItemRequest = async (
  * - LostItemRequest.status → MATCHED
  * - LostFoundItem.status → CLAIM_PENDING
  */
-exports.confirmMatch = async (requestId, { found_item_id, found_item_ids, manager_note, close_others = false }, actor) => {
+exports.confirmMatch = async (requestId, { found_item_id, manager_note, close_others = false }, actor) => {
   const actorRole = String(actor?.role || "").toLowerCase();
   if (!["manager", "admin"].includes(actorRole)) {
     throw createError("Only managers can confirm match", 403);
   }
 
   // Normalize IDs to an array
-  const ids = found_item_ids || (found_item_id ? [found_item_id] : []);
-  if (!ids.length) throw createError("found_item_ids is required", 400);
+  const ids = Array.isArray(found_item_id) ? found_item_id : (found_item_id ? [found_item_id] : []);
+  if (!ids.length) throw createError("found_item_id is required", 400);
 
   const [request, foundItems] = await Promise.all([
     LostItemRequest.findOne({ id: requestId }),
@@ -354,7 +354,7 @@ exports.confirmMatch = async (requestId, { found_item_id, found_item_ids, manage
 
   // Update request
   request.status = "MATCHED";
-  request.matched_found_item_ids = ids;
+  request.matched_found_item_id = ids;
   request.manager_note = manager_note ? String(manager_note).trim() : null;
   await request.save();
 
