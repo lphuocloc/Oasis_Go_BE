@@ -37,6 +37,44 @@ exports.createUser = async (req, res) => {
   }
 };
 
+exports.getAllUsersForAdmin = async (req, res) => {
+  try {
+    const users = await userService.getAllUsersForAdmin(req.query);
+
+    res.status(200).json({
+      success: true,
+      count: users.length,
+      data: users,
+    });
+  } catch (error) {
+    console.error("Get admin users error:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
+exports.getUserDetailForAdmin = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const user = await userService.getUserDetailForAdmin(id);
+
+    res.status(200).json({
+      success: true,
+      data: user,
+    });
+  } catch (error) {
+    console.error("Get user detail error:", error);
+    const statusCode = error.statusCode || 500;
+    res.status(statusCode).json({
+      success: false,
+      message: error.message || "Server error",
+    });
+  }
+};
+
 exports.updateUser = async (req, res) => {
   try {
     const { id } = req.params;

@@ -144,8 +144,8 @@ router.get("/dashboard/summary-cards", protect, authorize("admin"), dashboardCon
  * @swagger
  * /api/admin/users:
  *   get:
- *     summary: Get list of all active users (users by default)
- *     description: Returns list of active users. Filters by role if provided, otherwise returns users.
+ *     summary: Get list of users
+ *     description: Returns list of users. Filters by role or isActive if provided.
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
@@ -155,13 +155,46 @@ router.get("/dashboard/summary-cards", protect, authorize("admin"), dashboardCon
  *         schema:
  *           type: string
  *           enum: [user, admin, manager, cleaner]
- *         description: Filter users by role (default returns users)
+ *         description: Filter users by role
  *         example: user
+ *       - in: query
+ *         name: isActive
+ *         schema:
+ *           type: boolean
+ *         description: Filter by active status
  *     responses:
  *       200:
  *         description: List of users retrieved successfully
  */
-router.get("/users", protect, authorize("admin", "manager"), userController.getActiveUsers);
+router.get("/users", protect, authorize("admin", "manager"), userController.getAllUsersForAdmin);
+
+/**
+ * @swagger
+ * /api/admin/users/{id}:
+ *   get:
+ *     summary: Get user details (including CCCD info)
+ *     tags: [Admin]
+ *     security:
+ *       - bearerAuth: []
+ *     parameters:
+ *       - in: path
+ *         name: id
+ *         required: true
+ *         schema:
+ *           type: string
+ *         description: User ID
+ *     responses:
+ *       200:
+ *         description: User detail retrieved successfully
+ *       404:
+ *         description: User not found
+ */
+router.get(
+    "/users/:id",
+    protect,
+    authorize("admin", "manager"),
+    userController.getUserDetailForAdmin,
+);
 
 /**
  * @swagger
