@@ -18,7 +18,7 @@ const { emitCleanerNotificationEvent } = require("../socket/socketServer");
 const { getSocketServer } = require("../socket/socketServer");
 
 const SUPPORT_TYPES = ["MAINTENANCE", "CHANGE_POD"];
-const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED"];
+const SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED", "EXPIRED"];
 const ACTIVE_SUPPORT_STATUSES = ["PENDING", "PROCESSING", "IN_PROGRESS"];
 const MAINTENANCE_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
 const DEFAULT_CLEANING_BUFFER_MINUTES = 30;
@@ -219,7 +219,13 @@ class SupportRequestService {
 
     if (scopedParentLocationIds.size > 0) {
       const topParentId = await this._resolveTopParentLocationId(supportRequest.location_id);
-      if (topParentId && !scopedParentLocationIds.has(String(topParentId))) {
+      
+      const managerRoots = await Promise.all(
+        Array.from(scopedParentLocationIds).map(id => this._resolveTopParentLocationId(id))
+      );
+      const managerRootSet = new Set(managerRoots.filter(Boolean).map(id => String(id)));
+
+      if (topParentId && !managerRootSet.has(String(topParentId))) {
         throw createError("You are not allowed to handle support requests outside your parent location scope", 403);
       }
     }
@@ -724,13 +730,14 @@ class SupportRequestService {
 
     const currentStatus = normalizeSupportStatus(supportRequest.status);
     const allowedTransitions = {
-      PENDING: ["PROCESSING", "REJECTED", "CANCELED"],
-      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED", "CANCELED"],
-      IN_PROGRESS: ["ESCALATED", "RESOLVED", "REJECTED"],
-      ESCALATED: ["IN_PROGRESS", "RESOLVED", "REJECTED"],
+      PENDING: ["PROCESSING", "REJECTED", "CANCELED", "EXPIRED"],
+      PROCESSING: ["IN_PROGRESS", "ESCALATED", "REJECTED", "CANCELED", "EXPIRED"],
+      IN_PROGRESS: ["ESCALATED", "RESOLVED", "REJECTED", "EXPIRED"],
+      ESCALATED: ["IN_PROGRESS", "RESOLVED", "REJECTED", "EXPIRED"],
       RESOLVED: [],
       REJECTED: [],
       CANCELED: [],
+      EXPIRED: [],
     };
 
     if (currentStatus !== normalizedStatus) {
@@ -769,7 +776,7 @@ class SupportRequestService {
       throw createError("resolution_note is required when status is RESOLVED or REJECTED", 400);
     }
 
-    if (["IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED"].includes(normalizedStatus)) {
+    if (["IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "EXPIRED"].includes(normalizedStatus)) {
       supportRequest.handled_by = actorId;
       supportRequest.handled_at = new Date();
     }

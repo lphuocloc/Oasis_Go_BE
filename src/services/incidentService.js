@@ -13,6 +13,7 @@ const Item = require("../models/Item");
 const DamageServiceCatalog = require("../models/DamageServiceCatalog");
 const StaffWorkRoster = require("../models/StaffWorkRoster");
 const User = require("../models/User");
+const podService = require("./podService");
 const mongoose = require("mongoose");
 const notificationService = require("./notificationService");
 const debtService = require("./debtService");
@@ -21,6 +22,9 @@ const LocationWarehouse = require("../models/LocationWarehouse");
 const InventoryStock = require("../models/InventoryStock");
 const InventoryActivityLog = require("../models/InventoryActivityLog");
 const PodItem = require("../models/PodItem");
+const BookingSlot = require("../models/BookingSlot");
+const TimeSlot = require("../models/TimeSlot");
+const OnlineKey = require("../models/OnlineKey");
 
 const INCIDENT_STATUSES = ["PENDING", "PROCESSING", "COMPLETED", "RESOLVED", "DISMISSED"];
 const INCIDENT_SEVERITIES = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
@@ -1006,9 +1010,6 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   if (resolution_note !== undefined) {
     incident.resolution_note = resolution_note;
   }
-  if (escalation_note !== undefined) {
-    incident.escalation_note = escalation_note;
-  }
   incident.handled_by = ["RESOLVED", "DISMISSED"].includes(normalizedStatus)
     ? resolveActorId(actor)
     : incident.handled_by;
@@ -1018,6 +1019,21 @@ exports.updateIncidentStatus = async (incidentId, payload, actor = null) => {
   if (normalizedStatus === "RESOLVED") {
     damageBilling.damage_total_value = await getIncidentDamageTotal(incident);
     damageBilling.total_amount_value = damageBilling.damage_total_value;
+
+    // Trigger emergency maintenance if severity is high/critical
+    const severity = String(incident.severity || "").toUpperCase();
+    if (["HIGH", "CRITICAL"].includes(severity)) {
+      try {
+        console.info(`${logPrefix} Severity ${severity} detected. Setting pod ${incident.pod_id} to MAINTENANCE`);
+        await podService.updatePodStatus(incident.pod_id, {
+          status: "MAINTENANCE",
+          maintenance_status: incident.description || "Hư hại tài sản mức độ cao",
+          auto_migrate_future_bookings: false
+        });
+      } catch (err) {
+        console.error(`${logPrefix} Failed to set pod to MAINTENANCE`, err);
+      }
+    }
   }
 
   const isManagerReviewFlow = actorRole === "manager" && ["RESOLVED", "DISMISSED"].includes(normalizedStatus);
@@ -1654,5 +1670,135 @@ exports.updateCleanerIncidentStatus = async (incidentId, payload, actor) => {
     resolution_note: incident.resolution_note || null,
     handled_by: incident.handled_by || null,
     updated_at: incident.updated_at,
+  };
+};
+
+exports.getAffectedBookingsForIncident = async (incidentId) => {
+  const incident = await Incident.findOne({ id: incidentId });
+  if (!incident) throw createError("Incident not found", 404);
+
+  const now = new Date();
+  const bookings = await Booking.find({
+    pod_id: incident.pod_id,
+    status: { $in: ["BOOKED", "CHECKED_IN"] },
+    end_time: { $gt: now },
+  })
+    .select("id user_id pod_id start_time end_time status order_id")
+    .sort({ start_time: 1 })
+    .lean();
+
+  const userIds = [...new Set(bookings.map((b) => String(b.user_id)))];
+  const users = await User.find({
+    $or: [
+      { id: { $in: userIds } },
+      { _id: { $in: userIds.filter((id) => mongoose.Types.ObjectId.isValid(id)).map((id) => new mongoose.Types.ObjectId(id)) } },
+    ],
+  })
+    .select("id _id name email phone")
+    .lean();
+
+  const userMap = new Map();
+  users.forEach((u) => {
+    if (u.id) userMap.set(String(u.id), u);
+    if (u._id) userMap.set(String(u._id), u);
+  });
+
+  return bookings.map((b) => ({
+    ...b,
+    user: userMap.get(String(b.user_id)) || null,
+  }));
+};
+
+exports.getIncidentRoomChangeCandidates = async (bookingId, actor) => {
+  const booking = await Booking.findOne({ id: bookingId });
+  if (!booking) throw createError("Booking not found", 404);
+
+  const pod = await Pod.findOne({ id: booking.pod_id }).lean();
+  if (!pod) throw createError("Original pod not found", 404);
+
+  const clusterIds = actor?.managerScope?.clusterIds || [];
+  if (clusterIds.length === 0) return [];
+
+  // Priority 1: Current cluster
+  const sameClusterPods = await Pod.find({
+    cluster_id: pod.cluster_id,
+    id: { $ne: pod.id },
+    status: "AVAILABLE",
+  }).lean();
+
+  // Priority 2: Other clusters in manager scope
+  const otherClusterPods = await Pod.find({
+    cluster_id: { $in: clusterIds, $ne: pod.cluster_id },
+    status: "AVAILABLE",
+  }).lean();
+
+  const allCandidates = [...sameClusterPods, ...otherClusterPods];
+  const results = [];
+
+  for (const candidate of allCandidates) {
+    const isAvailable = await Booking.isPodAvailable(
+      candidate.id,
+      booking.start_time,
+      booking.end_time,
+      booking.id
+    );
+
+    if (isAvailable) {
+      results.push(candidate);
+    }
+  }
+
+  return results;
+};
+
+exports.executeIncidentRoomChange = async (bookingId, targetPodId, actor) => {
+  const booking = await Booking.findOne({ id: bookingId });
+  if (!booking) throw createError("Booking not found", 404);
+
+  const targetPod = await Pod.findOne({ id: targetPodId }).lean();
+  if (!targetPod) throw createError("Target pod not found", 404);
+
+  // Check availability again to be safe
+  const isAvailable = await Booking.isPodAvailable(
+    targetPodId,
+    booking.start_time,
+    booking.end_time,
+    booking.id
+  );
+  if (!isAvailable) throw createError("Phòng mục tiêu không còn khả dụng trong khung giờ này", 400);
+
+  const oldPodId = booking.pod_id;
+  booking.pod_id = targetPodId;
+  await booking.save();
+
+  // Update related records
+  const bookingSlots = await BookingSlot.find({ booking_id: bookingId }).select("time_slot_id").lean();
+  const timeSlotIds = bookingSlots.map((s) => s.time_slot_id);
+
+  if (timeSlotIds.length > 0) {
+    await TimeSlot.updateMany({ id: { $in: timeSlotIds } }, { $set: { pod_id: targetPodId } });
+  }
+
+  await OnlineKey.updateMany({ booking_id: bookingId, is_revoked: false }, { $set: { pod_id: targetPodId } });
+
+  // Notify user
+  await notificationService.sendToUser(booking.user_id, {
+    title: "Thay đổi phòng cho lịch đặt chỗ",
+    message: `Lịch đặt chỗ ${bookingId.slice(0, 8)} của bạn đã được chuyển sang phòng ${targetPod.name} do sự cố đột xuất.`,
+    type: "BOOKING",
+    event_code: "BOOKING_INCIDENT_MIGRATED",
+    dedupe_key: `BOOKING_INCIDENT_MIGRATED:${bookingId}`,
+    data: {
+      booking_id: bookingId,
+      old_pod_id: oldPodId,
+      new_pod_id: targetPodId,
+    },
+  });
+
+  return {
+    success: true,
+    booking_id: bookingId,
+    new_pod_id: targetPodId,
+    new_pod_name: targetPod.name,
   };
 };
