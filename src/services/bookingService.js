@@ -815,12 +815,6 @@ class BookingService {
       throw error;
     }
 
-    if (!booking.cleaner_access_allowed) {
-      const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
-      error.statusCode = 403;
-      throw error;
-    }
-
     const cleanerKey = await OnlineKey.findOne({
       booking_id: String(bookingId),
       key_type: "CLEANER",
@@ -829,6 +823,12 @@ class BookingService {
     })
       .sort({ createdAt: -1 })
       .select("id booking_id pod_id user_id key_type key_token valid_from valid_to is_revoked createdAt updatedAt");
+
+    if (!booking.cleaner_access_allowed && String(cleanerKey?.pod_id || "") === String(booking.pod_id || "")) {
+      const error = new Error("Chủ nhân phòng chưa cho phép truy cập làm vệ sinh");
+      error.statusCode = 403;
+      throw error;
+    }
 
     if (!cleanerKey) {
       const error = new Error("Không tìm thấy cleaner key cho booking này");

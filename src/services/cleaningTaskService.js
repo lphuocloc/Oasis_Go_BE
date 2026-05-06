@@ -1628,7 +1628,7 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
   }
 
   const task = await CleaningTask.findOne({ id: normalizedTaskId })
-    .select("id booking_id cleaner_id status pod_id")
+    .select("id booking_id cleaner_id status pod_id request_source")
     .lean();
   if (!task) {
     throw createError("Cleaning task not found", 404, "CLEANING_TASK_NOT_FOUND");
@@ -1657,7 +1657,8 @@ exports.getMyCleanerKeyByTaskId = async (taskId, actor) => {
     throw createError("Cleaner access is blocked for NO_SHOW booking", 403, "BOOKING_NO_SHOW");
   }
 
-  if (booking.status === "IN_USE" && !booking.cleaner_access_allowed) {
+  const requestSource = String(task.request_source || "").toUpperCase();
+  if (booking.status === "IN_USE" && !booking.cleaner_access_allowed && requestSource !== "ROOM_CHANGE_VACATED") {
     throw createError("Cleaner access is not confirmed by user", 403, "CLEANER_ACCESS_NOT_ALLOWED");
   }
 

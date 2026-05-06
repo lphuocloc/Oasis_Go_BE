@@ -262,6 +262,7 @@ const toDamageReportView = (incidentDoc, photoUrls = [], metadata = {}, details 
       pod_id: incident.pod_id || null,
       pod_name: podName,
       booking_id: incident.booking_id || null,
+      booking_order_id: metadata.booking_order_id || null,
       cleaning_task_id: incident.cleaning_task_id || null,
       reported_by: incident.reported_by || null,
       user_id: userId,
@@ -323,11 +324,12 @@ const buildIncidentDetailMap = async (incidentIds = [], session = null) => {
 const buildDamageMetadataMap = async (incidents = []) => {
   const podIds = [...new Set(incidents.map((item) => String(item.pod_id || "")).filter(Boolean))];
   const reporterIds = [...new Set(incidents.map((item) => String(item.reported_by || "")).filter(Boolean))];
+  const bookingIds = [...new Set(incidents.map((item) => String(item.booking_id || "")).filter(Boolean))];
   const reporterObjectIds = reporterIds
     .filter((id) => mongoose.Types.ObjectId.isValid(id))
     .map((id) => new mongoose.Types.ObjectId(id));
 
-  const [pods, users] = await Promise.all([
+  const [pods, users, bookings] = await Promise.all([
     podIds.length > 0
       ? Pod.find({ id: { $in: podIds } }).select("id name").lean()
       : Promise.resolve([]),
@@ -341,9 +343,13 @@ const buildDamageMetadataMap = async (incidents = []) => {
         .select("_id id name")
         .lean()
       : Promise.resolve([]),
+    bookingIds.length > 0
+      ? Booking.find({ id: { $in: bookingIds } }).select("id order_id").lean()
+      : Promise.resolve([]),
   ]);
 
   const podById = new Map(pods.map((pod) => [String(pod.id), pod]));
+  const bookingById = new Map(bookings.map((b) => [String(b.id), b]));
   const userById = new Map();
   users.forEach((user) => {
     if (user && user.id) userById.set(String(user.id), user);
@@ -354,12 +360,14 @@ const buildDamageMetadataMap = async (incidents = []) => {
   incidents.forEach((incident) => {
     const pod = podById.get(String(incident.pod_id || "")) || null;
     const user = userById.get(String(incident.reported_by || "")) || null;
+    const booking = bookingById.get(String(incident.booking_id || "")) || null;
 
     metadataByIncidentId.set(String(incident.id), {
       pod_name: pod ? pod.name || null : null,
       user_id: user ? String(user.id || user._id || incident.reported_by || "") : String(incident.reported_by || ""),
       user_name: user ? user.name || null : null,
       cleaner_name: user ? user.name || null : null,
+      booking_order_id: booking ? booking.order_id : null,
     });
   });
 
