@@ -27,8 +27,8 @@ const loadManagerScope = async (req, res, next) => {
     const staffIds = uniqueStrings([req.user.id, req.user._id]);
 
     const rosters = await StaffWorkRoster.find({
-        staff_id: { $in: staffIds },
-        is_active: true
+      staff_id: { $in: staffIds },
+      is_active: true
     }).select("location_id shift_id").lean();
 
     const parentLocationIds = uniqueStrings(rosters.map((item) => item.location_id));
