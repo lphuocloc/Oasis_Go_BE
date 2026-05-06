@@ -58,7 +58,7 @@ const supportRequestSchema = new mongoose.Schema(
     status: {
       type: String,
       enum: {
-        values: ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED"],
+        values: ["PENDING", "PROCESSING", "IN_PROGRESS", "ESCALATED", "RESOLVED", "REJECTED", "CANCELED", "EXPIRED"],
         message: "{VALUE} is not a valid support request status",
       },
       default: "PENDING",

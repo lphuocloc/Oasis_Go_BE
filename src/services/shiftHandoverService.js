@@ -34,29 +34,55 @@ class ShiftHandoverService {
     let activeRoster = null;
     let activeShift = null;
 
-    // Find the roster that matches the current time window
-    for (const roster of rosters) {
-      const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
-      if (!shift) continue;
+    const StaffAttendanceLog = require("../models/StaffAttendanceLog");
+    const latestCheckin = await StaffAttendanceLog.findOne({
+      staff_id: { $in: requesterIds },
+      action: "CHECKIN"
+    }).sort({ created_at: -1 }).lean();
 
-      try {
-        staffAttendanceLogService.resolveShiftWindow(shift, now);
-        activeRoster = roster;
-        activeShift = shift;
-        break;
-      } catch (e) {
-        continue;
+    let workDate = null;
+
+    if (latestCheckin) {
+      const hasCheckout = await StaffAttendanceLog.findOne({
+        staff_id: latestCheckin.staff_id,
+        action: "CHECKOUT",
+        work_date: latestCheckin.work_date,
+        shift_id: latestCheckin.shift_id
+      }).lean();
+
+      if (!hasCheckout) {
+        // We found an open session! Use it.
+        activeRoster = rosters.find(r => String(r.shift_id) === String(latestCheckin.shift_id));
+        if (activeRoster) {
+          activeShift = await StaffShift.findOne({ id: latestCheckin.shift_id }).lean();
+          workDate = latestCheckin.work_date;
+        }
       }
     }
 
+    // Fallback to standard window matching if no open session or if open session roster not found
     if (!activeRoster || !activeShift) {
-      const error = new Error("Khong tim thay ca truc phu hop de ban giao vao luc này");
+      for (const roster of rosters) {
+        const shift = await StaffShift.findOne({ id: roster.shift_id }).lean();
+        if (!shift) continue;
+
+        try {
+          const window = staffAttendanceLogService.resolveShiftWindow(shift, now);
+          activeRoster = roster;
+          activeShift = shift;
+          workDate = window.workDate;
+          break;
+        } catch (e) {
+          continue;
+        }
+      }
+    }
+
+    if (!activeRoster || !activeShift || !workDate) {
+      const error = new Error("Khong tim thay ca truc phu hop de ban giao vao luc này. Vui long kiem tra lai trang thai check-in.");
       error.statusCode = 404;
       throw error;
     }
-
-    const window = staffAttendanceLogService.resolveShiftWindow(activeShift, now);
-    const workDate = window.workDate;
 
     const log = await ShiftHandoverLog.create({
       manager_id: requesterIds[0],

@@ -282,3 +282,42 @@ exports.updateCleanerIncidentStatus = async (req, res) => {
     });
   }
 };
+
+exports.getAffectedBookings = async (req, res) => {
+  try {
+    const bookings = await incidentService.getAffectedBookingsForIncident(req.params.id);
+    res.status(200).json({ success: true, data: bookings });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Error fetching affected bookings",
+    });
+  }
+};
+
+exports.getRoomChangeCandidates = async (req, res) => {
+  try {
+    const actor = req.user ? { ...req.user.toObject(), managerScope: req.managerScope } : null;
+    const candidates = await incidentService.getIncidentRoomChangeCandidates(req.params.bookingId, actor);
+    res.status(200).json({ success: true, data: candidates });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Error fetching room change candidates",
+    });
+  }
+};
+
+exports.executeRoomChange = async (req, res) => {
+  try {
+    const actor = req.user ? { ...req.user.toObject(), managerScope: req.managerScope } : null;
+    const { targetPodId } = req.body;
+    const result = await incidentService.executeIncidentRoomChange(req.params.bookingId, targetPodId, actor);
+    res.status(200).json({ success: true, data: result });
+  } catch (error) {
+    res.status(error.statusCode || 500).json({
+      success: false,
+      message: error.message || "Error executing room change",
+    });
+  }
+};

@@ -198,7 +198,10 @@ class StaffAttendanceLogService {
     if (fromDateInput) {
       const fromDate = new Date(fromDateInput);
       if (!Number.isNaN(fromDate.getTime())) {
-        fromDate.setHours(0, 0, 0, 0);
+        // Only set to 00:00:00 if the input is a simple date string (YYYY-MM-DD)
+        if (String(fromDateInput).length <= 10) {
+          fromDate.setHours(0, 0, 0, 0);
+        }
         query.created_at.$gte = fromDate;
       }
     }
@@ -206,7 +209,10 @@ class StaffAttendanceLogService {
     if (toDateInput) {
       const toDate = new Date(toDateInput);
       if (!Number.isNaN(toDate.getTime())) {
-        toDate.setHours(23, 59, 59, 999);
+        // Only set to end of day if the input is a simple date string
+        if (String(toDateInput).length <= 10) {
+          toDate.setHours(23, 59, 59, 999);
+        }
         query.created_at.$lte = toDate;
       }
     }
@@ -309,7 +315,7 @@ class StaffAttendanceLogService {
     }
 
     // 4. Fallback: if no active shift, 
-    // pick the absolute latest session in the last 24h to show "last known status"
+    // pick the most "urgent" session in the last 24h (prioritize unclosed ones)
     if (!activeShiftId && logs.length > 0) {
       const sessions = {};
       for (const log of logs) {
@@ -317,8 +323,19 @@ class StaffAttendanceLogService {
         if (!sessions[key]) sessions[key] = [];
         sessions[key].push(log);
       }
+      
       const sessionKeys = Object.keys(sessions).sort().reverse(); 
-      relevantLogs = sessions[sessionKeys[0]] || [];
+      // Try to find the latest unclosed session first
+      let selectedKey = sessionKeys[0];
+      for (const key of sessionKeys) {
+        const hasCheckin = sessions[key].some(l => l.action === 'CHECKIN');
+        const hasCheckout = sessions[key].some(l => l.action === 'CHECKOUT');
+        if (hasCheckin && !hasCheckout) {
+          selectedKey = key;
+          break;
+        }
+      }
+      relevantLogs = sessions[selectedKey] || [];
     }
 
     const checkinLogs = relevantLogs.filter((item) => item.action === "CHECKIN");
@@ -334,16 +351,36 @@ class StaffAttendanceLogService {
       if (activeShiftId && activeWorkDate) {
         query.shift_id = String(activeShiftId);
         query.work_date = activeWorkDate;
-      } else if (shiftIds.length > 0) {
-        // Fallback to latest session's shift
-        query.shift_id = { $in: shiftIds };
-        query.created_at = { $gte: lookbackLimit };
+      } else if (shiftIds.length > 0 && checkinLogs.length > 0) {
+        // Fallback to latest unclosed session's shift and work_date
+        const latestLog = checkinLogs[checkinLogs.length - 1];
+        query.shift_id = String(latestLog.shift_id);
+        query.work_date = latestLog.work_date;
       } else {
         query._id = null; // No shift found, no handover possible
       }
 
       const handover = await ShiftHandoverLog.findOne(query).lean();
       hasHandover = !!handover;
+    }
+
+    // Calculate if the session is past its end time
+    let isPastEnd = false;
+    let shiftEndTime = null;
+    if (checkinLogs.length > 0 && !checkoutLogs.length > 0) {
+      const latestLog = checkinLogs[checkinLogs.length - 1];
+      const s = await StaffShift.findOne({ id: latestLog.shift_id }).lean();
+      if (s) {
+        const startP = parseTimeParts(s.start_time);
+        const endP = parseTimeParts(s.end_time);
+        if (startP && endP) {
+          const sStart = withTimeInAppTz(latestLog.work_date, startP);
+          let sEnd = withTimeInAppTz(latestLog.work_date, endP);
+          if (sEnd <= sStart) sEnd = new Date(sEnd.getTime() + 24 * 60 * 60 * 1000);
+          isPastEnd = now > sEnd;
+          shiftEndTime = sEnd.toISOString();
+        }
+      }
     }
 
     return {
@@ -360,6 +397,8 @@ class StaffAttendanceLogService {
       active_shift_id: activeShiftId,
       active_work_date: activeWorkDate,
       active_location_id: activeLocationId,
+      is_past_end: isPastEnd,
+      shift_end_at: shiftEndTime,
     };
   }
 
@@ -519,27 +558,29 @@ class StaffAttendanceLogService {
     }
 
     // 1. Find the latest CHECKIN for this staff that doesn't have a CHECKOUT yet
-    const latestCheckin = await StaffAttendanceLog.findOne({
+    // We look back at recent sessions to find an "open" one.
+    const recentCheckins = await StaffAttendanceLog.find({
       staff_id: { $in: requesterIds },
       action: "CHECKIN"
-    }).sort({ created_at: -1 }).lean();
+    }).sort({ created_at: -1 }).limit(5).lean();
 
-    if (!latestCheckin) {
-      const error = new Error("Ban can vao ca truoc khi tan ca");
-      error.statusCode = 400;
-      throw error;
+    let latestCheckin = null;
+    for (const checkin of recentCheckins) {
+      const checkout = await StaffAttendanceLog.findOne({
+        staff_id: checkin.staff_id,
+        action: "CHECKOUT",
+        work_date: checkin.work_date,
+        shift_id: checkin.shift_id
+      }).lean();
+
+      if (!checkout) {
+        latestCheckin = checkin;
+        break;
+      }
     }
 
-    // Check if already checked out for this specific checkin
-    const alreadyCheckedOut = await StaffAttendanceLog.findOne({
-      staff_id: latestCheckin.staff_id,
-      action: "CHECKOUT",
-      work_date: latestCheckin.work_date,
-      shift_id: latestCheckin.shift_id
-    }).lean();
-
-    if (alreadyCheckedOut) {
-      const error = new Error("Ban da tan ca truoc do");
+    if (!latestCheckin) {
+      const error = new Error("Ban can vao ca truoc khi tan ca (Hoac ban da tan ca cho tat ca cac phien gan day)");
       error.statusCode = 400;
       throw error;
     }
@@ -552,9 +593,36 @@ class StaffAttendanceLogService {
       throw error;
     }
 
-    const shiftWindow = this.resolveShiftWindow(shift, now);
-    const workDate = shiftWindow.workDate;
-    const shiftEnd = shiftWindow.shiftEnd;
+    // 2. Resolve the shift window. 
+    // We prioritize the window matching the latest checkin's work_date to allow late checkouts.
+    let workDate = latestCheckin.work_date;
+    let shiftEnd = null;
+
+    try {
+      const shiftWindow = this.resolveShiftWindow(shift, now);
+      // If the current window matches our checkin's work date, use it
+      if (shiftWindow.workDate.getTime() === workDate.getTime()) {
+        shiftEnd = shiftWindow.shiftEnd;
+      }
+    } catch (e) {
+      // If now is outside any window, we manually calculate the end for the checkin's work_date
+      // This allows manual checkout even if late (e.g. forgot to checkout)
+    }
+
+    if (!shiftEnd) {
+      const startParts = parseTimeParts(shift.start_time);
+      const endParts = parseTimeParts(shift.end_time);
+      if (!startParts || !endParts) {
+        const error = new Error("Ca lam viec chua duoc cau hinh gio bat dau/ket thuc");
+        error.statusCode = 400;
+        throw error;
+      }
+      const shiftStart = withTimeInAppTz(workDate, startParts);
+      shiftEnd = withTimeInAppTz(workDate, endParts);
+      if (shiftEnd <= shiftStart) {
+        shiftEnd = new Date(shiftEnd.getTime() + 24 * 60 * 60 * 1000);
+      }
+    }
 
     // 3. Enforce checkout ONLY after shift end (user request)
     if (now < shiftEnd) {

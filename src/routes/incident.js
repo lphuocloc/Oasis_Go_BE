@@ -15,6 +15,9 @@ const {
   getReplenishmentRequestsByCleaner,
   updateCleanerIncidentStatus,
   resolveReplenishment,
+  getAffectedBookings,
+  getRoomChangeCandidates,
+  executeRoomChange,
 } = require("../controllers/incidentController");
 
 /**
@@ -811,6 +814,10 @@ router.get("/:id", protect, authorize("admin", "manager", "cleaner"), loadManage
  *         description: Incident not found
  */
 router.patch("/:id/status", protect, authorize("admin", "manager"), loadManagerScope, updateIncidentStatus);
+
+router.get("/:id/affected-bookings", protect, authorize("manager"), loadManagerScope, getAffectedBookings);
+router.get("/bookings/:bookingId/room-change-candidates", protect, authorize("manager"), loadManagerScope, getRoomChangeCandidates);
+router.post("/bookings/:bookingId/room-change", protect, authorize("manager"), loadManagerScope, executeRoomChange);
 
 /**
  * @swagger

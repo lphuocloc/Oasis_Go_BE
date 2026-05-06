@@ -164,8 +164,8 @@ class PodService {
             });
 
             await notificationService.sendToUser(booking.user_id, {
-                title: "Booking pod updated",
-                message: "Your upcoming booking was moved to another available pod due to maintenance.",
+                title: "Thay đổi phòng cho lịch đặt chỗ",
+                message: "Lịch đặt chỗ sắp tới của bạn đã được chuyển sang một phòng trống khác do phòng cũ cần bảo trì đột xuất.",
                 type: "BOOKING",
                 event_code: "BOOKING_AUTO_MIGRATED",
                 dedupe_key: `BOOKING_AUTO_MIGRATED:${booking.id}`,
