@@ -171,7 +171,7 @@ exports.updateIncidentStatus = async (req, res) => {
     if (!actor) {
       return res.status(401).json({
         success: false,
-        message: "Not authorized. Please login to access this resource.",
+        message: "Không được phép. Vui lòng đăng nhập để truy cập tài nguyên này.",
       });
     }
 
@@ -179,14 +179,14 @@ exports.updateIncidentStatus = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      message: "Incident status updated successfully",
+      message: "Cập nhật trạng thái sự cố thành công",
       data: incident,
     });
   } catch (error) {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error updating incident status",
+      message: error.message || "Lỗi khi cập nhật trạng thái sự cố",
     });
   }
 };
@@ -208,7 +208,7 @@ exports.resolveReplenishment = async (req, res) => {
     const statusCode = error.statusCode || 500;
     res.status(statusCode).json({
       success: false,
-      message: error.message || "Error resolving replenishment incident",
+      message: error.message || "Lỗi khi giải quyết sự cố bổ sung",
     });
   }
 };
@@ -226,7 +226,7 @@ exports.getCleanerIncidents = async (req, res) => {
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Error fetching cleaner incidents",
+      message: error.message || "Lỗi khi fetching sự cố của người dọn dẹp",
     });
   }
 };
@@ -238,7 +238,7 @@ exports.getCleanerIncidentDetail = async (req, res) => {
   } catch (error) {
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Error fetching incident detail",
+      message: error.message || "Lỗi khi fetching chi tiết sự cố",
     });
   }
 };
@@ -269,7 +269,7 @@ exports.updateCleanerIncidentStatus = async (req, res) => {
     );
     res.status(200).json({
       success: true,
-      message: "Incident status updated successfully",
+      message: "Cập nhật trạng thái sự cố thành công",
       data: result,
     });
   } catch (error) {
@@ -278,7 +278,7 @@ exports.updateCleanerIncidentStatus = async (req, res) => {
     }
     res.status(error.statusCode || 500).json({
       success: false,
-      message: error.message || "Error updating incident status",
+      message: error.message || "Lỗi khi cập nhật trạng thái sự cố",
     });
   }
 };
