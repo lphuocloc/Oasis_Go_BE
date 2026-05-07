@@ -219,7 +219,7 @@ class SupportRequestService {
 
     if (scopedParentLocationIds.size > 0) {
       const topParentId = await this._resolveTopParentLocationId(supportRequest.location_id);
-      
+
       const managerRoots = await Promise.all(
         Array.from(scopedParentLocationIds).map(id => this._resolveTopParentLocationId(id))
       );
@@ -791,6 +791,18 @@ class SupportRequestService {
     if (normalizedStatus === "ESCALATED") {
       const booking = await Booking.findOne({ id: supportRequest.booking_id }).select("id").lean();
       await this._notifyAdminsForEscalation(supportRequest, booking);
+    } else if (normalizedStatus === "REJECTED") {
+      await notificationService.sendToUser(supportRequest.user_id, {
+        title: "Yêu cầu hỗ trợ bị từ chối",
+        message: `Yêu cầu hỗ trợ của bạn đã bị từ chối. Lý do: ${resolution_note || "Không có lý do cụ thể."}`,
+        type: "SUPPORT",
+        event_code: "SUPPORT_REQUEST_REJECTED",
+        data: {
+          support_request_id: supportRequest.id,
+          status: "REJECTED",
+          resolution_note,
+        },
+      });
     }
 
     const socketServer = getSocketServer();
