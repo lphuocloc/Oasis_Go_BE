@@ -398,7 +398,7 @@ class BookingOrderController {
       if (!actor) {
         return res.status(401).json({
           success: false,
-          message: "Not authorized. Please login to access this resource.",
+          message: "Không được phép. Vui lòng đăng nhập để truy cập tài nguyên này.",
         });
       }
 
@@ -407,14 +407,14 @@ class BookingOrderController {
 
       return res.status(200).json({
         success: true,
-        message: "Order damage bill created successfully",
+        message: "Tạo hóa đơn thiệt hại thành công",
         data: result,
       });
     } catch (error) {
-      console.error("Error creating order damage bill:", error);
+      console.error("Tạo hóa đơn thiệt hại thất bại:", error);
       return res.status(error.statusCode || 500).json({
         success: false,
-        message: error.message || "Failed to create order damage bill",
+        message: error.message || "Tạo hóa đơn thiệt hại thất bại",
       });
     }
   }
@@ -453,7 +453,7 @@ class BookingOrderController {
         data: result,
       });
     } catch (error) {
-      console.error("Error paying damage bill:", error);
+      console.error("Thanh toán hóa đơn thiệt hại thất bại:", error);
       return res.status(error.statusCode || 500).json({
         success: false,
         message: error.message || "Thanh toán hóa đơn thiệt hại thất bại",
