@@ -106,6 +106,36 @@ class PaymentService {
     await voucherUpdateQuery;
   }
 
+  async _recordVoucherDiscountIfNeeded(orderId, bookingOrder, session = null) {
+    let bookingVoucherQuery = BookingVoucher.findOne({ order_id: orderId }).select(
+      "id discount_amount",
+    );
+    if (session) {
+      bookingVoucherQuery = bookingVoucherQuery.session(session);
+    }
+
+    const bookingVoucher = await bookingVoucherQuery;
+    const discountAmount = Number(bookingVoucher?.discount_amount || 0);
+
+    if (!bookingVoucher || discountAmount <= 0) {
+      return null;
+    }
+
+    return adminLedgerService.createEntry(
+      {
+        type: "ESCROW_DEBIT",
+        amount: Number(discountAmount.toFixed(2)),
+        source: "VOUCHER_DISCOUNT",
+        dedupe_key: `VOUCHER_DISCOUNT:${orderId}`,
+        user_id: String(bookingOrder?.user_id || ""),
+        order_id: String(orderId || ""),
+        reference_id: bookingVoucher.id,
+        description: `Voucher discount for order ${orderId}`,
+      },
+      session,
+    );
+  }
+
   async _settleOrderIfFullyPaid(orderId, session = null) {
     let bookingOrderQuery = BookingOrder.findOne({ id: orderId });
     if (session) {
@@ -156,6 +186,8 @@ class PaymentService {
     } else {
       bookingOrder.payment_method = nextPaymentMethod;
     }
+
+    await this._recordVoucherDiscountIfNeeded(orderId, bookingOrder, session);
 
     return {
       bookingOrder,
