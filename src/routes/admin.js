@@ -204,6 +204,35 @@ router.get(
  *     tags: [Admin]
  *     security:
  *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password, name, role]
+ *             properties:
+ *               email:
+ *                 type: string
+ *                 example: cleaner1@example.com
+ *               password:
+ *                 type: string
+ *                 example: Passw0rd!
+ *               name:
+ *                 type: string
+ *                 example: Cleaner 01
+ *               phone:
+ *                 type: string
+ *                 example: "0900000000"
+ *               role:
+ *                 type: string
+ *                 enum: [user, admin, manager, cleaner]
+ *                 example: cleaner
+ *     responses:
+ *       201:
+ *         description: User created successfully
+ *       400:
+ *         description: Validation error
  */
 router.post("/users", protect, authorize("admin"), userController.createUser);
 
