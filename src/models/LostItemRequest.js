@@ -59,7 +59,7 @@ const lostItemRequestSchema = new mongoose.Schema(
       index: true,
     },
     // FKs → LostFoundItem khi Manager xác nhận khớp (Hỗ trợ match nhiều món cho 1 yêu cầu)
-    matched_found_item_ids: {
+    matched_found_item_id: {
       type: [String],
       default: [],
       ref: "LostFoundItem",

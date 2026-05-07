@@ -49,19 +49,19 @@ const createRoster = async (req, res) => {
 const getAllRosters = async (req, res) => {
   try {
     let query = { ...req.query };
-    
+
     // Auto-filter by manager scope if requested by manager, to prevent viewing other locations' rosters
     // Auto-filter by manager scope is handled inside the service.
     // If the manager passes a specific shift_id, we can optionally validate it here.
     if (req.user && req.user.role === "manager") {
       if (query.shift_id && !req.managerScope.shiftIds.includes(String(query.shift_id))) {
-         return res.status(403).json({ success: false, message: "Out of management scope for this shift" });
+        return res.status(403).json({ success: false, message: "Out of management scope for this shift" });
       }
     }
 
     const rosters = await staffWorkRosterService.getAllRosters(
-      query, 
-      req.user, 
+      query,
+      req.user,
       req.managerScope ? req.managerScope.locationIds : []
     );
     res.status(200).json({
@@ -116,7 +116,7 @@ const updateRoster = async (req, res) => {
   try {
     if (req.user && req.user.role === "manager") {
       const existingRoster = await staffWorkRosterService.getRosterById(req.params.id);
-      
+
       const checkLocId = req.body.location_id || existingRoster.location_id;
       if (checkLocId && !req.managerScope.locationIds.includes(String(checkLocId))) {
         return res.status(403).json({ success: false, message: "Out of management scope for this location" });
