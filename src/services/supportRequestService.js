@@ -286,6 +286,7 @@ class SupportRequestService {
 
       const bufferedEnd = new Date(new Date(booking.end_time).getTime() + bufferMinutes * 60 * 1000);
       let isSelectable = true;
+      let hasTimeConflict = false;
 
       if (pod.status !== "AVAILABLE" || String(pod.id) === String(currentPod.id)) {
         isSelectable = false;
@@ -303,11 +304,12 @@ class SupportRequestService {
           booking.id
         );
         if (!isBookingAvailable) {
-          isSelectable = false;
+          // Pod AVAILABLE but has an upcoming booking overlap — warn but still allow selection
+          hasTimeConflict = true;
         }
       }
 
-      if (isSelectable) {
+      if (isSelectable && !hasTimeConflict) {
         const conflictingTimeSlot = await TimeSlot.findOne({
           pod_id: pod.id,
           status: "RESERVED",
@@ -318,7 +320,7 @@ class SupportRequestService {
           .lean();
 
         if (conflictingTimeSlot) {
-          isSelectable = false;
+          hasTimeConflict = true;
         }
       }
 
@@ -334,8 +336,9 @@ class SupportRequestService {
         buffer_minutes_applied: bufferMinutes,
         remaining_time_start: remainingStart,
         remaining_time_end_with_buffer: bufferedEnd,
-        is_selectable: isSelectable,
-        status: pod.status
+        is_selectable: isSelectable && !hasTimeConflict,
+        has_time_conflict: hasTimeConflict,
+        status: hasTimeConflict ? "BOOKED" : pod.status
       };
     });
 
