@@ -1410,7 +1410,6 @@ exports.createCleaningTask = async (data) => {
   if (!cleaner) throw createError("Cleaner not found", 404);
   if (!cleaner.isActive) throw createError("Cleaner is inactive", 403);
   if (cleaner.role !== "cleaner") throw createError("User must have cleaner role", 400);
-  if (cleaner.role !== "cleaner") throw createError("User must have cleaner role", 400);
   if (reassigned_from_cleaner_id && !reassignedCleaner) {
     throw createError("reassigned_from_cleaner_id user not found", 404);
   }
@@ -1838,16 +1837,17 @@ exports.updateCleaningTask = async (id, data, actor = null) => {
     }
   }
 
-  if (nextStatus === "DONE") {
-    const afterPhotoCount = await CleaningMedia.countDocuments({
-      cleaning_task_id: String(task.id),
-      media_type: "AFTER",
-    });
-
-    if (afterPhotoCount < 1) {
-      throw createError('At least one "AFTER" photo is required before completing task', 400);
-    }
-  }
+  // TODO: Re-enable after photo requirement when ready
+  // if (nextStatus === "DONE") {
+  //   const afterPhotoCount = await CleaningMedia.countDocuments({
+  //     cleaning_task_id: String(task.id),
+  //     media_type: "AFTER",
+  //   });
+  //
+  //   if (afterPhotoCount < 1) {
+  //     throw createError('At least one "AFTER" photo is required before completing task', 400);
+  //   }
+  // }
 
   const previousStatus = task.status;
   const previousCleanerId = String(task.cleaner_id || "");
